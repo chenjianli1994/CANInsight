@@ -135,6 +135,7 @@ namespace PCAN_Client.ReportAuto
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 RowHeadersVisible = false
             };
+            _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; }; // 忽略ComboBox值无效错误
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "Key",
@@ -297,6 +298,12 @@ namespace PCAN_Client.ReportAuto
             // 占位符配置
             if (_editingType.Signals != null)
             {
+                // 获取信号列的 ComboBox 项列表
+                var signalCol = _dgvPlaceholders.Columns["Signal"] as DataGridViewComboBoxColumn;
+                var existingSignalItems = new HashSet<string>();
+                foreach (var item in signalCol.Items)
+                    existingSignalItems.Add(item.ToString());
+
                 foreach (var stat in _editingType.Signals)
                 {
                     if (stat.PlaceholderMap == null || stat.Metrics == null) continue;
@@ -316,8 +323,16 @@ namespace PCAN_Client.ReportAuto
                         }
                         if (exists) continue;
 
+                        string signalName = stat.SignalName ?? "";
+                        // 如果信号名不在 ComboBox 项中，则添加进去
+                        if (!string.IsNullOrEmpty(signalName) && !existingSignalItems.Contains(signalName))
+                        {
+                            signalCol.Items.Add(signalName);
+                            existingSignalItems.Add(signalName);
+                        }
+
                         string calcDisplay = MetricToDisplay(metric);
-                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, stat.SignalName ?? "", calcDisplay, stat.Unit ?? "");
+                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, signalName, calcDisplay, stat.Unit ?? "");
                     }
                 }
             }
