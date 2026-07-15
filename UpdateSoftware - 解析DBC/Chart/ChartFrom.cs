@@ -2214,6 +2214,8 @@ namespace PCAN_Client
             if (_streamingMode)
             {
                 List<CanRawMessage> cache = _cacheWhileStreaming ? new List<CanRawMessage>() : null;
+                var msgDict = (cache != null && BaseParamter.dbcHelper?.dbcFile?.messageDict != null)
+                    ? BaseParamter.dbcHelper.dbcFile.messageDict : null;
                 foreach (var msg in LogFileLoader.EnumerateCanMessages(_streamingFilePath, _selectedChannels))
                 {
                     var raw = new CanRawMessage
@@ -2223,7 +2225,9 @@ namespace PCAN_Client
                         TimeStampSeconds = (float)msg.TimeStampSeconds,
                         Channel = msg.Channel
                     };
-                    if (cache != null) cache.Add(raw);
+                    // 缓存模式下，只缓存DBC中有定义的报文（减少内存占用）
+                    if (cache != null && (msgDict == null || msgDict.ContainsKey(raw.CanId)))
+                        cache.Add(raw);
                     yield return raw;
                 }
                 // 读取完毕后，把缓存存回 _rawMessages（内存模式后续播放直接用内存）
