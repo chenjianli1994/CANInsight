@@ -108,8 +108,9 @@ namespace PCAN_Client
         private long _streamingTotalCount;                       // 流式模式下报文总数（仅用于状态显示）
         private double _fileMaxTime = 0;                         // 文件中的最大时间戳
         private bool _isFileMode = false;                        // 是否为文件模式（已加载文件数据）
-        private volatile bool _loadingCancelled;                  // 加载取消标记（<150MB文件）
-        private volatile bool _cancelPlayback;                     // 停止播放标记（流式模式>150MB）
+        private volatile bool _loadingCancelled;                  // 加载取消标记（内存模式）
+        private volatile bool _cancelPlayback;                     // 停止播放标记（流式模式）
+        private volatile bool _cacheWhileStreaming;               // 内存模式首次播放：边读边缓存
         private System.Windows.Forms.Timer _playbackTimer;       // 回放定时器
         private double _playbackSpeed = 0;                       // 播放倍速（0=最快）
         private int _playbackRawIndex = 0;                       // _rawMessages 中的当前播放位置
@@ -1403,9 +1404,19 @@ namespace PCAN_Client
             _chartControl.SetAutoScroll(true);
             _btnAutoScroll.Text = "停止滑动";
 
-            if (_isFileMode && ((_rawMessages != null && _rawMessages.Count > 0) || _streamingMode))
+            if (_isFileMode)
             {
                 // ========== 文件回放模式 ==========
+                // 内存模式且数据未加载时：临时切到流式模式 + 开启缓存
+                // 播放时边读文件边绘图，读完自动缓存到 _rawMessages，后续播放直接用内存
+                if (!_streamingMode && _rawMessages == null)
+                {
+                    _streamingMode = true;
+                    _cacheWhileStreaming = true;
+                    _statusLabel.Text = "状态: 边读边画(首次加载)...";
+                    _statusLabel.ForeColor = Color.Green;
+                }
+
                 // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
                 Main.main.DisconnectPCAN();
                 Main.main.DisconnectCANoe();
@@ -1545,7 +1556,9 @@ namespace PCAN_Client
                                 }
                             }
 
-                            long totalMsgCount = isStreaming ? _streamingTotalCount : (_rawMessages?.Count ?? 0);
+                            long totalMsgCount = isStreaming
+                                ? (_cacheWhileStreaming ? (_rawMessages?.Count ?? 0) : _streamingTotalCount)
+                                : (_rawMessages?.Count ?? 0);
 
                             Invoke(new Action(() =>
                             {
@@ -1573,6 +1586,8 @@ namespace PCAN_Client
                                 _btnStart.Enabled = true;
                                 _btnStop.Enabled = false;
                                 SyncToolbarStateFromLegacyControls();
+                                // 缓存模式：切回内存模式
+                                FinalizeCachePlayback(totalMsgCount);
                             }));
 
                             // 流式模式：播放完毕后将记录的5w帧显示到Main.cs界面
@@ -1891,7 +1906,9 @@ namespace PCAN_Client
                 RunStatus = false;
                 _chartControl.AutoFitView();
                 _chartControl.SetAutoScroll(false);
-                long totalMsgCount = _streamingMode ? _streamingTotalCount : (_rawMessages?.Count ?? 0);
+                long totalMsgCount = _streamingMode
+                    ? (_cacheWhileStreaming ? (_rawMessages?.Count ?? 0) : _streamingTotalCount)
+                    : (_rawMessages?.Count ?? 0);
 
                 // 流式模式：播放完毕后将记录的5w帧显示到Main.cs界面
                 if (_streamingMode)
@@ -1908,6 +1925,8 @@ namespace PCAN_Client
                     UpdateChannelGridValues();
 
                     SyncToolbarStateFromLegacyControls();
+                    // 缓存模式：切回内存模式
+                    FinalizeCachePlayback(totalMsgCount);
                 }));
             }
         }
@@ -2119,6 +2138,16 @@ namespace PCAN_Client
             if (_streamingMode)
                 ShowStreamingRecordedFrames();
 
+            // 缓存模式：切回内存模式（即使播放未完成也保存已缓存的数据）
+            if (_cacheWhileStreaming && _rawMessages != null && _rawMessages.Count > 0)
+            {
+                _cacheWhileStreaming = false;
+                _streamingMode = false;
+                _txtEndTime.Text = _fileMaxTime.ToString("F1");
+                _statusLabel.Text = $"状态: 已停止（已缓存{_rawMessages.Count}条报文到内存，下次可直接播放）";
+                _statusLabel.ForeColor = Color.Red;
+            }
+
             SyncToolbarStateFromLegacyControls();
         }
 
@@ -2165,19 +2194,44 @@ namespace PCAN_Client
         /// <summary>
         /// 返回当前模式下的原始报文枚举器：流式模式从文件读取，内存模式从 _rawMessages 返回
         /// </summary>
+        /// <summary>
+        /// 缓存模式播放结束后切回内存模式（下次播放直接用 _rawMessages，不再读文件）
+        /// </summary>
+        private void FinalizeCachePlayback(long totalMsgCount)
+        {
+            if (_cacheWhileStreaming && _rawMessages != null && _rawMessages.Count > 0)
+            {
+                _cacheWhileStreaming = false;
+                _streamingMode = false;
+                _txtEndTime.Text = _fileMaxTime.ToString("F1");
+                _statusLabel.Text = $"状态: 播放完成（已缓存{totalMsgCount}条报文到内存，下次可直接播放）";
+                _statusLabel.ForeColor = Color.Blue;
+            }
+        }
+
         private IEnumerable<CanRawMessage> EnumerateRawMessages()
         {
             if (_streamingMode)
             {
+                List<CanRawMessage> cache = _cacheWhileStreaming ? new List<CanRawMessage>() : null;
                 foreach (var msg in LogFileLoader.EnumerateCanMessages(_streamingFilePath, _selectedChannels))
                 {
-                    yield return new CanRawMessage
+                    var raw = new CanRawMessage
                     {
                         CanId = msg.CanId,
                         Data = msg.Data,
                         TimeStampSeconds = (float)msg.TimeStampSeconds,
                         Channel = msg.Channel
                     };
+                    if (cache != null) cache.Add(raw);
+                    yield return raw;
+                }
+                // 读取完毕后，把缓存存回 _rawMessages（内存模式后续播放直接用内存）
+                if (cache != null && cache.Count > 0)
+                {
+                    _rawMessages = cache;
+                    _loadingBatchMaxTime = cache[cache.Count - 1].TimeStampSeconds;
+                    _fileMaxTime = _loadingBatchMaxTime;
                 }
             }
             else
@@ -3116,6 +3170,31 @@ namespace PCAN_Client
             _chartControl.Invalidate();
         }
 
+        /// <summary>
+        /// 加载时的定时器刷新图表（UI线程，不阻塞后台加载）
+        /// </summary>
+        private void _loadingRefreshTimer_Tick(object sender, EventArgs e)
+        {
+            _btnLoadFile.Text = $"加载中...";
+            // 弹窗显示进度（每0.1秒刷新，仅数字变化时更新，避免闪烁）
+            if (_loadingPopup != null && _loadingProcessedCount != _lastPopupShownCount)
+            {
+                _lastPopupShownCount = _loadingProcessedCount;
+                var lbl = _loadingPopup.Controls.OfType<Label>().FirstOrDefault();
+                if (lbl != null)
+                {
+                    lbl.Text = $"已加载: {_loadingProcessedCount} 条报文";
+                }
+            }
+
+            _chartControl.SetChannels(Channels);
+            if (_loadingBatchMaxTime > 0)
+            {
+                _chartControl.SetGlobalXRange(0, _loadingBatchMaxTime + 1);
+            }
+            _chartControl.Invalidate();
+        }
+
         private void _btnLoadDbc_Click(object sender, EventArgs e)
         {
             OpenFileDialog dialog = new OpenFileDialog();
@@ -3252,30 +3331,6 @@ namespace PCAN_Client
             return name.Length <= 20 ? name : name.Substring(0, 20) + "…";
         }
 
-        /// <summary>
-        /// 加载时的定时器刷新图表（UI线程，不阻塞后台加载）
-        /// </summary>
-        private void _loadingRefreshTimer_Tick(object sender, EventArgs e)
-        {
-            _btnLoadFile.Text = $"加载中...";
-            // 弹窗显示进度（每0.1秒刷新，仅数字变化时更新，避免闪烁）
-            if (_loadingPopup != null && _loadingProcessedCount != _lastPopupShownCount)
-            {
-                _lastPopupShownCount = _loadingProcessedCount;
-                var lbl = _loadingPopup.Controls.OfType<Label>().FirstOrDefault();
-                if (lbl != null)
-                {
-                    lbl.Text = $"已加载: {_loadingProcessedCount} 条报文";
-                }
-            }
-
-            _chartControl.SetChannels(Channels);
-            if (_loadingBatchMaxTime > 0)
-            {
-                _chartControl.SetGlobalXRange(0, _loadingBatchMaxTime + 1);
-            }
-            _chartControl.Invalidate();
-        }
 
         /// <summary>
         /// 从BLF/BIN/ASC文件加载数据（只存储原始报文，不解析，点击开始后才解析绘制）
@@ -3319,274 +3374,36 @@ namespace PCAN_Client
                     channel.Clear();
             }
             _currentTime = 0;
-            _loadingProcessedCount = 0;
-            _loadingCancelled = false;
-            _lastPopupShownCount = -1;
-            _loadingBatchMaxTime = 0;
             _loadingComplete = false;
             _isLoadingFile = true;
             _rawMessages = null;
 
-            _btnLoadFile.Enabled = false;
-            _btnLoadFile.Text = "加载中...";
-            _btnStart.Enabled = false;
-            _btnStop.Enabled = false;
-            _btnClear.Enabled = false;
-            _statusLabel.Text = "状态: 加载中...";
-            _statusLabel.ForeColor = Color.Orange;
-            _progressBar.Visible = true;
-            _progressBar.Style = ProgressBarStyle.Blocks;
-            _progressBar.Value = 0;
-            _progressBar.MarqueeAnimationSpeed = 0;
-            _progressLabel.Visible = true;
-            _progressLabel.Text = "0%";
-
-            // 获取文件总大小，决定是否使用流式模式
-            FileInfo fileInfo = new FileInfo(filePath);
-            long totalFileSize = fileInfo.Length;
+            // 根据文件大小决定模式（但不在这里加载数据，推迟到点击开始时）
+            long fileSizeMB = new FileInfo(filePath).Length / (1024 * 1024);
             int thresholdMB = GetStreamingThresholdMB();
-            // 保存阈值（确保下次启动时读回）
-            PCAN_Client.Properties.Settings.Default.StreamingThresholdMB = thresholdMB;
-            PCAN_Client.Properties.Settings.Default.Save();
-            bool useStreaming = totalFileSize > thresholdMB * 1024L * 1024; // > thresholdMB 使用流式模式
+            _streamingMode = (fileSizeMB > thresholdMB);
+            _streamingFilePath = filePath;
+            _isFileMode = true;
+            _loadingComplete = true;
+            _fileMaxTime = 0;
 
-            if (!useStreaming)
-            {
-                // 非流式模式：启动定时器刷新、创建弹窗
-                _loadingRefreshTimer.Start();
-
-                var loadingPopup = new Form
-                {
-                    Text = "加载报文",
-                    Size = new Size(300, 160),
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    ControlBox = false,
-                    StartPosition = FormStartPosition.CenterParent
-                };
-                var loadingLabel = new Label
-                {
-                    Text = "正在加载报文...",
-                    AutoSize = false,
-                    TextAlign = System.Drawing.ContentAlignment.MiddleCenter,
-                    Dock = DockStyle.Fill
-                };
-                var cancelBtn = new Button
-                {
-                    Text = "取消",
-                    Dock = DockStyle.Bottom,
-                    Height = 30
-                };
-                cancelBtn.Click += (s, args) => { _loadingCancelled = true; };
-                loadingPopup.Controls.Add(cancelBtn);
-                loadingPopup.Controls.Add(loadingLabel);
-                loadingPopup.Show(this);
-                _loadingPopup = loadingPopup;
-            }
-
-            // 初始设置图表通道（流式模式立即初始化，非流式模式由定时器同样会执行）
+            _isLoadingFile = false;
+            _btnLoadFile.Enabled = true;
+            _btnLoadFile.Text = "加载文件...";
+            _btnStart.Enabled = true;
+            _btnClear.Enabled = true;
+            _statusLabel.Text = _streamingMode
+                ? $"状态: 文件已加载(流式模式,{fileSizeMB}MB) — 点击开始播放"
+                : $"状态: 文件已加载(内存模式,{fileSizeMB}MB) — 点击开始播放";
+            _statusLabel.ForeColor = Color.Green;
+            _txtEndTime.Text = "";
+            SyncToolbarStateFromLegacyControls();
+            // 清理图表
+            foreach (var ch in Channels) ch.Clear();
             _chartControl.SetChannels(Channels);
-
-            Task.Run(() =>
-            {
-                try
-                {
-                    if (useStreaming)
-                    {
-                        // ====== 流式模式：仅记录文件路径，不扫描、不解析、不计数 ======
-                        _streamingMode = true;
-                        _streamingFilePath = filePath;
-                        _rawMessages = null;
-                        _isFileMode = true;
-                        _loadingComplete = true;
-                        _fileMaxTime = 0;
-
-                        Invoke(new Action(() =>
-                        {
-                            _isLoadingFile = false;
-                            _btnLoadFile.Enabled = true;
-                            _btnLoadFile.Text = "加载文件...";
-                            _btnStart.Enabled = true;
-                            _btnClear.Enabled = true;
-                            _progressBar.Visible = false;
-                            _progressLabel.Visible = false;
-                            _statusLabel.Text = "状态: 已加载文件 — 点击开始播放";
-                            _statusLabel.ForeColor = Color.Green;
-                            _txtEndTime.Text = "";
-                            SyncToolbarStateFromLegacyControls();
-                            // 清理图表
-                            foreach (var ch in Channels) ch.Clear();
-                            _chartControl.SetChannels(Channels);
-                            _chartControl.ResetView();
-                            _chartControl.Invalidate();
-                            UpdateChannelGridValues();
-                        }));
-                        return;
-                    }
-                    else
-                    {
-                        // ====== 内存模式：加载所有报文到内存 ======
-                        var rawMessages = new List<CanRawMessage>();
-                        double maxTime = 0;
-                        foreach (var msg in LogFileLoader.EnumerateCanMessages(filePath))
-                        {
-                            var message = new CanRawMessage();
-                            message.CanId = msg.CanId;
-                            message.Data = msg.Data;
-                            message.TimeStampSeconds = (float)msg.TimeStampSeconds;
-                            message.Channel = msg.Channel;
-                            rawMessages.Add(message);
-
-                            if (msg.TimeStampSeconds > maxTime)
-                                maxTime = msg.TimeStampSeconds;
-
-                            _loadingProcessedCount++;
-
-                            // 检查取消加载
-                            if (_loadingCancelled)
-                            {
-                                Invoke(new Action(() =>
-                                {
-                                    _loadingRefreshTimer.Stop();
-                                    if (_loadingPopup != null)
-                                    {
-                                        _loadingPopup.Close();
-                                        _loadingPopup.Dispose();
-                                        _loadingPopup = null;
-                                    }
-                                    _isLoadingFile = false;
-                                    _btnLoadFile.Enabled = true;
-                                    _btnLoadFile.Text = "加载文件...";
-                                    _btnStart.Enabled = true;
-                                    _btnClear.Enabled = true;
-                                    _progressBar.Visible = false;
-                                    _progressLabel.Visible = false;
-                                    _statusLabel.Text = "状态: 已取消加载";
-                                    _statusLabel.ForeColor = Color.Gray;
-                                }));
-                                return;
-                            }
-
-                            if (totalFileSize > 0 && _loadingProcessedCount % 50000 == 0)
-                            {
-                                int percent;
-                                if (msg.FilePosition > 0)
-                                {
-                                    percent = (int)(msg.FilePosition * 100L / totalFileSize);
-                                }
-                                else
-                                {
-                                    // BLF：无精确字节位置，用渐近曲线
-                                    percent = (int)(100.0 - 100.0 / (1.0 + _loadingProcessedCount / 20000.0));
-                                }
-                                if (percent > 100) percent = 100;
-                                if (percent < 0) percent = 0;
-                                Invoke(new Action(() =>
-                                {
-                                    if (_progressBar.Style != ProgressBarStyle.Blocks)
-                                        _progressBar.Style = ProgressBarStyle.Blocks;
-                                    _progressBar.Value = percent;
-                                    _progressLabel.Text = $"{percent}%";
-                                    _progressLabel.Visible = true;
-                                    if (_loadingPopup != null)
-                                    {
-                                        var lbl = _loadingPopup.Controls.OfType<Label>().FirstOrDefault();
-                                        if (lbl != null)
-                                            lbl.Text = $"已加载: {_loadingProcessedCount} 条报文";
-                                    }
-                                }));
-                            }
-                        }
-
-                        if (rawMessages.Count == 0)
-                        {
-                            Invoke(new Action(() =>
-                            {
-                                _loadingRefreshTimer.Stop();
-                                _btnLoadFile.Enabled = true;
-                                _btnLoadFile.Text = "加载文件...";
-                                _btnStart.Enabled = true;
-                                _btnClear.Enabled = true;
-                                _progressBar.Visible = false;
-                                _progressLabel.Visible = false;
-                                _statusLabel.Text = "状态: 文件中未找到有效的CAN报文数据";
-                                _statusLabel.ForeColor = Color.Red;
-                                if (_loadingPopup != null)
-                                {
-                                    _loadingPopup.Close();
-                                    _loadingPopup.Dispose();
-                                    _loadingPopup = null;
-                                }
-                                MessageBox.Show("文件中未找到有效的CAN报文数据", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                                _isLoadingFile = false;
-                            }));
-                            return;
-                        }
-
-                        _streamingMode = false;
-                        _rawMessages = rawMessages;
-                        _loadingBatchMaxTime = maxTime;
-                        _fileMaxTime = maxTime;
-                    }
-
-                    // 最终UI更新
-                    _loadingComplete = true;
-                    _isLoadingFile = false;
-                    _isFileMode = true;
-                    Invoke(new Action(() =>
-                    {
-                        _loadingRefreshTimer.Stop();
-                        _chartControl.Invalidate();
-
-                        _btnLoadFile.Enabled = true;
-                        _btnLoadFile.Text = "加载文件...";
-                        _btnStart.Enabled = true;
-                        _btnClear.Enabled = true;
-                        _progressBar.Value = 100;
-                        _progressBar.Visible = false;
-                        _progressLabel.Visible = false;
-                        _statusLabel.Text = $"状态: 已加载 {_loadingProcessedCount} 条报文 — 点击开始播放";
-                        _statusLabel.ForeColor = Color.Green;
-
-                        // 更新结束时间输入框
-                        _txtEndTime.Text = _fileMaxTime.ToString("F1");
-
-                        if (_loadingPopup != null)
-                        {
-                            _loadingPopup.Close();
-                            _loadingPopup.Dispose();
-                            _loadingPopup = null;
-                        }
-                        if (!_streamingMode)
-                            MessageBox.Show($"加载完成，共加载了 {_loadingProcessedCount} 条报文", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    _loadingComplete = true;
-                    _isLoadingFile = false;
-                    Invoke(new Action(() =>
-                    {
-                        _loadingRefreshTimer.Stop();
-                        if (_loadingPopup != null)
-                        {
-                            _loadingPopup.Close();
-                            _loadingPopup.Dispose();
-                            _loadingPopup = null;
-                        }
-                        MessageBox.Show($"文件加载失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        _btnLoadFile.Enabled = true;
-                        _btnLoadFile.Text = "加载文件...";
-                        _btnStart.Enabled = true;
-                        _btnClear.Enabled = true;
-                        _progressBar.Style = ProgressBarStyle.Blocks;
-                        _progressBar.MarqueeAnimationSpeed = 0;
-                        _progressBar.Visible = false;
-                        _progressLabel.Visible = false;
-                        _statusLabel.Text = "状态: 加载失败";
-                        _statusLabel.ForeColor = Color.Red;
-                    }));
-                }
-            });
+            _chartControl.ResetView();
+            _chartControl.Invalidate();
+            UpdateChannelGridValues();
         }
 
         /// <summary>
