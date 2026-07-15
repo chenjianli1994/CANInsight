@@ -3551,7 +3551,6 @@ namespace PCAN_Client
                     {
                         ApplySignalData(allPresets[name]);
                         _currentSignalGroupPath = GetPresetsFilePath();
-                        MessageBox.Show($"信号组 \"{name}\" 加载成功", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch (Exception ex)
                     {
@@ -3735,7 +3734,6 @@ namespace PCAN_Client
                 _currentSignalGroupPath = GetPresetsFilePath();
                 RefreshPresetComboBox();
                 _presetComboBox.SelectedItem = selectedName;
-                MessageBox.Show($"信号组 \"{selectedName}\" 加载成功", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
