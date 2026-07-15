@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Weavers>
+	<Costura>
+		<!-- 如果 binlog.dll 是 64 位的 -->
+		<Unmanaged64Assemblies>
+			binlog
+		</Unmanaged64Assemblies>
+		<!-- 如果 binlog.dll 是 32 位的 -->
+		<!-- <Unmanaged32Assemblies>
+      binlog
+    </Unmanaged32Assemblies> -->
+	</Costura>
+</Weavers>

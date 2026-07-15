@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+
+# NuGet restore output (use packages.config to restore)
+packages/
+nuget.exe
+
+# IDE / tool caches
+.vs/
+.reasonix/
+.codegraph/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS
+Thumbs.db
+desktop.ini
