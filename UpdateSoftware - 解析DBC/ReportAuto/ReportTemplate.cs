@@ -16,6 +16,11 @@ namespace PCAN_Client.ReportAuto
         public List<ImageShapeItem> ImageShapes;   // 要填的图片Shape
         public TableConfig Table;                  // 要填的条件表(可空)
         public List<SignalStat> Signals;           // 要统计的信号
+        public string TextTemplate;               // 用户编辑的文字内容（含 {{KEY}} 占位符）
+        public string TextShapeName;              // PPT模板中接收文字内容的Shape名称
+        public List<SignalPresetItem> SignalList; // 保存的绘图信号列表（加载时自动恢复）
+
+        public override string ToString() { return Name ?? "(未命名)"; }
     }
 
     /// <summary>
@@ -37,6 +42,20 @@ namespace PCAN_Client.ReportAuto
         public string ShapeName;   // PPT里表格Shape的名字
         public int Row;            // 要写的那一行(0基)
         public List<string> Cells; // 每个单元格的内容，可含 {{KEY}} 占位符
+    }
+
+    /// <summary>
+    /// 分析类型保存的绘图信号列表条目。加载分析类型时自动恢复绘图信号。
+    /// </summary>
+    public class SignalPresetItem
+    {
+        public string SignalName;       // DBC信号名
+        public int MessageId;           // DBC报文ID
+        public int MessageIndex;        // 报文索引
+        public int SignalIndex;         // 信号索引
+        public string Unit;             // 单位
+        public string Color;            // 颜色（如"#FF0000"）
+        public bool Visible = true;     // 是否显示
     }
 
     /// <summary>

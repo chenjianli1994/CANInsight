@@ -33,6 +33,12 @@ namespace PCAN_Client.ReportAuto
             _templatePath = TryEnsureReadableTemplate(path);
         }
 
+        /// <summary>获取当前PPT模板路径（供编辑器读取Shape列表）</summary>
+        public static string GetTemplatePath()
+        {
+            return _templatePath;
+        }
+
         /// <summary>确保模板可被OpenXml打开:先直接试打开,失败则用cmd /c type走DLP授权路径提取明文副本</summary>
         private static string TryEnsureReadableTemplate(string path)
         {
@@ -150,7 +156,16 @@ namespace PCAN_Client.ReportAuto
                 }
             }
 
-            // 4) 追加并填充该页
+            // 4) 文字模板占位符替换（如果有TextTemplate）
+            if (!string.IsNullOrEmpty(type.TextTemplate))
+            {
+                string filledText = type.TextTemplate;
+                foreach (var kv in values)
+                    filledText = filledText.Replace("{{" + kv.Key + "}}", kv.Value);
+                values["__TEXT_TEMPLATE__"] = filledText;
+            }
+
+            // 5) 追加并填充该页
             _builder.AppendPage(type, images, values);
             return _builder.PageCount;
         }

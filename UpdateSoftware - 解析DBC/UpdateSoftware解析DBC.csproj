@@ -321,6 +321,7 @@
     <Compile Include="ReportAuto\SignalStatsCalculator.cs" />
     <Compile Include="ReportAuto\PptReportBuilder.cs" />
     <Compile Include="ReportAuto\ReportAutoService.cs" />
+    <Compile Include="ReportAuto\AnalysisTypeEditor.cs" />
     <Compile Include="Chart\LogFileLoader.cs" />
     <Compile Include="Chart\SignalSelector.cs">
       <SubType>Form</SubType>

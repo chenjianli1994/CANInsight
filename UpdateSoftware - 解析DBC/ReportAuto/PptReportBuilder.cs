@@ -239,6 +239,61 @@ namespace PCAN_Client.ReportAuto
                     break;
                 }
             }
+
+            // 4) 文字模板填充:将 __TEXT_TEMPLATE__ 内容写入指定的文字Shape
+            if (!string.IsNullOrEmpty(type.TextShapeName) && values != null && values.ContainsKey("__TEXT_TEMPLATE__"))
+            {
+                string text = values["__TEXT_TEMPLATE__"];
+                foreach (var sp in slide.Descendants<Shape>())
+                {
+                    string name = sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value;
+                    if (name != type.TextShapeName) continue;
+                    var txBody = sp.TextBody;
+                    if (txBody == null) break;
+
+                    // 按换行拆分文字
+                    var lines = text.Split('\n');
+
+                    // 获取第一个段落作为模板（保留其格式属性）
+                    var firstPara = txBody.Elements<A.Paragraph>().FirstOrDefault();
+                    if (firstPara == null) break;
+
+                    // 先清空所有段落
+                    var existingParas = txBody.Elements<A.Paragraph>().ToList();
+                    foreach (var p in existingParas) p.Remove();
+
+                    // 为每行创建新段落（克隆第一个段落以保留格式）
+                    foreach (string line in lines)
+                    {
+                        var newPara = (A.Paragraph)firstPara.CloneNode(true);
+                        // 设置文字到第一个run
+                        var firstRun = newPara.Descendants<A.Run>().FirstOrDefault();
+                        if (firstRun != null)
+                        {
+                            var textElement = firstRun.GetFirstChild<A.Text>();
+                            if (textElement != null)
+                                textElement.Text = line.TrimEnd('\r');
+                            // 清除后续run的文字（保留格式）
+                            foreach (var r in newPara.Descendants<A.Run>().Skip(1))
+                            {
+                                var t = r.GetFirstChild<A.Text>();
+                                if (t != null)
+                                    t.Text = "";
+                            }
+                        }
+                        else
+                        {
+                            // 没有run，创建一个
+                            var run = new A.Run();
+                            run.RunProperties = new A.RunProperties { Language = "zh-CN" };
+                            run.Text = new A.Text { Text = line.TrimEnd('\r') };
+                            newPara.Append(run);
+                        }
+                        txBody.Append(newPara);
+                    }
+                    break;
+                }
+            }
         }
 
         /// <summary>段落级占位符替换:合并段落所有run文本,替换{{KEY}},写回首个run,清空其余run</summary>

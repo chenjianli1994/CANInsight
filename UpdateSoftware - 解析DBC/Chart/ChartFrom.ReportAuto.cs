@@ -3,6 +3,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
+using Newtonsoft.Json;
 using PCAN_Client.ReportAuto;
 
 namespace PCAN_Client
@@ -14,10 +15,14 @@ namespace PCAN_Client
     public partial class ChartFrom
     {
         private ToolStripComboBox _cmbAnalysisType;
+        private ToolStripButton _btnEditAnalysisType;
+        private ToolStripButton _btnNewAnalysisType;
+        private ToolStripButton _btnDeleteAnalysisType;
         private ToolStripTextBox _txtReportStart;
         private ToolStripTextBox _txtReportEnd;
         private ToolStripButton _btnAddReportPage;
         private ToolStripButton _btnSaveReport;
+        private string _templatesDir;   // 分析类型JSON目录路径
 
         /// <summary>报告自动化用:暴露绘图区控件(供ReportAutoService截图)</summary>
         internal ChartControl ChartView { get { return _chartControl; } }
@@ -43,6 +48,18 @@ namespace PCAN_Client
             _txtReportEnd.Text = "10";
             _txtReportEnd.ToolTipText = "报告结束时间(秒)";
 
+            _btnEditAnalysisType = new ToolStripButton("编辑");
+            _btnEditAnalysisType.ToolTipText = "编辑当前选中的分析类型";
+            _btnEditAnalysisType.Click += _btnEditAnalysisType_Click;
+
+            _btnNewAnalysisType = new ToolStripButton("新增");
+            _btnNewAnalysisType.ToolTipText = "新增一个分析类型";
+            _btnNewAnalysisType.Click += _btnNewAnalysisType_Click;
+
+            _btnDeleteAnalysisType = new ToolStripButton("删除");
+            _btnDeleteAnalysisType.ToolTipText = "删除当前选中的分析类型";
+            _btnDeleteAnalysisType.Click += _btnDeleteAnalysisType_Click;
+
             _btnAddReportPage = new ToolStripButton("添加到报告");
             _btnAddReportPage.ToolTipText = "按当前时间范围和分析类型,追加一页到报告";
             _btnAddReportPage.Click += _btnAddReportPage_Click;
@@ -55,6 +72,9 @@ namespace PCAN_Client
             _topToolStrip.Items.Add(new ToolStripSeparator());
             _topToolStrip.Items.Add(new ToolStripLabel("分析:"));
             _topToolStrip.Items.Add(_cmbAnalysisType);
+            _topToolStrip.Items.Add(_btnEditAnalysisType);
+            _topToolStrip.Items.Add(_btnNewAnalysisType);
+            _topToolStrip.Items.Add(_btnDeleteAnalysisType);
             _topToolStrip.Items.Add(new ToolStripLabel("时间:"));
             _topToolStrip.Items.Add(_txtReportStart);
             _topToolStrip.Items.Add(new ToolStripLabel("-"));
@@ -64,12 +84,15 @@ namespace PCAN_Client
 
             // 加载分析项目类型JSON
             string baseDir = Path.GetDirectoryName(Application.ExecutablePath);
-            string templatesDir = Path.Combine(baseDir, "ReportAuto", "templates");
-            ReportAutoService.LoadAnalysisTypes(templatesDir);
+            _templatesDir = Path.Combine(baseDir, "ReportAuto", "templates");
+            ReportAutoService.LoadAnalysisTypes(_templatesDir);
             foreach (var t in ReportAutoService.AnalysisTypes)
                 _cmbAnalysisType.Items.Add(t);
             if (_cmbAnalysisType.Items.Count > 0)
                 _cmbAnalysisType.SelectedIndex = 0;
+
+            // 选中分析类型时自动加载信号列表
+            _cmbAnalysisType.SelectedIndexChanged += _cmbAnalysisType_SelectedIndexChanged;
 
             // 默认模板路径:依次找 exe同级/项目根 的 模板文件.pptx
             ReportAutoService.SetTemplatePath(ResolveDefaultTemplate(baseDir));
@@ -154,6 +177,166 @@ namespace PCAN_Client
                 _statusLabel.Text = "状态: 保存报告失败";
                 _statusLabel.ForeColor = Color.Red;
             }
+        }
+
+        /// <summary>选中分析类型变化时，自动加载该类型保存的信号列表</summary>
+        private void _cmbAnalysisType_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (!(_cmbAnalysisType.SelectedItem is AnalysisType type)) return;
+            if (type.SignalList == null || type.SignalList.Count == 0) return;
+
+            // 需要DBC已加载
+            if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null ||
+                BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
+            {
+                _statusLabel.Text = "状态: 请先加载DBC文件再切换分析类型";
+                _statusLabel.ForeColor = Color.Orange;
+                return;
+            }
+
+            // 清空当前信号
+            lock (_lockObj)
+            {
+                Channels.Clear();
+                foreach (var channel in Channels)
+                    channel.Clear();
+            }
+
+            // 从SignalList恢复信号
+            Color[] palette = new Color[]
+            {
+                Color.Red, Color.Blue, Color.Green, Color.Orange, Color.Purple,
+                Color.Cyan, Color.Magenta, Color.Lime, Color.Gold, Color.Teal
+            };
+            int colorIdx = 0;
+
+            foreach (var preset in type.SignalList)
+            {
+                if (preset.MessageIndex < 0 || preset.MessageIndex >= BaseParamter.dbcHelper.dbcFile.messages.Count)
+                    continue;
+                var msg = BaseParamter.dbcHelper.dbcFile.messages[preset.MessageIndex];
+                if (preset.SignalIndex < 0 || preset.SignalIndex >= msg.signals.Count)
+                    continue;
+
+                var signal = msg.signals[preset.SignalIndex];
+                Color color = !string.IsNullOrEmpty(preset.Color)
+                    ? ColorTranslator.FromHtml(preset.Color)
+                    : palette[colorIdx % palette.Length];
+                colorIdx++;
+
+                string channelName = !string.IsNullOrEmpty(signal.signalName) ? signal.signalName : ("Signal_" + preset.SignalIndex);
+                double cycleTime = msg.cycleTime > 0
+                    ? (double)(msg.cycleTime / 1000.0)
+                    : 0.1;
+
+                var ch = new ChannelData(channelName, color, DateTime.Now,
+                    signal.enumDefinitions, signal.unitStr,
+                    cycleTime,
+                    preset.MessageId,
+                    preset.MessageIndex,
+                    preset.SignalIndex,
+                    preset.SignalName ?? "");
+                ch.Visible = preset.Visible;
+                Channels.Add(ch);
+            }
+
+            _chartControl.SetChannels(Channels);
+            _chartControl.Invalidate();
+            PopulateChannelGrid();
+
+            _statusLabel.Text = $"状态: 已加载分析类型 \"{type.Name}\" 的信号列表 ({type.SignalList.Count}个)";
+            _statusLabel.ForeColor = Color.Green;
+        }
+
+        /// <summary>编辑当前选中的分析类型</summary>
+        private void _btnEditAnalysisType_Click(object sender, EventArgs e)
+        {
+            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            {
+                MessageBox.Show("请先选择要编辑的分析类型", "提示");
+                return;
+            }
+
+            var editor = new AnalysisTypeEditor(currentType, Channels,
+                ReportAutoService.GetTemplatePath());
+            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            {
+                var newType = editor.Result;
+                // 保存到JSON
+                SaveAnalysisTypeJson(newType, currentType.Name);
+                // 刷新下拉
+                RefreshAnalysisTypeList();
+                // 选中编辑后的类型
+                for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
+                {
+                    if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == newType.Name)
+                    {
+                        _cmbAnalysisType.SelectedIndex = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>新增分析类型</summary>
+        private void _btnNewAnalysisType_Click(object sender, EventArgs e)
+        {
+            var editor = new AnalysisTypeEditor(null, Channels,
+                ReportAutoService.GetTemplatePath());
+            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            {
+                SaveAnalysisTypeJson(editor.Result, null);
+                RefreshAnalysisTypeList();
+            }
+        }
+
+        /// <summary>删除当前选中的分析类型</summary>
+        private void _btnDeleteAnalysisType_Click(object sender, EventArgs e)
+        {
+            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            {
+                MessageBox.Show("请先选择要删除的分析类型", "提示");
+                return;
+            }
+            if (MessageBox.Show($"确定要删除分析类型 \"{currentType.Name}\" 吗？", "确认删除",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            // 删除JSON文件
+            string jsonPath = Path.Combine(_templatesDir, currentType.Name + ".json");
+            try { if (File.Exists(jsonPath)) File.Delete(jsonPath); } catch { }
+
+            // 刷新下拉
+            RefreshAnalysisTypeList();
+        }
+
+        /// <summary>将AnalysisType保存为JSON文件</summary>
+        private void SaveAnalysisTypeJson(AnalysisType type, string oldName)
+        {
+            if (!Directory.Exists(_templatesDir))
+                Directory.CreateDirectory(_templatesDir);
+
+            // 如果改了名字，删除旧文件
+            if (!string.IsNullOrEmpty(oldName) && oldName != type.Name)
+            {
+                string oldPath = Path.Combine(_templatesDir, oldName + ".json");
+                try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { }
+            }
+
+            string jsonPath = Path.Combine(_templatesDir, type.Name + ".json");
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(type, Newtonsoft.Json.Formatting.Indented);
+            File.WriteAllText(jsonPath, json, System.Text.Encoding.UTF8);
+        }
+
+        /// <summary>重新加载分析类型列表并刷新下拉</summary>
+        private void RefreshAnalysisTypeList()
+        {
+            ReportAutoService.LoadAnalysisTypes(_templatesDir);
+            _cmbAnalysisType.Items.Clear();
+            foreach (var t in ReportAutoService.AnalysisTypes)
+                _cmbAnalysisType.Items.Add(t);
+            if (_cmbAnalysisType.Items.Count > 0)
+                _cmbAnalysisType.SelectedIndex = 0;
         }
     }
 }
