@@ -122,8 +122,11 @@ namespace PCAN_Client.CAN_Data
                     index2 = 0;
                     foreach (var item in result)
                     {
-                        rawValue = message.signals[index2].rawValue.ToString("X2");
-                        rawValue = FormatSignalResult(rawValue, 8);
+                        // 根据信号位宽计算十六进制显示的位数
+                        int hexDigits = (int)((message.signals[index2].signalSize + 3) / 4);
+                        if (hexDigits < 2) hexDigits = 2;
+                        rawValue = message.signals[index2].rawValue.ToString("X" + hexDigits);
+                        rawValue = FormatSignalResult(rawValue, hexDigits + 6);
                         if (message.signals[index2].result != item.Value || !message.signals[index2].signalDisplayStr.Contains(rawValue) || message.signals[index2].signalDisplayStr.Equals(""))
                         {
                             message.signals[index2].result = item.Value;
@@ -788,7 +791,7 @@ namespace PCAN_Client.CAN_Data
             if ((startBit % 8 + 1) >= size)/* 不需要跨字节 */
             {
                 int endbit = (startBit - size + 1);
-                result = (ulong)data[startBit / 8] << (endbit%8);
+                result = ((ulong)data[startBit / 8] >> (endbit % 8)) & ((1UL << size) - 1);
             }
             else
             {
@@ -942,7 +945,7 @@ namespace PCAN_Client.CAN_Data
                     signal.multiplexerIndicator != muxValue) continue;
 
                 double rawValue = ConvertToRawValue(signal.cmdValue, signal);
-                EncodeSingleSignal(data, signal, (int)rawValue);
+                EncodeSingleSignal(data, signal, (long)rawValue);
             }
             return data;
         }
@@ -956,7 +959,7 @@ namespace PCAN_Client.CAN_Data
         }
 
         // 单个信号编码到字节数组
-        private static void EncodeSingleSignal(byte[] data, Signal signal, int rawValue)
+        private static void EncodeSingleSignal(byte[] data, Signal signal, long rawValue)
         {
             int startBit = (int)signal.startBit;
             int size = (int)signal.signalSize;
@@ -1001,7 +1004,7 @@ namespace PCAN_Client.CAN_Data
                     for (int i = 0; i < size; i++)
                     {
                         int bitIndex = size - 1 - i; // 从最高位开始
-                        int bitValue = (rawValue >> bitIndex) & 1;
+                        int bitValue = (int)((rawValue >> bitIndex) & 1);
 
                         if (firstNum < 0)
                         {

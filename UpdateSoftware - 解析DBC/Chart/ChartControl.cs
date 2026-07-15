@@ -243,6 +243,22 @@ namespace PCAN_Client
             DrawZoomRectangle(g);
         }
 
+        /// <summary>
+        /// 离屏渲染到指定 Graphics（用于报告截图）。
+        /// 调用前可临时放大 this.Size 以获得高清输出；复用 OnPaint 的全部绘制逻辑。
+        /// </summary>
+        public void RenderTo(Graphics g)
+        {
+            if (g == null) return;
+            double xRange = _globalXMax - _globalXMin;
+            g.SmoothingMode = xRange <= 12 ? SmoothingMode.AntiAlias : SmoothingMode.HighSpeed;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SystemDefault;
+            DrawBackground(g);
+            DrawPanels(g);
+            DrawMeasureLines(g);
+            DrawZoomRectangle(g);
+        }
+
         private void DrawBackground(Graphics g)
         {
             g.FillRectangle(Brushes.White, ClientRectangle);

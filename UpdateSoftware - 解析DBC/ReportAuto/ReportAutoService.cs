@@ -1,0 +1,166 @@
+// 报告自动生成编排+会话管理:缩放→截图→算值→追加页
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Windows.Forms;
+using DocumentFormat.OpenXml.Packaging;
+
+namespace PCAN_Client.ReportAuto
+{
+    /// <summary>
+    /// 报告自动生成服务:维护当前报告会话,编排 缩放→截图→计算→填PPT→追加。
+    /// 一次AppendPage追加一页,多次累积,SaveAs输出多页PPT。
+    /// </summary>
+    internal static class ReportAutoService
+    {
+        private static PptReportBuilder _builder = null;
+        private static bool _started = false;
+        private static string _templatePath = null;
+
+        /// <summary>已加载的分析项目类型列表(供下拉)</summary>
+        public static List<AnalysisType> AnalysisTypes { get; private set; } = new List<AnalysisType>();
+
+        /// <summary>当前报告页数</summary>
+        public static int CurrentPageCount => _builder?.PageCount ?? 0;
+
+        /// <summary>设置PPT模板路径(若受DLP透明加密则自动提取明文副本)</summary>
+        public static void SetTemplatePath(string path)
+        {
+            _templatePath = TryEnsureReadableTemplate(path);
+        }
+
+        /// <summary>确保模板可被OpenXml打开:先直接试打开,失败则用cmd /c type走DLP授权路径提取明文副本</summary>
+        private static string TryEnsureReadableTemplate(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return path;
+            // 1) 先尝试直接用OpenXml打开
+            try
+            {
+                using (var doc = PresentationDocument.Open(path, false)) { }
+                return path; // 能直接打开,无需解密
+            }
+            catch { /* 可能DLP透明加密或zip结构异常,走授权路径 */ }
+            // 2) 用cmd /c type提取明文(DLP授权进程,本机已验证可用)
+            try
+            {
+                string tmp = Path.Combine(Path.GetTempPath(), "ReportAutoTpl_" + Guid.NewGuid().ToString("N") + ".pptx");
+                var psi = new ProcessStartInfo("cmd.exe", "/c type \"" + path + "\" > \"" + tmp + "\"")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                var p = Process.Start(psi);
+                if (p != null) p.WaitForExit(30000);
+                if (File.Exists(tmp) && new FileInfo(tmp).Length > 0) return tmp;
+            }
+            catch { }
+            return path; // 解密失败,返回原路径(后续StartReport会报错提示)
+        }
+
+        /// <summary>从指定目录加载所有分析项目类型JSON</summary>
+        public static void LoadAnalysisTypes(string templatesDir)
+        {
+            AnalysisTypes = AnalysisTypeLoader.LoadAll(templatesDir) ?? new List<AnalysisType>();
+        }
+
+        /// <summary>新建/重置报告会话(清空已累积页)</summary>
+        public static void NewReport()
+        {
+            if (_builder != null) { _builder.Dispose(); _builder = null; }
+            _started = false;
+        }
+
+        /// <summary>
+        /// 追加一页到当前报告:缩放→截图→算值→填占位符/图/表→追加。
+        /// 返回追加后的总页数。
+        /// </summary>
+        public static int AppendPage(ChartFrom form, AnalysisType type, double t0, double t1)
+        {
+            if (form == null) throw new InvalidOperationException("绘图窗体未就绪");
+            if (type == null) throw new InvalidOperationException("未选择分析项目类型");
+            if (string.IsNullOrEmpty(_templatePath) || !File.Exists(_templatePath))
+                throw new FileNotFoundException("未设置PPT模板路径或模板不存在: " + (_templatePath ?? "(空)"));
+            if (form.Channels == null || form.Channels.Count == 0)
+                throw new InvalidOperationException("未加载信号数据,请先加载DBC/日志并添加信号");
+            if (!(t1 > t0))
+                throw new InvalidOperationException("结束时间必须大于起始时间");
+
+            // 确保会话开始(首次自动Start)
+            if (_builder == null || !_started)
+            {
+                _builder = new PptReportBuilder();
+                _builder.StartReport(_templatePath);
+                _started = true;
+            }
+
+            // 1) 缩放到目标时间范围并等待重绘
+            form.ChartView.SetGlobalXRange(t0, t1);
+            form.ChartView.PerformLayout();   // 强制同步布局
+            form.ChartView.Update();       // 强制同步绘制
+            Application.DoEvents();
+            Thread.Sleep(150);             // 从80ms增至150ms，确保复杂图表渲染完成
+
+            // 2) 截图:绘图区离屏高清 + 信号列表，合成为一张左右拼接图
+            var chartBmp = ChartCapturer.RenderChart(form.ChartView, 2000, 1200);
+            var compositeBmp = ChartCapturer.ComposeScreenshot(chartBmp, form.SignalGridView);
+            var images = new Dictionary<string, Bitmap>();
+            if (compositeBmp != null) images["chart"] = compositeBmp;
+
+            // 3) 计算各信号区间统计值(avg/min/max/range)→占位符KEY映射
+            var values = new Dictionary<string, string>();
+            if (type.Signals != null)
+            {
+                foreach (var stat in type.Signals)
+                {
+                    ChannelData ch;
+                    if (stat.MessageId == 0)
+                    {
+                        // MessageId=0 表示不指定报文ID，仅按信号名匹配（精确优先，再大小写不敏感）
+                        ch = form.Channels.FirstOrDefault(c => c.DbcSignalName == stat.SignalName)
+                          ?? form.Channels.FirstOrDefault(c =>
+                             string.Equals(c.DbcSignalName, stat.SignalName, StringComparison.OrdinalIgnoreCase));
+                    }
+                    else
+                    {
+                        ch = form.Channels.FirstOrDefault(c =>
+                            c.DbcMessageId == stat.MessageId && c.DbcSignalName == stat.SignalName);
+                    }
+                    if (ch == null)
+                    {
+                        // 匹配不到信号(MessageId/SignalName未与DBC配对),占位符填"-"避免花括号残留
+                        if (stat.PlaceholderMap != null)
+                            foreach (var pm in stat.PlaceholderMap)
+                                values[pm.Value] = "-";
+                        continue;
+                    }
+                    var pv = SignalStatsCalculator.Calc(ch, t0, t1, stat);
+                    if (pv == null || pv.Count == 0)
+                    {
+                        // 算不出值(时间窗内无数据),同样填"-"
+                        if (stat.PlaceholderMap != null)
+                            foreach (var pm in stat.PlaceholderMap)
+                                values[pm.Value] = "-";
+                        continue;
+                    }
+                    foreach (var kv in pv) values[kv.Key] = kv.Value;
+                }
+            }
+
+            // 4) 追加并填充该页
+            _builder.AppendPage(type, images, values);
+            return _builder.PageCount;
+        }
+
+        /// <summary>保存当前累积报告到指定路径</summary>
+        public static void SaveAs(string path)
+        {
+            if (!_started || _builder == null)
+                throw new InvalidOperationException("当前无报告内容,请先添加页");
+            _builder.SaveAs(path);
+        }
+    }
+}

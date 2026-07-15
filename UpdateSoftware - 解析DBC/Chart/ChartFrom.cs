@@ -15,7 +15,7 @@ using Microsoft.VisualBasic;
 
 namespace PCAN_Client
 {
-    public class ChartFrom : Form
+    public partial class ChartFrom : Form
     {
         public class DataUpdatedEventArgs : EventArgs
         {
@@ -182,6 +182,7 @@ namespace PCAN_Client
             this._chartControl.TabIndex = 0;
             this.splitContainer.Panel2.Controls.Add(this._chartControl);
             InitializeToolbarBindings();
+            InitReportToolbar();
             InitializeChannelGrid();
             // 默认播放速度为"最快"
             if (_speedComboBox.Items.Count > 0)

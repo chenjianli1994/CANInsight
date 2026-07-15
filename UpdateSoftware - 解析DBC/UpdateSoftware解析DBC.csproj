@@ -98,11 +98,20 @@
       <HintPath>Lib\Newtonsoft.Json.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="DocumentFormat.OpenXml">
+      <HintPath>..\packages\DocumentFormat.OpenXml.3.0.1\lib\net46\DocumentFormat.OpenXml.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="DocumentFormat.OpenXml.Framework">
+      <HintPath>..\packages\DocumentFormat.OpenXml.Framework.3.0.1\lib\net46\DocumentFormat.OpenXml.Framework.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="PCANBasic.NET, Version=4.10.0.964, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>Lib\PCANBasic.NET.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="PresentationCore" />
+    <Reference Include="WindowsBase" />
     <Reference Include="System" />
     <Reference Include="System.AppContext, Version=4.1.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
       <HintPath>..\packages\System.AppContext.4.3.0\lib\net463\System.AppContext.dll</HintPath>
@@ -306,6 +315,12 @@
     <Compile Include="Chart\ChartFrom.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Chart\ChartFrom.ReportAuto.cs" />
+    <Compile Include="ReportAuto\ReportTemplate.cs" />
+    <Compile Include="ReportAuto\ChartCapturer.cs" />
+    <Compile Include="ReportAuto\SignalStatsCalculator.cs" />
+    <Compile Include="ReportAuto\PptReportBuilder.cs" />
+    <Compile Include="ReportAuto\ReportAutoService.cs" />
     <Compile Include="Chart\LogFileLoader.cs" />
     <Compile Include="Chart\SignalSelector.cs">
       <SubType>Form</SubType>
