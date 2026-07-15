@@ -136,35 +136,41 @@ namespace PCAN_Client.ReportAuto
                 RowHeadersVisible = false
             };
             _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; }; // 忽略ComboBox值无效错误
+
+            // 占位符列（可编辑）
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
             {
                 Name = "Key",
                 HeaderText = "占位符",
-                ReadOnly = true,
-                FillWeight = 25
+                FillWeight = 22
             });
 
-            // 信号下拉列
-            var signalCol = new DataGridViewComboBoxColumn
+            // 信号列（按钮，点击弹出SignalSelector）
+            var signalBtnCol = new DataGridViewButtonColumn
             {
-                Name = "Signal",
+                Name = "SignalBtn",
                 HeaderText = "信号",
-                FillWeight = 35,
-                FlatStyle = FlatStyle.Flat
+                Text = "选择信号...",
+                UseColumnTextForButtonValue = true,
+                FillWeight = 30
             };
-            foreach (var ch in _channels)
+            _dgvPlaceholders.Columns.Add(signalBtnCol);
+
+            // 信号名显示列（只读，显示选中的信号名）
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
             {
-                string display = !string.IsNullOrEmpty(ch.DbcSignalName) ? ch.DbcSignalName : ch.Name;
-                signalCol.Items.Add(display);
-            }
-            _dgvPlaceholders.Columns.Add(signalCol);
+                Name = "SignalName",
+                HeaderText = "信号名",
+                ReadOnly = true,
+                FillWeight = 20
+            });
 
             // 计算方式下拉列
             var calcCol = new DataGridViewComboBoxColumn
             {
                 Name = "Calc",
                 HeaderText = "计算方式",
-                FillWeight = 25,
+                FillWeight = 18,
                 FlatStyle = FlatStyle.Flat,
                 Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" }
             };
@@ -175,8 +181,11 @@ namespace PCAN_Client.ReportAuto
             {
                 Name = "Unit",
                 HeaderText = "单位",
-                FillWeight = 15
+                FillWeight = 10
             });
+
+            // 按钮点击事件：弹出SignalSelector
+            _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
 
             Controls.Add(_dgvPlaceholders);
             y += 170;
@@ -208,6 +217,74 @@ namespace PCAN_Client.ReportAuto
         private void AddLabel(string text, int x, int y)
         {
             Controls.Add(new Label { Text = text, Location = new Point(x, y), AutoSize = true });
+        }
+
+        /// <summary>点击信号列按钮，弹出SignalSelector选择信号</summary>
+        private void DgvPlaceholders_CellClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (_dgvPlaceholders.Columns[e.ColumnIndex].Name != "SignalBtn") return;
+
+            var row = _dgvPlaceholders.Rows[e.RowIndex];
+            using (var selector = new SignalSelector())
+            {
+                // 如果当前行已有信号，预选中
+                string currentSignalName = row.Cells["SignalName"].Value?.ToString();
+                if (!string.IsNullOrEmpty(currentSignalName))
+                {
+                    foreach (var ch in _channels)
+                    {
+                        string displayName = !string.IsNullOrEmpty(ch.DbcSignalName) ? ch.DbcSignalName : ch.Name;
+                        if (displayName == currentSignalName)
+                        {
+                            selector.SelectedSignals.Add(new SelectedSignalInfo
+                            {
+                                SignalName = ch.DbcSignalName,
+                                MsgId = (uint)ch.DbcMessageId,
+                                MsgIndex = ch.DbcMessageIndex,
+                                SignalIndex = ch.DbcSignalIndex,
+                                CycleTime = (uint)(ch.CycleTime * 1000),
+                                EnumDefinitions = ch.EnumDefinitions,
+                                Unit = ch.Unit
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                if (selector.ShowDialog(this) == DialogResult.OK && selector.SelectedSignals.Count > 0)
+                {
+                    var sig = selector.SelectedSignals[0]; // 只取第一个
+                    row.Cells["SignalName"].Value = sig.SignalName;
+                    // 自动填充单位
+                    if (string.IsNullOrEmpty(row.Cells["Unit"].Value?.ToString()))
+                        row.Cells["Unit"].Value = sig.Unit ?? "";
+                    // 自动生成占位符名（如果当前为空）
+                    if (string.IsNullOrEmpty(row.Cells["Key"].Value?.ToString()))
+                    {
+                        string autoKey = GeneratePlaceholderName(sig.SignalName, row.Cells["Calc"].Value?.ToString());
+                        row.Cells["Key"].Value = autoKey;
+                    }
+                }
+            }
+        }
+
+        /// <summary>根据信号名和计算方式自动生成占位符名</summary>
+        private static string GeneratePlaceholderName(string signalName, string calcDisplay)
+        {
+            if (string.IsNullOrEmpty(signalName)) return "PLACEHOLDER";
+            string prefix = "";
+            if (!string.IsNullOrEmpty(calcDisplay))
+            {
+                if (calcDisplay.Contains("avg")) prefix = "AVG_";
+                else if (calcDisplay.Contains("max")) prefix = "MAX_";
+                else if (calcDisplay.Contains("min")) prefix = "MIN_";
+                else if (calcDisplay.Contains("range")) prefix = "RANGE_";
+            }
+            // 清理信号名：去掉非字母数字字符，转大写
+            string clean = new string(signalName.Where(c => char.IsLetterOrDigit(c)).ToArray()).ToUpperInvariant();
+            if (clean.Length > 20) clean = clean.Substring(0, 20);
+            return prefix + clean;
         }
 
         /// <summary>从PPT模板中读取所有Shape名称</summary>
@@ -298,12 +375,6 @@ namespace PCAN_Client.ReportAuto
             // 占位符配置
             if (_editingType.Signals != null)
             {
-                // 获取信号列的 ComboBox 项列表
-                var signalCol = _dgvPlaceholders.Columns["Signal"] as DataGridViewComboBoxColumn;
-                var existingSignalItems = new HashSet<string>();
-                foreach (var item in signalCol.Items)
-                    existingSignalItems.Add(item.ToString());
-
                 foreach (var stat in _editingType.Signals)
                 {
                     if (stat.PlaceholderMap == null || stat.Metrics == null) continue;
@@ -324,15 +395,8 @@ namespace PCAN_Client.ReportAuto
                         if (exists) continue;
 
                         string signalName = stat.SignalName ?? "";
-                        // 如果信号名不在 ComboBox 项中，则添加进去
-                        if (!string.IsNullOrEmpty(signalName) && !existingSignalItems.Contains(signalName))
-                        {
-                            signalCol.Items.Add(signalName);
-                            existingSignalItems.Add(signalName);
-                        }
-
                         string calcDisplay = MetricToDisplay(metric);
-                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, signalName, calcDisplay, stat.Unit ?? "");
+                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, "选择信号...", signalName, calcDisplay, stat.Unit ?? "");
                     }
                 }
             }
@@ -386,7 +450,7 @@ namespace PCAN_Client.ReportAuto
             foreach (string key in keysInText)
             {
                 if (!existingKeys.Contains(key))
-                    _dgvPlaceholders.Rows.Add(key, "", "平均值(avg)", "");
+                    _dgvPlaceholders.Rows.Add(key, "选择信号...", "", "平均值(avg)", "");
             }
 
             // 删除文本中已没有的（标记灰色行或直接删除）
@@ -465,7 +529,7 @@ namespace PCAN_Client.ReportAuto
             foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
             {
                 string key = row.Cells["Key"].Value?.ToString();
-                string signalName = row.Cells["Signal"].Value?.ToString();
+                string signalName = row.Cells["SignalName"].Value?.ToString();
                 string calcDisplay = row.Cells["Calc"].Value?.ToString();
                 string unit = row.Cells["Unit"].Value?.ToString() ?? "";
 
