@@ -2144,7 +2144,7 @@ namespace PCAN_Client
                 _cacheWhileStreaming = false;
                 _streamingMode = false;
                 _txtEndTime.Text = _fileMaxTime.ToString("F1");
-                _statusLabel.Text = $"状态: 已停止（已缓存{_rawMessages.Count}条报文到内存，下次可直接播放）";
+                _statusLabel.Text = "状态: 已停止（报文数据已缓存到内存，下次可直接播放）";
                 _statusLabel.ForeColor = Color.Red;
             }
 
@@ -2204,7 +2204,7 @@ namespace PCAN_Client
                 _cacheWhileStreaming = false;
                 _streamingMode = false;
                 _txtEndTime.Text = _fileMaxTime.ToString("F1");
-                _statusLabel.Text = $"状态: 播放完成（已缓存{totalMsgCount}条报文到内存，下次可直接播放）";
+                _statusLabel.Text = "状态: 播放完成（报文数据已缓存到内存，下次可直接播放）";
                 _statusLabel.ForeColor = Color.Blue;
             }
         }
@@ -3212,7 +3212,6 @@ namespace PCAN_Client
                     BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
                     _statusLabel.Text = $"状态: DBC已加载 ({BaseParamter.dbcHelper.dbcFile.messages.Count}条报文)";
                     _statusLabel.ForeColor = Color.Green;
-                    MessageBox.Show($"成功加载DBC文件\n报文数: {BaseParamter.dbcHelper.dbcFile.messages.Count}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     SyncToolbarStateFromLegacyControls();
                 }
                 catch (Exception ex)
@@ -3304,7 +3303,8 @@ namespace PCAN_Client
                 try
                 {
                     BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    MessageBox.Show("成功加载DBC文件");
+                    _statusLabel.Text = $"状态: DBC已加载 ({BaseParamter.dbcHelper.dbcFile.messages.Count}条报文)";
+                    _statusLabel.ForeColor = Color.Green;
                 }
                 catch (Exception ex)
                 {
