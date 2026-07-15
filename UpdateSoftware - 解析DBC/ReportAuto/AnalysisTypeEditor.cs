@@ -194,7 +194,6 @@ namespace PCAN_Client.ReportAuto
             _btnOk = new Button
             {
                 Text = "确定",
-                DialogResult = DialogResult.OK,
                 Location = new Point(460, y),
                 Size = new Size(btnW, 30)
             };
@@ -580,6 +579,7 @@ namespace PCAN_Client.ReportAuto
             }
 
             Result = type;
+            this.DialogResult = DialogResult.OK;
         }
     }
 }
