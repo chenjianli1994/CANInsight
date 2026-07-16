@@ -35,6 +35,11 @@ namespace PCAN_Client
         /// </summary>
         public List<CanBusChannel> BusChannels { get { return _busChannels; } }
 
+        /// <summary>
+        /// 已加载的日志文件路径列表（供报告生成获取文件名）
+        /// </summary>
+        public List<string> LogFilePaths { get { return _logFilePaths; } }
+
         public bool RealTimeDataSta = true;
         public bool RunStatus = false;
         public event EventHandler<DataUpdatedEventArgs> DataUpdated;

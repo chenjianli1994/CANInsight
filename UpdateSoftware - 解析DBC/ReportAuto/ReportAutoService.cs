@@ -156,7 +156,17 @@ namespace PCAN_Client.ReportAuto
                 }
             }
 
-            // 4) 文字模板占位符替换（如果有TextTemplate）
+            // 4) 自动填充固定占位符:工况名→WORK_MODE, 日志文件名→DATA_FILE
+            values["WORK_MODE"] = type.Name ?? "";
+            var fileNames = new List<string>();
+            if (form.LogFilePaths != null)
+            {
+                foreach (var path in form.LogFilePaths)
+                    fileNames.Add(Path.GetFileName(path));
+            }
+            values["DATA_FILE"] = string.Join("\n", fileNames);
+
+            // 5) 文字模板占位符替换（如果有TextTemplate）
             if (!string.IsNullOrEmpty(type.TextTemplate))
             {
                 string filledText = type.TextTemplate;
@@ -165,7 +175,7 @@ namespace PCAN_Client.ReportAuto
                 values["__TEXT_TEMPLATE__"] = filledText;
             }
 
-            // 5) 追加并填充该页
+            // 6) 追加并填充该页
             _builder.AppendPage(type, images, values);
             return _builder.PageCount;
         }

@@ -112,12 +112,10 @@ namespace PCAN_Client.ReportAuto
             splitMain.Panel2.Controls.Add(_dgvPlaceholders);
 
             // === 底部:确定/取消按钮 ===
-            var panelBottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Margin = new Padding(8, 4, 8, 8) };
-            _btnOk = new Button { Text = "确定", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, Top = 7 };
+            var panelBottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
+            _btnOk = new Button { Text = "确定", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             _btnOk.Click += BtnOk_Click;
-            _btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, Top = 7 };
-            _btnOk.Left = 1000 - btnW * 2 - 20;
-            _btnCancel.Left = 1000 - btnW - 10;
+            _btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             panelBottom.Controls.Add(_btnOk);
             panelBottom.Controls.Add(_btnCancel);
 
@@ -126,11 +124,17 @@ namespace PCAN_Client.ReportAuto
             Controls.Add(panelBottom);
             Controls.Add(panelTop);
 
-            // 分隔位置在Load时设(此时控件已布局,避免Width/Height为0时设值异常)
+            // 分隔位置+按钮位置在Load时设(此时控件已布局,避免Width/Height为0时设值异常)
             Load += (s, e) =>
             {
                 if (splitMain.Width > 200) splitMain.SplitterDistance = (int)(splitMain.Width * 0.7);  // 占位符框占30%
                 if (splitLeft.Height > 40) splitLeft.SplitterDistance = splitLeft.Height / 2;
+                // 按钮位置:基于panelBottom实际宽度,靠右排列
+                int pw = panelBottom.ClientSize.Width;
+                _btnCancel.Left = pw - btnW - 10;
+                _btnCancel.Top = 7;
+                _btnOk.Left = pw - btnW * 2 - 20;
+                _btnOk.Top = 7;
             };
 
             AcceptButton = _btnOk;
@@ -414,15 +418,21 @@ namespace PCAN_Client.ReportAuto
         {
             if (_txtPreview == null || _rtbText == null) return;
             string text = _rtbText.Text;
+            if (string.IsNullOrEmpty(text))
+            {
+                _txtPreview.Text = "";
+                return;
+            }
             _txtPreview.Text = Regex.Replace(text, @"\{\{(\w+)\}\}", m =>
             {
                 DataGridViewRow row = FindRowByKey(m.Groups[1].Value);
-                if (row == null) return "[未绑定]";
+                if (row == null) return m.Value;  // 占位符未入表,保留原文
                 string sig = row.Cells["SignalName"].Value?.ToString() ?? "";
                 string calc = row.Cells["Calc"].Value?.ToString() ?? "";
-                if (string.IsNullOrEmpty(sig)) return "[未绑定]";
+                if (string.IsNullOrEmpty(sig)) return m.Value;  // 未绑信号,保留原文
                 return "[" + sig + "·" + calc + "]";
             });
+            _txtPreview.Refresh();  // 强制重绘,避免Dock布局时序导致不渲染
         }
 
         /// <summary>点击确定：构建AnalysisType结果</summary>
