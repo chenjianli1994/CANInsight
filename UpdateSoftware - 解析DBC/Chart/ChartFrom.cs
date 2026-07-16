@@ -282,6 +282,13 @@ namespace PCAN_Client
                 }
             };
 
+            // 加载上次保存的图表模式（实时/报文）
+            var savedMode = (string)PCAN_Client.Properties.Settings.Default["ChartMode"];
+            if (savedMode == "FileData")
+                RealTimeDataSta = false;
+            else
+                RealTimeDataSta = true;
+
             // 初始化单选按钮状态
             _toolModeToggle.Text = RealTimeDataSta ? "实时数据" : "报文数据";
 
@@ -3433,6 +3440,10 @@ namespace PCAN_Client
             if (_isLoadingFile) return;  // 加载中禁止切换
 
             RealTimeDataSta = true;
+            
+            // 保存模式设置
+            PCAN_Client.Properties.Settings.Default["ChartMode"] = "RealTime";
+            PCAN_Client.Properties.Settings.Default.Save();
 
             // 更新UI可见性
             _filePathTextBox.Visible = false;
@@ -3478,6 +3489,10 @@ namespace PCAN_Client
             if (!RealTimeDataSta) return; // 已经是报文模式
 
             RealTimeDataSta = false;
+            
+            // 保存模式设置
+            PCAN_Client.Properties.Settings.Default["ChartMode"] = "FileData";
+            PCAN_Client.Properties.Settings.Default.Save();
 
             // 更新UI可见性
             _filePathTextBox.Visible = true;

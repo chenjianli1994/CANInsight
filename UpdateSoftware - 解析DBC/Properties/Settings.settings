@@ -122,5 +122,8 @@
     <Setting Name="LogFilePaths" Type="System.String" Scope="User">
       <Value Profile="(Default)" />
     </Setting>
+    <Setting Name="ChartMode" Type="System.String" Scope="User">
+      <Value Profile="(Default)">RealTime</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

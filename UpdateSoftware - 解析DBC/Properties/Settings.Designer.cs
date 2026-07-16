@@ -502,5 +502,17 @@ namespace PCAN_Client.Properties {
                 this["LogFilePaths"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("RealTime")]
+        public string ChartMode {
+            get {
+                return ((string)(this["ChartMode"]));
+            }
+            set {
+                this["ChartMode"] = value;
+            }
+        }
     }
 }
