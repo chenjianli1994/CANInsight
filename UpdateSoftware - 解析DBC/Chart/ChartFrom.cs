@@ -134,6 +134,8 @@ namespace PCAN_Client
         private volatile bool _loadingCancelled;                  // 加载取消标记（内存模式）
         private volatile bool _cancelPlayback;                     // 停止播放标记（流式模式）
         private volatile bool _cacheWhileStreaming;               // 内存模式首次播放：边读边缓存
+        private string _playbackModeText = "实时数据";            // 播放时确定的模式文本（用于指示器显示）
+        private Color _playbackModeColor = Color.Gray;            // 播放时确定的模式颜色
         private System.Windows.Forms.Timer _playbackTimer;       // 回放定时器
         private double _playbackSpeed = 0;                       // 播放倍速（0=最快）
         private int _playbackRawIndex = 0;                       // _rawMessages 中的当前播放位置
@@ -1505,6 +1507,19 @@ namespace PCAN_Client
                     _statusLabel.ForeColor = Color.Green;
                 }
 
+                // 设置模式指示器（在播放开始时确定，之后保持不变）
+                if (_streamingMode)
+                {
+                    _playbackModeText = "流式";
+                    _playbackModeColor = Color.DarkOrange;
+                }
+                else
+                {
+                    _playbackModeText = "内存";
+                    _playbackModeColor = Color.DarkGreen;
+                }
+                UpdateModeIndicator();
+
                 // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
                 Main.main.DisconnectPCAN();
                 Main.main.DisconnectCANoe();
@@ -1814,6 +1829,11 @@ namespace PCAN_Client
                 {
                     _realtimeRawMessages.Clear();
                 }
+
+                // 设置模式指示器
+                _playbackModeText = "实时数据";
+                _playbackModeColor = Color.Gray;
+                UpdateModeIndicator();
 
                 _chartControl.ResetView();
                 multiChartFromScheduler.Start();
@@ -2361,30 +2381,8 @@ namespace PCAN_Client
 
         private void UpdateModeIndicator()
         {
-            if (_isFileMode)
-            {
-                if (_streamingMode)
-                {
-                    _modeIndicatorLabel.Text = "模式: 流式";
-                    _modeIndicatorLabel.ForeColor = Color.DarkOrange;
-                }
-                else
-                {
-                    _modeIndicatorLabel.Text = "模式: 内存";
-                    _modeIndicatorLabel.ForeColor = Color.DarkGreen;
-                }
-            }
-            else if (_rawMessages != null && _rawMessages.Count > 0)
-            {
-                // 已加载文件但切换到实时模式时，仍显示文件模式
-                _modeIndicatorLabel.Text = "模式: 内存";
-                _modeIndicatorLabel.ForeColor = Color.DarkGreen;
-            }
-            else
-            {
-                _modeIndicatorLabel.Text = "模式: 实时数据";
-                _modeIndicatorLabel.ForeColor = Color.Gray;
-            }
+            _modeIndicatorLabel.Text = $"模式: {_playbackModeText}";
+            _modeIndicatorLabel.ForeColor = _playbackModeColor;
         }
 
         private void _btnStop_Click(object sender, EventArgs e)
