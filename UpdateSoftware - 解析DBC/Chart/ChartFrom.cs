@@ -328,6 +328,15 @@ namespace PCAN_Client
                         _logFileEntries.Add(new LogFileEntry { Path = line, Enabled = false });
                     }
                 }
+                
+                // 如果有启用的文件路径，设置流式模式，使得播放时可以从文件读取
+                if (_logFilePaths.Count > 0)
+                {
+                    _streamingMode = true;
+                    _isFileMode = true;
+                    if (_logFilePaths.Count > 0)
+                        _streamingFilePath = _logFilePaths[0]; // 保留兼容性
+                }
             }
             
             if (RealTimeDataSta)
