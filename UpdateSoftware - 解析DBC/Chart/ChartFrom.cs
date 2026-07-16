@@ -107,7 +107,8 @@ namespace PCAN_Client
         // 文件回放相关字段
         private List<CanRawMessage> _rawMessages;                // 原始报文存储（加载时只存不解析）
         private bool _streamingMode = false;                     // 流式模式（大文件>150MB时不加载到内存）
-        private string _streamingFilePath;                       // 流式模式下的文件路径
+        private string _streamingFilePath;                       // 流式模式下的文件路径（保留兼容性）
+        private List<string> _logFilePaths = new List<string>(); // 报文文件路径列表（勾选的）
         private IEnumerator<CanRawMessage> _streamingEnumerator; // 流式播放时的文件枚举器
         private CanRawMessage _streamingPendingMessage;          // 流式模式下等待下一Tick处理的报文
         private long _streamingTotalCount;                       // 流式模式下报文总数（仅用于状态显示）
@@ -2409,25 +2410,36 @@ namespace PCAN_Client
                     }
                 }
 
-                foreach (var msg in LogFileLoader.EnumerateCanMessages(_streamingFilePath, _selectedChannels))
+                // 确定要读取的文件列表：优先使用 _logFilePaths，否则回退到 _streamingFilePath
+                var filesToRead = (_logFilePaths != null && _logFilePaths.Count > 0) 
+                    ? _logFilePaths 
+                    : new List<string> { _streamingFilePath };
+
+                foreach (var filePath in filesToRead)
                 {
-                    var raw = new CanRawMessage
+                    if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                        continue;
+
+                    foreach (var msg in LogFileLoader.EnumerateCanMessages(filePath, _selectedChannels))
                     {
-                        CanId = msg.CanId,
-                        Data = msg.Data,
-                        TimeStampSeconds = (float)msg.TimeStampSeconds,
-                        Channel = msg.Channel
-                    };
-                    // 缓存模式下，只缓存DBC中有定义的报文（减少内存占用）
-                    if (cache != null)
-                    {
-                        bool hasDef = (globalMsgDict == null || globalMsgDict.ContainsKey(raw.CanId));
-                        if (_busChannels.Count > 0)
-                            hasDef = multiChannelCanIds != null && multiChannelCanIds.Contains(raw.CanId);
-                        if (hasDef)
-                            cache.Add(raw);
+                        var raw = new CanRawMessage
+                        {
+                            CanId = msg.CanId,
+                            Data = msg.Data,
+                            TimeStampSeconds = (float)msg.TimeStampSeconds,
+                            Channel = msg.Channel
+                        };
+                        // 缓存模式下，只缓存DBC中有定义的报文（减少内存占用）
+                        if (cache != null)
+                        {
+                            bool hasDef = (globalMsgDict == null || globalMsgDict.ContainsKey(raw.CanId));
+                            if (_busChannels.Count > 0)
+                                hasDef = multiChannelCanIds != null && multiChannelCanIds.Contains(raw.CanId);
+                            if (hasDef)
+                                cache.Add(raw);
+                        }
+                        yield return raw;
                     }
-                    yield return raw;
                 }
                 // 读取完毕后，把缓存存回 _rawMessages（内存模式后续播放直接用内存）
                 if (cache != null && cache.Count > 0)
@@ -3504,12 +3516,12 @@ namespace PCAN_Client
 
         private void _btnLoadFile_Click(object sender, EventArgs e)
         {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择日志文件";
-            dialog.Filter = "日志文件|*.blf;*.BLF;*.bin;*.asc|BLF文件|*.blf;*.BLF|BIN文件|*.bin|ASC文件|*.asc";
-            if (dialog.ShowDialog() == DialogResult.OK)
+            using (var dialog = new LogFileListDialog())
             {
-                LoadAndPlotFile(dialog.FileName);
+                if (dialog.ShowDialog() == DialogResult.OK && dialog.SelectedFiles.Count > 0)
+                {
+                    LoadAndPlotFiles(dialog.SelectedFiles);
+                }
             }
         }
 
@@ -3565,19 +3577,39 @@ namespace PCAN_Client
 
         private void ChartFrom_DragDrop(object sender, DragEventArgs e)
         {
-            string path = ((Array)e.Data.GetData(DataFormats.FileDrop)).GetValue(0).ToString();
-            string ext = Path.GetExtension(path).ToLower();
-            if (ext == ".blf" || ext == ".bin" || ext == ".asc")
+            var files = ((Array)e.Data.GetData(DataFormats.FileDrop)).Cast<string>().ToList();
+            var logFiles = new List<string>();
+            var dbcFiles = new List<string>();
+
+            // 分类文件
+            foreach (var path in files)
+            {
+                string ext = Path.GetExtension(path).ToLower();
+                if (ext == ".blf" || ext == ".bin" || ext == ".asc")
+                {
+                    logFiles.Add(path);
+                }
+                else if (ext == ".dbc")
+                {
+                    dbcFiles.Add(path);
+                }
+            }
+
+            // 处理日志文件（支持多文件）
+            if (logFiles.Count > 0)
             {
                 if (RealTimeDataSta)
                 {
                     SwitchToFileModeInternal();
                 }
-                LoadAndPlotFile(path);
+                LoadAndPlotFiles(logFiles);
             }
-            else if (ext == ".dbc")
+
+            // 处理DBC文件（加载最后一个）
+            if (dbcFiles.Count > 0)
             {
-                BaseParamter.DBCFilepath = path;
+                string dbcPath = dbcFiles.Last();
+                BaseParamter.DBCFilepath = dbcPath;
                 try
                 {
                     BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
@@ -3617,6 +3649,106 @@ namespace PCAN_Client
         /// <summary>
         /// 从BLF/BIN/ASC文件加载数据（只存储原始报文，不解析，点击开始后才解析绘制）
         /// </summary>
+        private void LoadAndPlotFile(string filePath)
+        {
+            // 保留单文件兼容性，调用多文件版本
+            LoadAndPlotFiles(new List<string> { filePath });
+        }
+
+        private void LoadAndPlotFiles(List<string> filePaths)
+        {
+            if (Channels == null || Channels.Count == 0)
+            {
+                MessageBox.Show("请先通过\"添加通道\"按钮选择要绘制的信号！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // 检查DBC是否可用：兼容模式需要全局DBC，多通道模式至少一个通道配置了DBC
+            if (_busChannels.Count == 0)
+            {
+                if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null ||
+                    BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
+                {
+                    MessageBox.Show("DBC文件未加载，请先加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+            else
+            {
+                bool hasAnyDbc = _busChannels.Any(bc => bc.IsConfigured);
+                if (!hasAnyDbc)
+                {
+                    MessageBox.Show("请先在通道配置中为至少一个CAN通道加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
+            // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
+            Main.main.DisconnectPCAN();
+            Main.main.DisconnectCANoe();
+            // 报文数据模式下禁用VersionCheck自动重连
+            Main.RestartConnectFlag = false;
+
+            // 切换到报文数据模式
+            SwitchToFileModeInternal();
+            
+            // 更新文件路径列表
+            _logFilePaths = new List<string>(filePaths);
+            _streamingFilePath = filePaths.Count > 0 ? filePaths[0] : ""; // 保留兼容性
+            _filePathTextBox.Text = $"已加载 {filePaths.Count} 个文件";
+
+            // 停止实时模式
+            if (RunStatus)
+            {
+                _btnStop_Click(null, null);
+            }
+            _isFileMode = false;
+
+            // 清空现有数据
+            lock (_lockObj)
+            {
+                foreach (var channel in Channels)
+                    channel.Clear();
+            }
+            _currentTime = 0;
+            _loadingComplete = false;
+            _isLoadingFile = true;
+            _rawMessages = null;
+
+            // 根据所有文件总大小决定模式（但不在这里加载数据，推迟到点击开始时）
+            long totalSizeMB = 0;
+            foreach (var filePath in filePaths)
+            {
+                if (File.Exists(filePath))
+                {
+                    totalSizeMB += new FileInfo(filePath).Length / (1024 * 1024);
+                }
+            }
+            int thresholdMB = GetStreamingThresholdMB();
+            _streamingMode = (totalSizeMB > thresholdMB);
+            _isFileMode = true;
+            _loadingComplete = true;
+            _fileMaxTime = 0;
+
+            _isLoadingFile = false;
+            _btnLoadFile.Enabled = true;
+            _btnLoadFile.Text = "加载文件...";
+            _btnStart.Enabled = true;
+            _btnClear.Enabled = true;
+            _statusLabel.Text = _streamingMode
+                ? $"状态: 文件已加载(流式模式,{totalSizeMB}MB) — 点击开始播放"
+                : $"状态: 文件已加载(内存模式,{totalSizeMB}MB) — 点击开始播放";
+            _statusLabel.ForeColor = Color.Green;
+            _txtEndTime.Text = "";
+            SyncToolbarStateFromLegacyControls();
+            // 清理图表
+            foreach (var ch in Channels) ch.Clear();
+            _chartControl.SetChannels(Channels);
+            _chartControl.ResetView();
+            _chartControl.Invalidate();
+            UpdateChannelGridValues();
+        }
+
         private void LoadAndPlotFile(string filePath)
         {
             if (Channels == null || Channels.Count == 0)

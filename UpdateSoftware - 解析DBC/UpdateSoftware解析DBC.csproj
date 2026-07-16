@@ -337,6 +337,9 @@
     <Compile Include="Chart\CanBusChannelConfigDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Chart\LogFileListDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="DataLog\LogFileToCSV.cs">
       <SubType>Form</SubType>
     </Compile>
