@@ -490,5 +490,17 @@ namespace PCAN_Client.Properties {
                 this["ChartChannelFilter"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LogFilePaths {
+            get {
+                return ((string)(this["LogFilePaths"]));
+            }
+            set {
+                this["LogFilePaths"] = value;
+            }
+        }
     }
 }

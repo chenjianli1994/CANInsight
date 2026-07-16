@@ -8,6 +8,15 @@ using System.Windows.Forms;
 namespace PCAN_Client
 {
     /// <summary>
+    /// 日志文件条目（包含路径和启用状态）
+    /// </summary>
+    public class LogFileEntry
+    {
+        public string Path { get; set; }
+        public bool Enabled { get; set; }
+    }
+    
+    /// <summary>
     /// 报文路径管理对话框 - 支持单个或批量导入BLF/BIN/ASC文件
     /// </summary>
     public class LogFileListDialog : Form
@@ -27,23 +36,23 @@ namespace PCAN_Client
         private const string ColFileSize = "colFileSize";
 
         /// <summary>
-        /// 勾选的文件路径列表（按勾选顺序）
+        /// 所有文件条目（包含勾选状态）
         /// </summary>
-        public List<string> SelectedFiles { get; private set; } = new List<string>();
+        public List<LogFileEntry> AllEntries { get; private set; } = new List<LogFileEntry>();
 
         /// <summary>
         /// 构造函数
         /// </summary>
-        /// <param name="existingPaths">现有文件路径列表（用于编辑已有配置）</param>
-        public LogFileListDialog(List<string> existingPaths = null)
+        /// <param name="existingEntries">现有文件条目列表（用于编辑已有配置）</param>
+        public LogFileListDialog(List<LogFileEntry> existingEntries = null)
         {
             InitializeComponents();
             
-            if (existingPaths != null && existingPaths.Count > 0)
+            if (existingEntries != null && existingEntries.Count > 0)
             {
-                foreach (var path in existingPaths)
+                foreach (var entry in existingEntries)
                 {
-                    AddFileToGrid(path, true);
+                    AddFileToGrid(entry.Path, entry.Enabled);
                 }
             }
             
@@ -309,22 +318,22 @@ namespace PCAN_Client
 
         private void BtnOk_Click(object sender, EventArgs e)
         {
-            SelectedFiles.Clear();
+            AllEntries.Clear();
+            int enabledCount = 0;
 
             foreach (DataGridViewRow row in _dgvFiles.Rows)
             {
                 bool isEnabled = (bool)(row.Cells[ColEnabled].Value ?? false);
-                if (isEnabled)
+                string filePath = row.Cells[ColFilePath].Value?.ToString();
+                if (!string.IsNullOrEmpty(filePath))
                 {
-                    string filePath = row.Cells[ColFilePath].Value?.ToString();
-                    if (!string.IsNullOrEmpty(filePath))
-                    {
-                        SelectedFiles.Add(filePath);
-                    }
+                    AllEntries.Add(new LogFileEntry { Path = filePath, Enabled = isEnabled });
+                    if (isEnabled)
+                        enabledCount++;
                 }
             }
 
-            if (SelectedFiles.Count == 0)
+            if (enabledCount == 0)
             {
                 MessageBox.Show("请至少勾选一个报文文件", "提示", 
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);

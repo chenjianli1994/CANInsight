@@ -109,6 +109,22 @@ namespace PCAN_Client
         private bool _streamingMode = false;                     // 流式模式（大文件>150MB时不加载到内存）
         private string _streamingFilePath;                       // 流式模式下的文件路径（保留兼容性）
         private List<string> _logFilePaths = new List<string>(); // 报文文件路径列表（勾选的）
+        
+        /// <summary>
+        /// 保存日志文件路径列表到设置（包含勾选状态）
+        /// </summary>
+        private void SaveLogFilePaths()
+        {
+            var lines = new List<string>();
+            foreach (var entry in _logFileEntries)
+            {
+                lines.Add(entry.Enabled ? "*" + entry.Path : entry.Path);
+            }
+            PCAN_Client.Properties.Settings.Default["LogFilePaths"] = string.Join("\n", lines);
+            PCAN_Client.Properties.Settings.Default.Save();
+        }
+        
+        private List<LogFileEntry> _logFileEntries = new List<LogFileEntry>(); // 完整的日志文件列表（含勾选状态）
         private IEnumerator<CanRawMessage> _streamingEnumerator; // 流式播放时的文件枚举器
         private CanRawMessage _streamingPendingMessage;          // 流式模式下等待下一Tick处理的报文
         private long _streamingTotalCount;                       // 流式模式下报文总数（仅用于状态显示）
@@ -284,6 +300,28 @@ namespace PCAN_Client
                     _btnChannelFilter.Text = $"通道({channels.Count})";
                 }
             }
+            
+            // 加载上次保存的日志文件路径列表（包含勾选状态）
+            var savedLogPaths = (string)PCAN_Client.Properties.Settings.Default["LogFilePaths"];
+            if (!string.IsNullOrEmpty(savedLogPaths))
+            {
+                _logFileEntries = new List<LogFileEntry>();
+                _logFilePaths = new List<string>();
+                foreach (var line in savedLogPaths.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (line.StartsWith("*"))
+                    {
+                        var path = line.Substring(1);
+                        _logFileEntries.Add(new LogFileEntry { Path = path, Enabled = true });
+                        _logFilePaths.Add(path);
+                    }
+                    else
+                    {
+                        _logFileEntries.Add(new LogFileEntry { Path = line, Enabled = false });
+                    }
+                }
+            }
+            
             if (RealTimeDataSta)
             {
                 _radioRealTime.Checked = true;
@@ -3516,11 +3554,18 @@ namespace PCAN_Client
 
         private void _btnLoadFile_Click(object sender, EventArgs e)
         {
-            using (var dialog = new LogFileListDialog())
+            using (var dialog = new LogFileListDialog(_logFileEntries))
             {
-                if (dialog.ShowDialog() == DialogResult.OK && dialog.SelectedFiles.Count > 0)
+                if (dialog.ShowDialog() == DialogResult.OK)
                 {
-                    LoadAndPlotFiles(dialog.SelectedFiles);
+                    _logFileEntries = dialog.AllEntries;
+                    _logFilePaths = _logFileEntries.Where(entry => entry.Enabled).Select(entry => entry.Path).ToList();
+                    SaveLogFilePaths();
+                    
+                    if (_logFilePaths.Count > 0)
+                    {
+                        LoadAndPlotFiles(_logFilePaths);
+                    }
                 }
             }
         }
