@@ -315,13 +315,17 @@
     <Compile Include="Chart\ChartFrom.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Chart\ChartFrom.ReportAuto.cs" />
+    <Compile Include="Chart\ChartFrom.ReportAuto.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="ReportAuto\ReportTemplate.cs" />
     <Compile Include="ReportAuto\ChartCapturer.cs" />
     <Compile Include="ReportAuto\SignalStatsCalculator.cs" />
     <Compile Include="ReportAuto\PptReportBuilder.cs" />
     <Compile Include="ReportAuto\ReportAutoService.cs" />
-    <Compile Include="ReportAuto\AnalysisTypeEditor.cs" />
+    <Compile Include="ReportAuto\AnalysisTypeEditor.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Chart\LogFileLoader.cs" />
     <Compile Include="Chart\SignalSelector.cs">
       <SubType>Form</SubType>
