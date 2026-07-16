@@ -70,6 +70,7 @@ namespace PCAN_Client
         private int _channelDropInsertIndex = -1;
         private GroupBox _controlGroup;
         private Label _statusLabel;
+        private Label _modeIndicatorLabel;
         private Panel panel;
         private Panel _leftStatusPanel;
         private TextBox _filePathTextBox;
@@ -904,6 +905,7 @@ namespace PCAN_Client
             // 
             this._leftStatusPanel.BackColor = System.Drawing.SystemColors.ControlLight;
             this._leftStatusPanel.Controls.Add(this._statusLabel);
+            this._leftStatusPanel.Controls.Add(this._modeIndicatorLabel);
             this._leftStatusPanel.Controls.Add(this._filePathTextBox);
             this._leftStatusPanel.Controls.Add(this._progressBar);
             this._leftStatusPanel.Controls.Add(this._progressLabel);
@@ -933,6 +935,18 @@ namespace PCAN_Client
             this._progressLabel.Text = "0%";
             this._progressLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             this._progressLabel.Visible = false;
+            // 
+            // _modeIndicatorLabel
+            // 
+            this._modeIndicatorLabel = new System.Windows.Forms.Label();
+            this._modeIndicatorLabel.AutoSize = true;
+            this._modeIndicatorLabel.ForeColor = System.Drawing.Color.Gray;
+            this._modeIndicatorLabel.Location = new System.Drawing.Point(220, 8);
+            this._modeIndicatorLabel.Name = "_modeIndicatorLabel";
+            this._modeIndicatorLabel.Size = new System.Drawing.Size(65, 12);
+            this._modeIndicatorLabel.TabIndex = 20;
+            this._modeIndicatorLabel.Text = "";
+            this._modeIndicatorLabel.Visible = false;
             // 
             // _speedLabel
             // 
@@ -1784,6 +1798,7 @@ namespace PCAN_Client
 
                     _playbackTimer.Start();
                     RunStatus = true;
+                    UpdateModeIndicator();
                 }
             }
             else
@@ -1806,6 +1821,7 @@ namespace PCAN_Client
                 _chartControl.SetAutoScroll(true);
                 _btnAutoScroll.Text = "停止滑动";
                 RunStatus = true;
+                UpdateModeIndicator();
             }
 
             SyncToolbarStateFromLegacyControls();
@@ -2068,6 +2084,7 @@ namespace PCAN_Client
                 }
                 _playbackTimer.Stop();
                 RunStatus = false;
+                UpdateModeIndicator();
                 _chartControl.AutoFitView();
                 _chartControl.SetAutoScroll(false);
                 long totalMsgCount = _streamingMode
@@ -2343,12 +2360,35 @@ namespace PCAN_Client
             });
         }
 
+        private void UpdateModeIndicator()
+        {
+            if (_isFileMode && RunStatus)
+            {
+                if (_streamingMode)
+                {
+                    _modeIndicatorLabel.Text = "流式模式";
+                    _modeIndicatorLabel.ForeColor = Color.DarkOrange;
+                }
+                else
+                {
+                    _modeIndicatorLabel.Text = "内存模式";
+                    _modeIndicatorLabel.ForeColor = Color.DarkGreen;
+                }
+                _modeIndicatorLabel.Visible = true;
+            }
+            else
+            {
+                _modeIndicatorLabel.Visible = false;
+            }
+        }
+
         private void _btnStop_Click(object sender, EventArgs e)
         {
             // 请求停止流式模式的"最快"后台Task
             if (_streamingMode)
                 _cancelPlayback = true;
             RunStatus = false;
+            UpdateModeIndicator();
             _playbackTimer.Stop();
             multiChartFromScheduler.Stop();
             // 清理流式枚举器
@@ -3463,6 +3503,7 @@ namespace PCAN_Client
             if (RunStatus)
             {
                 RunStatus = false;
+                UpdateModeIndicator();
                 multiChartFromScheduler.Stop();
             }
             _playbackTimer.Stop();
@@ -3512,6 +3553,7 @@ namespace PCAN_Client
             if (RunStatus)
             {
                 RunStatus = false;
+                UpdateModeIndicator();
                 multiChartFromScheduler.Stop();
             }
             _playbackTimer.Stop();
