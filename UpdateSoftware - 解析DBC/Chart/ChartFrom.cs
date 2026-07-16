@@ -332,10 +332,20 @@ namespace PCAN_Client
                     }
                 }
                 
-                // 如果有启用的文件路径，设置流式模式，使得播放时可以从文件读取
+                // 如果有启用的文件路径，检查文件大小决定是否使用流式模式
                 if (_logFilePaths.Count > 0)
                 {
-                    _streamingMode = true;
+                    long totalSizeMB = 0;
+                    foreach (var path in _logFilePaths)
+                    {
+                        if (File.Exists(path))
+                        {
+                            totalSizeMB += new FileInfo(path).Length / (1024 * 1024);
+                        }
+                    }
+                    
+                    int thresholdMB = GetStreamingThresholdMB();
+                    _streamingMode = (totalSizeMB > thresholdMB);
                     _isFileMode = true;
                     if (_logFilePaths.Count > 0)
                         _streamingFilePath = _logFilePaths[0]; // 保留兼容性
