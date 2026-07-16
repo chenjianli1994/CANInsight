@@ -184,6 +184,10 @@ namespace PCAN_Client
         internal Button _btnDbcOnly;
         internal bool _dbcOnlyMode = false;
 
+        // === CAN通道列排序状态 ===
+        private enum ChannelSortOrder { None, Ascending, Descending }
+        private ChannelSortOrder _channelSortOrder = ChannelSortOrder.None;
+
         private static readonly char[] HexChars = "0123456789ABCDEF".ToCharArray();
 
         /// <summary>高效格式化字节数组为十六进制字符串，避免每次分配多个临时字符串</summary>
@@ -1218,6 +1222,69 @@ namespace PCAN_Client
             {
                 // ---------- 防御性空检查 ----------
                 if (_flatRows == null || _displayList == null) return;
+
+                // ---------- CAN通道列头排序图标绘制 ----------
+                if (e.RowIndex == -1 && e.ColumnIndex >= 0)
+                {
+                    string colName = _dgvMessages.Columns[e.ColumnIndex].Name;
+                    if (colName == "colNode" && _channelSortOrder != ChannelSortOrder.None)
+                    {
+                        // 绘制默认表头背景
+                        e.PaintBackground(e.CellBounds, true);
+                        
+                        // 绘制表头文字
+                        string headerText = "CAN通道";
+                        using (Font headerFont = new Font("Microsoft YaHei UI", 9f, FontStyle.Bold))
+                        using (Brush textBrush = new SolidBrush(Color.Black))
+                        {
+                            StringFormat sf = new StringFormat
+                            {
+                                Alignment = StringAlignment.Near,
+                                LineAlignment = StringAlignment.Center
+                            };
+                            Rectangle textRect = new Rectangle(e.CellBounds.Left + 4, e.CellBounds.Top, 
+                                e.CellBounds.Width - 20, e.CellBounds.Height);
+                            e.Graphics.DrawString(headerText, headerFont, textBrush, textRect, sf);
+                            sf.Dispose();
+                        }
+
+                        // 绘制排序箭头
+                        int arrowX = e.CellBounds.Right - 16;
+                        int arrowY = e.CellBounds.Top + e.CellBounds.Height / 2;
+                        int arrowSize = 5;
+                        
+                        Point[] arrowPoints;
+                        if (_channelSortOrder == ChannelSortOrder.Ascending)
+                        {
+                            // 向上箭头 (▲)
+                            arrowPoints = new Point[]
+                            {
+                                new Point(arrowX, arrowY + arrowSize),
+                                new Point(arrowX + arrowSize, arrowY + arrowSize),
+                                new Point(arrowX + arrowSize / 2, arrowY - arrowSize)
+                            };
+                        }
+                        else // Descending
+                        {
+                            // 向下箭头 (▼)
+                            arrowPoints = new Point[]
+                            {
+                                new Point(arrowX, arrowY - arrowSize),
+                                new Point(arrowX + arrowSize, arrowY - arrowSize),
+                                new Point(arrowX + arrowSize / 2, arrowY + arrowSize)
+                            };
+                        }
+                        
+                        using (Brush arrowBrush = new SolidBrush(Color.FromArgb(60, 60, 60)))
+                        {
+                            e.Graphics.FillPolygon(arrowBrush, arrowPoints);
+                        }
+
+                        e.Handled = true;
+                        return;
+                    }
+                }
+
                 if (e.RowIndex < 0 || e.RowIndex >= _flatRows.Count) return;
                 var flat = _flatRows[e.RowIndex];
                 if (flat == null) return;
@@ -1460,6 +1527,85 @@ namespace PCAN_Client
                 _msgDisplayRefreshPending = true;
                 RefreshMessageDisplay();
                 _pauseUpdate = savedPause;
+            }
+        }
+
+        /// <summary>CAN通道列头点击排序</summary>
+        private void DgvMessages_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Left) return;
+            if (e.RowIndex >= 0) return; // 不是表头点击
+
+            string colName = _dgvMessages.Columns[e.ColumnIndex].Name;
+            if (colName != "colNode") return; // 只处理CAN通道列
+
+            // 循环切换排序状态：None → Ascending → Descending → None
+            switch (_channelSortOrder)
+            {
+                case ChannelSortOrder.None:
+                    _channelSortOrder = ChannelSortOrder.Ascending;
+                    break;
+                case ChannelSortOrder.Ascending:
+                    _channelSortOrder = ChannelSortOrder.Descending;
+                    break;
+                case ChannelSortOrder.Descending:
+                    _channelSortOrder = ChannelSortOrder.None;
+                    break;
+            }
+
+            // 执行排序
+            if (_channelSortOrder == ChannelSortOrder.None)
+            {
+                // 恢复默认排序（Fixed模式按MsgId，Scroll模式按时间）
+                if (!_scrollMode)
+                {
+                    // Fixed模式：按MsgId重新排序
+                    _displayList.Sort((a, b) => a.MsgId.CompareTo(b.MsgId));
+                    RebuildMsgIndexMap();
+                }
+                else
+                {
+                    // Scroll模式：按时间戳重新排序
+                    lock (_scrollFrames)
+                    {
+                        _scrollFrames.Sort((a, b) => a.TimestampUs.CompareTo(b.TimestampUs));
+                    }
+                }
+            }
+            else
+            {
+                // 按Channel排序
+                int sortMultiplier = (_channelSortOrder == ChannelSortOrder.Ascending) ? 1 : -1;
+                if (!_scrollMode)
+                {
+                    // Fixed模式：按Channel排序
+                    _displayList.Sort((a, b) => sortMultiplier * a.Channel.CompareTo(b.Channel));
+                    RebuildMsgIndexMap();
+                }
+                else
+                {
+                    // Scroll模式：按Channel排序
+                    lock (_scrollFrames)
+                    {
+                        _scrollFrames.Sort((a, b) => sortMultiplier * a.Channel.CompareTo(b.Channel));
+                    }
+                }
+            }
+
+            // 重建显示
+            _flatRowsDirty = true;
+            _msgDisplayRefreshPending = true;
+            RefreshMessageDisplay();
+            _dgvMessages.Invalidate(); // 强制重绘以更新排序图标
+        }
+
+        /// <summary>重建MsgId到索引的映射</summary>
+        private void RebuildMsgIndexMap()
+        {
+            _msgIndexMap.Clear();
+            for (int i = 0; i < _displayList.Count; i++)
+            {
+                _msgIndexMap[_displayList[i].MsgId] = i;
             }
         }
 
@@ -1824,6 +1970,7 @@ namespace PCAN_Client
              _dgvMessages.CellFormatting += DgvMessages_CellFormatting;
              _dgvMessages.CellPainting += DgvMessages_CellPainting;
              _dgvMessages.CellClick += DgvMessages_CellClick;
+             _dgvMessages.ColumnHeaderMouseClick += DgvMessages_ColumnHeaderMouseClick;
              _dgvMessages.Scroll += (ss, ee) =>
              {
                  // 检测用户是否在底部
