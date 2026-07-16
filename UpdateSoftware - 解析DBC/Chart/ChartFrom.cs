@@ -2619,7 +2619,6 @@ namespace PCAN_Client
         {
             if (_channelGrid.SelectedRows.Count == 0)
             {
-                MessageBox.Show("请先选择要删除的曲线", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
@@ -2777,12 +2776,6 @@ namespace PCAN_Client
             ChannelData channel = GetChannelFromRow(index);
             if (channel == null)
                 return;
-
-            string channelName = channel.Name;
-            var result = MessageBox.Show($"确定要删除通道 \"{channelName}\" 吗？", "确认删除",
-                MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
-
-            if (result != DialogResult.OK) return;
 
             lock (_lockObj)
             {

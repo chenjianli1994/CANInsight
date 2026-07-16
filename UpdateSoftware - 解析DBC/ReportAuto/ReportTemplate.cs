@@ -19,8 +19,28 @@ namespace PCAN_Client.ReportAuto
         public string TextTemplate;               // 用户编辑的文字内容（含 {{KEY}} 占位符）
         public string TextShapeName;              // PPT模板中接收文字内容的Shape名称
         public List<SignalPresetItem> SignalList; // 保存的绘图信号列表（加载时自动恢复）
+        public List<BusChannelConfig> BusChannels; // CAN总线通道配置（多通道模式）
 
         public override string ToString() { return Name ?? "(未命名)"; }
+    }
+
+    /// <summary>
+    /// CAN总线通道配置（用于保存到工况分类）
+    /// </summary>
+    public class BusChannelConfig
+    {
+        public string Name;           // 通道名称，如 "CAN1", "CAN3"
+        public byte BlfChannelId;     // BLF文件中的通道号
+        public string DbcFilePath;    // DBC文件路径
+
+        public BusChannelConfig() { }
+
+        public BusChannelConfig(string name, byte blfChannelId, string dbcFilePath)
+        {
+            Name = name;
+            BlfChannelId = blfChannelId;
+            DbcFilePath = dbcFilePath;
+        }
     }
 
     /// <summary>
@@ -45,7 +65,7 @@ namespace PCAN_Client.ReportAuto
     }
 
     /// <summary>
-    /// 分析类型保存的绘图信号列表条目。加载分析类型时自动恢复绘图信号。
+    /// 工况分类保存的绘图信号列表条目。加载工况分类时自动恢复绘图信号。
     /// </summary>
     public class SignalPresetItem
     {
@@ -84,7 +104,7 @@ namespace PCAN_Client.ReportAuto
         /// 单个文件解析失败时跳过该文件并记录到 Debug，继续加载其余文件。
         /// </summary>
         /// <param name="dir">templates 目录路径</param>
-        /// <returns>所有加载成功的分析类型；无任何成功时返回空列表</returns>
+        /// <returns>所有加载成功的工况分类；无任何成功时返回空列表</returns>
         public static List<AnalysisType> LoadAll(string dir)
         {
             List<AnalysisType> result = new List<AnalysisType>();

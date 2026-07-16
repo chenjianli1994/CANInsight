@@ -1,4 +1,4 @@
-// 分析类型编辑器:可视化编辑文字模板、占位符计算配置、PPT Shape选择
+// 工况分类编辑器:可视化编辑文字模板、占位符计算配置、PPT Shape选择
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -11,13 +11,13 @@ using DocumentFormat.OpenXml.Packaging;
 namespace PCAN_Client.ReportAuto
 {
     /// <summary>
-    /// 分析类型可视化编辑器。
+    /// 工况分类可视化编辑器。
     /// 用户可编辑文字模板（含 {{KEY}} 占位符）、为每个占位符配置信号和计算方式、
     /// 选择PPT中接收文字和图片的Shape名称。
     /// </summary>
     internal class AnalysisTypeEditor : Form
     {
-        // 当前编辑的分析类型（可为null表示新建）
+        // 当前编辑的工况分类（可为null表示新建）
         private readonly AnalysisType _editingType;
         // 当前绘图区已有的信号通道（供下拉选择）
         private readonly List<ChannelData> _channels;
@@ -54,7 +54,7 @@ namespace PCAN_Client.ReportAuto
 
         private void InitUI()
         {
-            Text = "分析类型编辑器";
+            Text = "工况分类编辑器";
             Size = new Size(700, 620);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -503,7 +503,7 @@ namespace PCAN_Client.ReportAuto
             string name = _txtName.Text.Trim();
             if (string.IsNullOrEmpty(name))
             {
-                MessageBox.Show("请输入分析类型名称", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("请输入工况分类名称", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 DialogResult = DialogResult.None;
                 return;
             }
