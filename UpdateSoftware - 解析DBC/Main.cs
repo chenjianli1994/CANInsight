@@ -203,6 +203,66 @@ namespace PCAN_Client
             return new string(chars);
         }
 
+        /// <summary>
+        /// 从所有可用的DBC中查找报文定义（支持全局DBC + 多通道DBC）
+        /// </summary>
+        internal static bool TryFindDbcMessage(uint canId, out CAN_Data.Message dbcMsg)
+        {
+            dbcMsg = null;
+            
+            // 1. 先查全局DBC
+            if (BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
+                BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+            {
+                return true;
+            }
+            
+            // 2. 再查多通道DBC（从chartFromShow获取）
+            if (chartFromShow != null && chartFromShow.BusChannels != null)
+            {
+                foreach (var busChannel in chartFromShow.BusChannels)
+                {
+                    if (busChannel.IsConfigured && 
+                        busChannel.DbcHelper?.dbcFile?.messageDict != null &&
+                        busChannel.DbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+
+        /// <summary>
+        /// 检查报文ID是否在任何DBC中有定义（支持全局DBC + 多通道DBC）
+        /// </summary>
+        internal static bool ContainsDbcMessage(uint canId)
+        {
+            // 1. 先查全局DBC
+            if (BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
+                BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(canId))
+            {
+                return true;
+            }
+            
+            // 2. 再查多通道DBC
+            if (chartFromShow != null && chartFromShow.BusChannels != null)
+            {
+                foreach (var busChannel in chartFromShow.BusChannels)
+                {
+                    if (busChannel.IsConfigured && 
+                        busChannel.DbcHelper?.dbcFile?.messageDict != null &&
+                        busChannel.DbcHelper.dbcFile.messageDict.ContainsKey(canId))
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+
         /// <summary>记录CAN报文（CAN接收线程调用，极轻量）</summary>
         /// <param name="triggerRefresh">是否触发界面刷新；批量导入时传false，最后手动刷新</param>
         internal void RecordCanMessage(TPCANMsg msg, ulong timestampUs, bool isTx, bool triggerRefresh = true)
@@ -214,7 +274,7 @@ namespace PCAN_Client
                 if (!_msgIndexMap.TryGetValue(msg.ID, out idx))
                 {
                     info = new CanMsgDisplayInfo { MsgId = msg.ID, LastTimestampUs = timestampUs };
-                    if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(msg.ID, out var dbcMsg))
+                    if (TryFindDbcMessage(msg.ID, out var dbcMsg))
                     {
                         info.Description = dbcMsg.messageName;
                         info.Node = dbcMsg.transmitter;
@@ -307,8 +367,7 @@ namespace PCAN_Client
 
                     // 首次数据变化时分配 SigChanged/PrevSignalValues
                     if (info.SigChanged == null &&
-                        BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
-                        BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(info.MsgId, out var initMsg))
+                        TryFindDbcMessage(info.MsgId, out var initMsg))
                     {
                         int cnt = initMsg.signals.Count;
                         info.SigChanged = new int[cnt];
@@ -317,8 +376,7 @@ namespace PCAN_Client
 
                     // 有DBC时：通过比较信号物理解码值精确判断变化
                     if (info.SigChanged != null &&
-                        BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
-                        BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(info.MsgId, out var sigChangeMsg))
+                        TryFindDbcMessage(info.MsgId, out var sigChangeMsg))
                     {
                         for (int s = 0; s < info.SigChanged.Length && s < sigChangeMsg.signals.Count; s++)
                         {
@@ -381,7 +439,7 @@ namespace PCAN_Client
                 if (!_msgMetaCache.TryGetValue(msg.ID, out _))
                 {
                     string desc, node;
-                    if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(msg.ID, out var dbcMsg2))
+                    if (TryFindDbcMessage(msg.ID, out var dbcMsg2))
                     {
                         desc = dbcMsg2.messageName;
                         node = dbcMsg2.transmitter;
@@ -495,7 +553,7 @@ namespace PCAN_Client
                     if (!_msgIndexMap.ContainsKey(rawMsg.CanId))
                     {
                         var info = new CanMsgDisplayInfo { MsgId = rawMsg.CanId };
-                        if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(rawMsg.CanId, out var dbcMsg))
+                        if (TryFindDbcMessage(rawMsg.CanId, out var dbcMsg))
                         {
                             info.Description = dbcMsg.messageName;
                             info.Node = dbcMsg.transmitter;
@@ -526,7 +584,7 @@ namespace PCAN_Client
                         if (!_msgMetaCache.TryGetValue(rawMsg.CanId, out _))
                         {
                             string desc, node;
-                            if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(rawMsg.CanId, out var dbcMsg2))
+                            if (TryFindDbcMessage(rawMsg.CanId, out var dbcMsg2))
                             {
                                 desc = dbcMsg2.messageName;
                                 node = dbcMsg2.transmitter;
@@ -750,12 +808,12 @@ namespace PCAN_Client
                                 var frame = _scrollFrames[i];
                                 if (hasFilter && !_filterIds.Contains(frame.MsgId))
                                     continue;
-                                if (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(frame.MsgId))
+                                if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId))
                                     continue;
                                 _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                                 if (_expandedScrollFrames.Contains(i))
                                 {
-                                    if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(frame.MsgId, out var dbcMsg))
+                                    if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
                                     {
                                         for (int sigIdx = 0; sigIdx < dbcMsg.signals.Count; sigIdx++)
                                          _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx, FlatIndex = _flatRows.Count });
@@ -773,7 +831,7 @@ namespace PCAN_Client
                             {
                                 var f = _scrollFrames[i];
                                 if ((hasFilter && !_filterIds.Contains(f.MsgId)) ||
-                                    (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(f.MsgId)))
+                                    (_dbcOnlyMode && !ContainsDbcMessage(f.MsgId)))
                                     continue;
                                 matched++;
                                 start = i;
@@ -785,12 +843,12 @@ namespace PCAN_Client
                                 var frame = _scrollFrames[i];
                                 if (hasFilter && !_filterIds.Contains(frame.MsgId))
                                     continue;
-                                if (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(frame.MsgId))
+                                if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId))
                                     continue;
                                 _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                                 if (_expandedScrollFrames.Contains(i))
                                 {
-                                    if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(frame.MsgId, out var dbcMsg))
+                                    if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
                                     {
                                         for (int s = 0; s < dbcMsg.signals.Count; s++)
                                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = s, FlatIndex = _flatRows.Count });
@@ -813,7 +871,7 @@ namespace PCAN_Client
                         var msg = _displayList[i];
                         if (_filterIds.Count > 0 && !_filterIds.Contains(msg.MsgId))
                             continue;
-                        if (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(msg.MsgId))
+                        if (_dbcOnlyMode && !ContainsDbcMessage(msg.MsgId))
                             continue;
 
                         var fi = new FlatRowInfo { Type = FlatRowType.Message, MsgIndex = i, FlatIndex = _flatRows.Count };
@@ -821,7 +879,7 @@ namespace PCAN_Client
 
                         if (_expandedIds.Contains(msg.MsgId))
                         {
-                            if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(msg.MsgId, out var dbcMsg))
+                            if (TryFindDbcMessage(msg.MsgId, out var dbcMsg))
                             {
                                 for (int s = 0; s < dbcMsg.signals.Count; s++)
                                     _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, MsgIndex = i, SigIndex = s, FlatIndex = _flatRows.Count });
@@ -1028,7 +1086,7 @@ namespace PCAN_Client
                      sigNode = _displayList[flat.MsgIndex].Node;
                  }
 
-                 if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(sigMsgId, out var dbcMsg))
+                 if (TryFindDbcMessage(sigMsgId, out var dbcMsg))
                  {
                      if (flat.SigIndex >= 0 && flat.SigIndex < dbcMsg.signals.Count)
                      {
@@ -1247,8 +1305,7 @@ namespace PCAN_Client
 
                     // 检查是否有 DBC 信号
                     bool hasSignals = false;
-                    if (BaseParamter.dbcHelper != null && BaseParamter.dbcHelper.dbcFile != null
-                        && BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(fMsgId, out var dbcChk))
+                    if (TryFindDbcMessage(fMsgId, out var dbcChk))
                         hasSignals = dbcChk.signals.Count > 0;
 
                     if (!hasSignals) return; // 无信号不绘制
@@ -1322,7 +1379,7 @@ namespace PCAN_Client
 
             // 检查是否有 DBC 信号
             bool hasSignals = false;
-            if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(msgId, out var dbcChk))
+            if (TryFindDbcMessage(msgId, out var dbcChk))
                 hasSignals = dbcChk.signals.Count > 0;
             if (!hasSignals) return;
 
@@ -1509,11 +1566,11 @@ namespace PCAN_Client
                         {
                             var frame = _scrollFrames[i];
                             if (hasFilter && !_filterIds.Contains(frame.MsgId)) continue;
-                            if (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(frame.MsgId)) continue;
+                            if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId)) continue;
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
                             {
-                                if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(frame.MsgId, out var dbcMsg))
+                                if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
                                 {
                                     for (int sigIdx2 = 0; sigIdx2 < dbcMsg.signals.Count; sigIdx2++)
                                         _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx2, FlatIndex = _flatRows.Count });
@@ -1532,7 +1589,7 @@ namespace PCAN_Client
                         {
                             var f = _scrollFrames[i];
                             if ((hasFilter && !_filterIds.Contains(f.MsgId)) ||
-                                (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(f.MsgId)))
+                                (_dbcOnlyMode && !ContainsDbcMessage(f.MsgId)))
                                 continue;
                             matched++;
                             start = i;
@@ -1541,11 +1598,11 @@ namespace PCAN_Client
                         {
                             var frame = _scrollFrames[i];
                             if (hasFilter && !_filterIds.Contains(frame.MsgId)) continue;
-                            if (_dbcOnlyMode && !BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(frame.MsgId)) continue;
+                            if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId)) continue;
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
                             {
-                                if (BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(frame.MsgId, out var dbcMsg))
+                                if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
                                 {
                                     for (int sigIdx3 = 0; sigIdx3 < dbcMsg.signals.Count; sigIdx3++)
                                         _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx3, FlatIndex = _flatRows.Count });

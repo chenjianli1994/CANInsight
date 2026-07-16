@@ -574,7 +574,8 @@ namespace PCAN_Client.ReportAuto
                     SignalIndex = ch.DbcSignalIndex,
                     Unit = ch.Unit ?? "",
                     Color = ColorTranslator.ToHtml(ch.Color),
-                    Visible = ch.Visible
+                    Visible = ch.Visible,
+                    BusChannelIndex = ch.BusChannelIndex
                 });
             }
 

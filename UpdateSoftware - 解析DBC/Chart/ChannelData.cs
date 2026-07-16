@@ -56,6 +56,10 @@ namespace PCAN_Client
         public string DbcSignalName = "";
         public Dictionary<double, string> EnumDefinitions { get; set; } = new Dictionary<double, string>();
         public string Unit { get; set; } = "";
+        /// <summary>
+        /// 所属CAN总线通道索引（-1 = 兼容模式，使用全局DBC）
+        /// </summary>
+        public int BusChannelIndex = -1;
 
         // Y轴范围缓存（用于滑动时避免重复计算）
         private double _cachedXMin = double.NaN;
@@ -63,7 +67,7 @@ namespace PCAN_Client
         private RangeResult _cachedYRangeInX = null;
         private const int Y_RANGE_CACHE_TTL_MS = 100; // 缓存有效期100ms
 
-        public ChannelData(string name, Color color, DateTime dateTimeNow, Dictionary<double, string> enumDefinitions, string unit, double cycleTime = 0.1, int dbcMessageId = -1, int dbcMessageIndex = -1, int dbcSignalIndex = -1, string signalName = "")
+        public ChannelData(string name, Color color, DateTime dateTimeNow, Dictionary<double, string> enumDefinitions, string unit, double cycleTime = 0.1, int dbcMessageId = -1, int dbcMessageIndex = -1, int dbcSignalIndex = -1, string signalName = "", int busChannelIndex = -1)
         {
             Name = name;
             Color = color;
@@ -85,6 +89,7 @@ namespace PCAN_Client
             DbcMessageId = dbcMessageId;
             EnumDefinitions = enumDefinitions;
             Unit = unit ?? "";
+            BusChannelIndex = busChannelIndex;
         }
 
         // 单通道数据点上限：超过此值时裁剪最旧的数据，避免无限增长导致CPU/内存上升

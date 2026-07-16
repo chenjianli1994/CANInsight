@@ -56,6 +56,7 @@ namespace PCAN_Client.ReportAuto
         public string Unit;             // 单位
         public string Color;            // 颜色（如"#FF0000"）
         public bool Visible = true;     // 是否显示
+        public int BusChannelIndex = -1; // CAN总线通道索引（-1=兼容模式，使用全局DBC）
     }
 
     /// <summary>

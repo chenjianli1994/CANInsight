@@ -191,11 +191,12 @@ namespace PCAN_Client
             if (!(_cmbAnalysisType.SelectedItem is AnalysisType type)) return;
             if (type.SignalList == null || type.SignalList.Count == 0) return;
 
-            // 需要DBC已加载
-            if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null ||
-                BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
+            // 需要DBC已加载（兼容模式或至少一个CAN通道已配置）
+            bool hasAnyDbc = (BaseParamter.dbcHelper != null && BaseParamter.dbcHelper.dbcFile != null &&
+                             BaseParamter.dbcHelper.dbcFile.messages.Count > 0);
+            if (!hasAnyDbc && _busChannels.Count == 0)
             {
-                _statusLabel.Text = "状态: 请先加载DBC文件再切换分析类型";
+                _statusLabel.Text = "状态: 请先加载DBC文件或配置CAN通道再切换分析类型";
                 _statusLabel.ForeColor = Color.Orange;
                 return;
             }
@@ -203,9 +204,9 @@ namespace PCAN_Client
             // 清空当前信号
             lock (_lockObj)
             {
-                Channels.Clear();
                 foreach (var channel in Channels)
                     channel.Clear();
+                Channels.Clear();
             }
 
             // 从SignalList恢复信号
@@ -218,11 +219,23 @@ namespace PCAN_Client
 
             foreach (var preset in type.SignalList)
             {
-                if (preset.MessageIndex < 0 || preset.MessageIndex >= BaseParamter.dbcHelper.dbcFile.messages.Count)
-                    continue;
-                var msg = BaseParamter.dbcHelper.dbcFile.messages[preset.MessageIndex];
-                if (preset.SignalIndex < 0 || preset.SignalIndex >= msg.signals.Count)
-                    continue;
+                // 根据BusChannelIndex选择对应的DBC实例
+                CAN_Data.DbcFile dbcFile = null;
+                if (preset.BusChannelIndex >= 0 && preset.BusChannelIndex < _busChannels.Count)
+                {
+                    var busCh = _busChannels[preset.BusChannelIndex];
+                    if (busCh.IsConfigured)
+                        dbcFile = busCh.DbcHelper.dbcFile;
+                }
+                else if (BaseParamter.dbcHelper?.dbcFile != null)
+                {
+                    dbcFile = BaseParamter.dbcHelper.dbcFile;
+                }
+
+                if (dbcFile == null) continue;
+                if (preset.MessageIndex < 0 || preset.MessageIndex >= dbcFile.messages.Count) continue;
+                var msg = dbcFile.messages[preset.MessageIndex];
+                if (preset.SignalIndex < 0 || preset.SignalIndex >= msg.signals.Count) continue;
 
                 var signal = msg.signals[preset.SignalIndex];
                 Color color = !string.IsNullOrEmpty(preset.Color)
@@ -241,7 +254,8 @@ namespace PCAN_Client
                     preset.MessageId,
                     preset.MessageIndex,
                     preset.SignalIndex,
-                    preset.SignalName ?? "");
+                    preset.SignalName ?? "",
+                    preset.BusChannelIndex);
                 ch.Visible = preset.Visible;
                 Channels.Add(ch);
             }

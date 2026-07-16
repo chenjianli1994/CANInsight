@@ -14,10 +14,20 @@ namespace PCAN_Client
         private Timer _searchTimer;
         private string _pendingSearchText = "";
         private bool _suppressUpdateList = false;
+        private DbcHelper _customDbcHelper = null;
+        private int _busChannelIndex = -1;
 
         public List<SelectedSignalInfo> SelectedSignals
         {
             get { return selectedSignals; }
+        }
+
+        /// <summary>
+        /// 当前使用的DBC实例（优先使用自定义实例，否则使用全局实例）
+        /// </summary>
+        private DbcHelper ActiveDbcHelper
+        {
+            get { return _customDbcHelper ?? BaseParamter.dbcHelper; }
         }
 
         public SignalSelector()
@@ -25,6 +35,17 @@ namespace PCAN_Client
             InitializeComponent();
             _searchTimer = new Timer { Interval = 2000 };
             _searchTimer.Tick += SearchTimer_Tick;
+        }
+
+        /// <summary>
+        /// 使用自定义DBC实例的信号选择器（多通道模式）
+        /// </summary>
+        /// <param name="customDbcHelper">自定义DBC解析实例</param>
+        /// <param name="busChannelIndex">所属CAN总线通道索引</param>
+        public SignalSelector(DbcHelper customDbcHelper, int busChannelIndex) : this()
+        {
+            _customDbcHelper = customDbcHelper;
+            _busChannelIndex = busChannelIndex;
         }
 
         private void SignalSelector_Load(object sender, EventArgs e)
@@ -36,13 +57,14 @@ namespace PCAN_Client
         {
             tvMessages.Nodes.Clear();
 
-            if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null)
+            var dbcHelper = ActiveDbcHelper;
+            if (dbcHelper == null || dbcHelper.dbcFile == null)
             {
                 MessageBox.Show("DBC文件未加载，请先加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
+            foreach (var message in dbcHelper.dbcFile.messages)
             {
                 TreeNode node = new TreeNode();
                 node.Text = $"0x{message.messgeId:X3} - {message.messageName}";
@@ -74,7 +96,8 @@ namespace PCAN_Client
                 return;
             }
 
-            int msgIndex = BaseParamter.dbcHelper.dbcFile.messages.IndexOf(message);
+            var dbcHelper = ActiveDbcHelper;
+            int msgIndex = dbcHelper.dbcFile.messages.IndexOf(message);
             uint cycleTime = message.cycleTime;
 
             for (int i = 0; i < message.signals.Count; i++)
@@ -110,9 +133,10 @@ namespace PCAN_Client
                 uint cycleTime = dgvSignals.Rows[e.RowIndex].Tag is uint ? (uint)dgvSignals.Rows[e.RowIndex].Tag : 0;
 
                 uint msgId = 0;
-                if (msgIndex >= 0 && msgIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
+                var dbcHelper = ActiveDbcHelper;
+                if (msgIndex >= 0 && msgIndex < dbcHelper.dbcFile.messages.Count)
                 {
-                    msgId = BaseParamter.dbcHelper.dbcFile.messages[msgIndex].messgeId;
+                    msgId = dbcHelper.dbcFile.messages[msgIndex].messgeId;
                 }
 
                 if (isSelected)
@@ -120,9 +144,9 @@ namespace PCAN_Client
                     // 获取枚举值定义和单位
                     Dictionary<double, string> enumDefs = new Dictionary<double, string>();
                     string unit = "";
-                    if (msgIndex >= 0 && msgIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
+                    if (msgIndex >= 0 && msgIndex < dbcHelper.dbcFile.messages.Count)
                     {
-                        var msg = BaseParamter.dbcHelper.dbcFile.messages[msgIndex];
+                        var msg = dbcHelper.dbcFile.messages[msgIndex];
                         if (signalIndex >= 0 && signalIndex < msg.signals.Count)
                         {
                             var sig = msg.signals[signalIndex];
@@ -151,7 +175,8 @@ namespace PCAN_Client
                         SignalIndex = signalIndex,
                         CycleTime = cycleTime,
                         EnumDefinitions = enumDefs,
-                        Unit = unit
+                        Unit = unit,
+                        BusChannelIndex = _busChannelIndex
                     };
                     selectedSignals.Add(signalInfo);
                 }
@@ -221,10 +246,11 @@ namespace PCAN_Client
             }
 
             dgvSignals.Rows.Clear();
-            
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
+
+            var dbcHelper = ActiveDbcHelper;
+            foreach (var message in dbcHelper.dbcFile.messages)
             {
-                int msgIndex = BaseParamter.dbcHelper.dbcFile.messages.IndexOf(message);
+                int msgIndex = dbcHelper.dbcFile.messages.IndexOf(message);
                 uint cycleTime = message.cycleTime;
                 
                 for (int i = 0; i < message.signals.Count; i++)
@@ -438,5 +464,9 @@ namespace PCAN_Client
         public Dictionary<double, string> EnumDefinitions { get; set; } = new Dictionary<double, string>();
         // 新增：信号单位
         public string Unit { get; set; } = "";
+        /// <summary>
+        /// 所属CAN总线通道索引（-1 = 兼容模式，使用全局DBC）
+        /// </summary>
+        public int BusChannelIndex { get; set; } = -1;
     }
 }
