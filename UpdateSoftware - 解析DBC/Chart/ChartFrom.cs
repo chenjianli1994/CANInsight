@@ -812,6 +812,17 @@ namespace PCAN_Client
             this._statusLabel.TabIndex = 8;
             this._statusLabel.Text = "状态: 已停止";
             // 
+            // _modeIndicatorLabel
+            // 
+            this._modeIndicatorLabel = new System.Windows.Forms.Label();
+            this._modeIndicatorLabel.AutoSize = true;
+            this._modeIndicatorLabel.ForeColor = System.Drawing.Color.Gray;
+            this._modeIndicatorLabel.Location = new System.Drawing.Point(6, 26);
+            this._modeIndicatorLabel.Name = "_modeIndicatorLabel";
+            this._modeIndicatorLabel.Size = new System.Drawing.Size(65, 12);
+            this._modeIndicatorLabel.TabIndex = 20;
+            this._modeIndicatorLabel.Text = "模式: 实时数据";
+            // 
             // _channelGrid
             // 
             this._channelGrid.AllowDrop = true;
@@ -918,7 +929,7 @@ namespace PCAN_Client
             // 
             // _filePathTextBox
             // 
-            this._filePathTextBox.Location = new System.Drawing.Point(6, 30);
+            this._filePathTextBox.Location = new System.Drawing.Point(6, 46);
             this._filePathTextBox.Name = "_filePathTextBox";
             this._filePathTextBox.ReadOnly = true;
             this._filePathTextBox.Size = new System.Drawing.Size(288, 21);
@@ -928,25 +939,13 @@ namespace PCAN_Client
             // 
             this._progressLabel.AutoSize = true;
             this._progressLabel.ForeColor = System.Drawing.Color.Blue;
-            this._progressLabel.Location = new System.Drawing.Point(258, 67);
+            this._progressLabel.Location = new System.Drawing.Point(258, 73);
             this._progressLabel.Name = "_progressLabel";
             this._progressLabel.Size = new System.Drawing.Size(17, 12);
             this._progressLabel.TabIndex = 14;
             this._progressLabel.Text = "0%";
             this._progressLabel.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             this._progressLabel.Visible = false;
-            // 
-            // _modeIndicatorLabel
-            // 
-            this._modeIndicatorLabel = new System.Windows.Forms.Label();
-            this._modeIndicatorLabel.AutoSize = true;
-            this._modeIndicatorLabel.ForeColor = System.Drawing.Color.Gray;
-            this._modeIndicatorLabel.Location = new System.Drawing.Point(220, 8);
-            this._modeIndicatorLabel.Name = "_modeIndicatorLabel";
-            this._modeIndicatorLabel.Size = new System.Drawing.Size(65, 12);
-            this._modeIndicatorLabel.TabIndex = 20;
-            this._modeIndicatorLabel.Text = "";
-            this._modeIndicatorLabel.Visible = false;
             // 
             // _speedLabel
             // 
@@ -2362,23 +2361,23 @@ namespace PCAN_Client
 
         private void UpdateModeIndicator()
         {
-            if (_isFileMode && RunStatus)
+            if (_isFileMode)
             {
                 if (_streamingMode)
                 {
-                    _modeIndicatorLabel.Text = "流式模式";
+                    _modeIndicatorLabel.Text = "模式: 流式";
                     _modeIndicatorLabel.ForeColor = Color.DarkOrange;
                 }
                 else
                 {
-                    _modeIndicatorLabel.Text = "内存模式";
+                    _modeIndicatorLabel.Text = "模式: 内存";
                     _modeIndicatorLabel.ForeColor = Color.DarkGreen;
                 }
-                _modeIndicatorLabel.Visible = true;
             }
             else
             {
-                _modeIndicatorLabel.Visible = false;
+                _modeIndicatorLabel.Text = "模式: 实时数据";
+                _modeIndicatorLabel.ForeColor = Color.Gray;
             }
         }
 
