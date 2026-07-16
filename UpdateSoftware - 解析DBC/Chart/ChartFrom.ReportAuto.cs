@@ -18,6 +18,7 @@ namespace PCAN_Client
         private ToolStripButton _btnEditAnalysisType;
         private ToolStripButton _btnNewAnalysisType;
         private ToolStripButton _btnDeleteAnalysisType;
+        private ToolStripButton _btnSaveAnalysisType;
         private ToolStripTextBox _txtReportStart;
         private ToolStripTextBox _txtReportEnd;
         private ToolStripButton _btnAddReportPage;
@@ -60,6 +61,10 @@ namespace PCAN_Client
             _btnDeleteAnalysisType.ToolTipText = "删除当前选中的分析类型";
             _btnDeleteAnalysisType.Click += _btnDeleteAnalysisType_Click;
 
+            _btnSaveAnalysisType = new ToolStripButton("保存");
+            _btnSaveAnalysisType.ToolTipText = "保存当前分析类型（编辑并保存）";
+            _btnSaveAnalysisType.Click += _btnSaveAnalysisType_Click;
+
             _btnAddReportPage = new ToolStripButton("添加到报告");
             _btnAddReportPage.ToolTipText = "按当前时间范围和分析类型,追加一页到报告";
             _btnAddReportPage.Click += _btnAddReportPage_Click;
@@ -75,6 +80,7 @@ namespace PCAN_Client
             _topToolStrip.Items.Add(_btnEditAnalysisType);
             _topToolStrip.Items.Add(_btnNewAnalysisType);
             _topToolStrip.Items.Add(_btnDeleteAnalysisType);
+            _topToolStrip.Items.Add(_btnSaveAnalysisType);
             _topToolStrip.Items.Add(new ToolStripLabel("时间:"));
             _topToolStrip.Items.Add(_txtReportStart);
             _topToolStrip.Items.Add(new ToolStripLabel("-"));
@@ -287,6 +293,36 @@ namespace PCAN_Client
             {
                 SaveAnalysisTypeJson(editor.Result, null);
                 RefreshAnalysisTypeList();
+            }
+        }
+
+        /// <summary>保存当前选中的分析类型（打开编辑器编辑并保存）</summary>
+        private void _btnSaveAnalysisType_Click(object sender, EventArgs e)
+        {
+            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            {
+                MessageBox.Show("请先选择要保存的分析类型", "提示");
+                return;
+            }
+
+            var editor = new AnalysisTypeEditor(currentType, Channels,
+                ReportAutoService.GetTemplatePath());
+            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            {
+                var newType = editor.Result;
+                SaveAnalysisTypeJson(newType, currentType.Name);
+                RefreshAnalysisTypeList();
+                // 选中保存后的类型
+                for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
+                {
+                    if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == newType.Name)
+                    {
+                        _cmbAnalysisType.SelectedIndex = i;
+                        break;
+                    }
+                }
+                _statusLabel.Text = $"状态: 分析类型 \"{newType.Name}\" 已保存";
+                _statusLabel.ForeColor = Color.Green;
             }
         }
 
