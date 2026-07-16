@@ -2374,6 +2374,12 @@ namespace PCAN_Client
                     _modeIndicatorLabel.ForeColor = Color.DarkGreen;
                 }
             }
+            else if (_rawMessages != null && _rawMessages.Count > 0)
+            {
+                // 已加载文件但切换到实时模式时，仍显示文件模式
+                _modeIndicatorLabel.Text = "模式: 内存";
+                _modeIndicatorLabel.ForeColor = Color.DarkGreen;
+            }
             else
             {
                 _modeIndicatorLabel.Text = "模式: 实时数据";
