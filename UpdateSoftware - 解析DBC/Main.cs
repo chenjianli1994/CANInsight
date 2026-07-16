@@ -1531,7 +1531,7 @@ namespace PCAN_Client
         }
 
         /// <summary>CAN通道列头点击排序</summary>
-        private void DgvMessages_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        private void DgvMessages_ColumnHeaderMouseDoubleClick(object sender, DataGridViewCellMouseEventArgs e)
         {
             if (e.Button != MouseButtons.Left) return;
             if (e.RowIndex >= 0) return; // 不是表头点击
@@ -1970,7 +1970,7 @@ namespace PCAN_Client
              _dgvMessages.CellFormatting += DgvMessages_CellFormatting;
              _dgvMessages.CellPainting += DgvMessages_CellPainting;
              _dgvMessages.CellClick += DgvMessages_CellClick;
-             _dgvMessages.ColumnHeaderMouseClick += DgvMessages_ColumnHeaderMouseClick;
+             _dgvMessages.ColumnHeaderMouseDoubleClick += DgvMessages_ColumnHeaderMouseDoubleClick;
              _dgvMessages.Scroll += (ss, ee) =>
              {
                  // 检测用户是否在底部
