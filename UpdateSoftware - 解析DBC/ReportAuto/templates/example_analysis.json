@@ -1,24 +1,24 @@
 {
   "Name": "舒适性标定-前排头温",
   "ImageShapes": [
-    { "ShapeName": "图片 1", "Source": "chart" }
+    {
+      "ShapeName": "RPT_IMAGE_CHART",
+      "Source": "chart"
+    }
   ],
   "Table": {
     "ShapeName": "表格 4",
     "Row": 1,
-    "Cells": [ "舒适性标定", "{{ENV_TEMP}}", "AUTO22", "0", "0", "OFF", "{{DATA_FILE}}" ]
+    "Cells": [
+      "舒适性标定",
+      "{{ENV_TEMP}}",
+      "AUTO22",
+      "0",
+      "0",
+      "OFF",
+      "{{DATA_FILE}}"
+    ]
   },
-  "Signals": [
-    {
-      "MessageId": 843,
-      "SignalName": "前排头温",
-      "Unit": "℃",
-      "Metrics": [ "avg", "min", "max" ],
-      "PlaceholderMap": {
-        "avg": "AVG_HEADTEMP",
-        "min": "MIN_HEADTEMP",
-        "max": "MAX_HEADTEMP"
-      }
-    }
-  ]
+  "Signals": [],
+  "TextTemplate": ""
 }

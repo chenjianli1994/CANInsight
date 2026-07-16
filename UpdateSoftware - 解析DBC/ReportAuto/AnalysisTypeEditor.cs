@@ -6,7 +6,6 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using DocumentFormat.OpenXml.Packaging;
 
 namespace PCAN_Client.ReportAuto
 {
@@ -21,16 +20,13 @@ namespace PCAN_Client.ReportAuto
         private readonly AnalysisType _editingType;
         // 当前绘图区已有的信号通道（供下拉选择）
         private readonly List<ChannelData> _channels;
-        // PPT模板路径（用于列出Shape名称）
-        private readonly string _templatePath;
-        // PPT中所有Shape名称列表
-        private List<string> _pptShapeNames = new List<string>();
+        // CAN总线通道列表(供信号选择器显示多路CAN通道DBC)
+        private readonly List<CanBusChannel> _busChannels;
 
         // UI 控件
         private TextBox _txtName;
-        private ComboBox _cmbTextShape;
-        private ComboBox _cmbImageShape;
         private RichTextBox _rtbText;
+        private TextBox _txtPreview;        // 实时预览:{{占位符}}→[信号·指标]
         private DataGridView _dgvPlaceholders;
         private Button _btnInsertPlaceholder;
         private Button _btnOk;
@@ -42,172 +38,100 @@ namespace PCAN_Client.ReportAuto
         /// <summary>
         /// 创建编辑器。editingType为null时新建，否则编辑现有类型。
         /// </summary>
-        public AnalysisTypeEditor(AnalysisType editingType, List<ChannelData> channels, string templatePath)
+        public AnalysisTypeEditor(AnalysisType editingType, List<ChannelData> channels, List<CanBusChannel> busChannels)
         {
             _editingType = editingType;
             _channels = channels ?? new List<ChannelData>();
-            _templatePath = templatePath;
+            _busChannels = busChannels ?? new List<CanBusChannel>();
             InitUI();
-            LoadPptShapeNames();
             LoadFromType();
         }
 
         private void InitUI()
         {
             Text = "工况分类编辑器";
-            Size = new Size(700, 620);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
+            Size = new Size(1000, 720);
+            MinimumSize = new Size(700, 500);
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
+            Padding = new Padding(10);  // 四周留10px边距,不贴边框
 
-            int y = 15;
-            int labelW = 110;
-            int inputW = 400;
             int btnW = 80;
 
-            // 名称
-            AddLabel("名称:", 15, y + 3);
-            _txtName = new TextBox { Location = new Point(130, y), Width = inputW };
-            Controls.Add(_txtName);
-            y += 35;
+            // === 顶部:名称 ===
+            var panelTop = new Panel { Dock = DockStyle.Top, Height = 36, Margin = new Padding(8, 8, 8, 4) };
+            panelTop.Controls.Add(new Label { Text = "名称:", Location = new Point(8, 9), AutoSize = true });
+            _txtName = new TextBox { Location = new Point(55, 6), Width = 300, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
+            panelTop.Controls.Add(_txtName);
 
-            // PPT文本框Shape
-            AddLabel("PPT文本框Shape:", 15, y + 3);
-            _cmbTextShape = new ComboBox
-            {
-                Location = new Point(130, y),
-                Width = inputW,
-                DropDownStyle = ComboBoxStyle.DropDown
-            };
-            Controls.Add(_cmbTextShape);
-            y += 35;
+            // === 主分割(左右,宽度可调):左=文字+预览  右=占位符配置表 ===
+            var splitMain = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Vertical, Margin = new Padding(8, 4, 8, 4) };
 
-            // PPT图片Shape
-            AddLabel("PPT图片Shape:", 15, y + 3);
-            _cmbImageShape = new ComboBox
-            {
-                Location = new Point(130, y),
-                Width = inputW,
-                DropDownStyle = ComboBoxStyle.DropDown
-            };
-            Controls.Add(_cmbImageShape);
-            y += 35;
-
-            // 文字编辑区标签
-            AddLabel("文字内容（可输入 {{占位符}}）:", 15, y + 3);
-            y += 22;
-
-            _rtbText = new RichTextBox
-            {
-                Location = new Point(15, y),
-                Size = new Size(655, 150),
-                Font = new Font("Microsoft YaHei UI", 10F),
-                AcceptsTab = true
-            };
+            // 左栏:上下分割 文字区/预览区(高度可调,默认各占一半)
+            var splitLeft = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal };
+            
+            // 文字区:标签 + 工具栏(插入占位符按钮) + 文本框
+            var panelText = new Panel { Dock = DockStyle.Fill };
+            _rtbText = new RichTextBox { Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 10F), AcceptsTab = true };
             _rtbText.TextChanged += RtbText_TextChanged;
-            Controls.Add(_rtbText);
-            y += 155;
-
-            // 插入占位符按钮
-            _btnInsertPlaceholder = new Button
-            {
-                Text = "插入占位符...",
-                Location = new Point(15, y),
-                Size = new Size(120, 28)
-            };
+            _rtbText.KeyDown += RtbText_KeyDown;
+            panelText.Controls.Add(_rtbText);  // Fill 先添加（后布局）
+            _btnInsertPlaceholder = new Button { Text = "插入信号占位符...", Dock = DockStyle.Top, Height = 26 };
             _btnInsertPlaceholder.Click += BtnInsertPlaceholder_Click;
-            Controls.Add(_btnInsertPlaceholder);
-            y += 38;
+            panelText.Controls.Add(_btnInsertPlaceholder);  // Top 中间
+            panelText.Controls.Add(new Label { Text = "文字内容（可输入 {{占位符}}）:", Dock = DockStyle.Top, Height = 20 });  // Top 最上
+            splitLeft.Panel1.Controls.Add(panelText);
+            
+            // 预览区
+            splitLeft.Panel2.Controls.Add(new Label { Text = "预览（{{占位符}}→[信号·指标]）:", Dock = DockStyle.Top, Height = 20 });
+            _txtPreview = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, BackColor = SystemColors.Control, Font = new Font("Microsoft YaHei UI", 9F) };
+            splitLeft.Panel2.Controls.Add(_txtPreview);
+            splitMain.Panel1.Controls.Add(splitLeft);
 
-            // 占位符配置标签
-            AddLabel("占位符计算配置:", 15, y + 3);
-            y += 22;
-
-            // 占位符 DataGridView
+            // 右栏:占位符配置表(宽度随分隔条可调)
+            splitMain.Panel2.Controls.Add(new Label { Text = "占位符计算配置:", Dock = DockStyle.Top, Height = 20 });
             _dgvPlaceholders = new DataGridView
             {
-                Location = new Point(15, y),
-                Size = new Size(655, 160),
+                Dock = DockStyle.Fill,
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = true,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 RowHeadersVisible = false
             };
-            _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; }; // 忽略ComboBox值无效错误
-
-            // 占位符列（可编辑）
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "Key",
-                HeaderText = "占位符",
-                FillWeight = 22
-            });
-
-            // 信号列（按钮，点击弹出SignalSelector）
-            var signalBtnCol = new DataGridViewButtonColumn
-            {
-                Name = "SignalBtn",
-                HeaderText = "信号",
-                Text = "选择信号...",
-                UseColumnTextForButtonValue = true,
-                FillWeight = 30
-            };
-            _dgvPlaceholders.Columns.Add(signalBtnCol);
-
-            // 信号名显示列（只读，显示选中的信号名）
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "SignalName",
-                HeaderText = "信号名",
-                ReadOnly = true,
-                FillWeight = 20
-            });
-
-            // 计算方式下拉列
-            var calcCol = new DataGridViewComboBoxColumn
-            {
-                Name = "Calc",
-                HeaderText = "计算方式",
-                FillWeight = 18,
-                FlatStyle = FlatStyle.Flat,
-                Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" }
-            };
-            _dgvPlaceholders.Columns.Add(calcCol);
-
-            // 单位列
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                Name = "Unit",
-                HeaderText = "单位",
-                FillWeight = 10
-            });
-
-            // 按钮点击事件：弹出SignalSelector
+            _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; };
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Key", HeaderText = "占位符", FillWeight = 28 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 12 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 42 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 15, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 10 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
+            _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
+            splitMain.Panel2.Controls.Add(_dgvPlaceholders);
 
-            Controls.Add(_dgvPlaceholders);
-            y += 170;
-
-            // 确定/取消按钮
-            _btnOk = new Button
-            {
-                Text = "确定",
-                Location = new Point(460, y),
-                Size = new Size(btnW, 30)
-            };
+            // === 底部:确定/取消按钮 ===
+            var panelBottom = new Panel { Dock = DockStyle.Bottom, Height = 44, Margin = new Padding(8, 4, 8, 8) };
+            _btnOk = new Button { Text = "确定", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, Top = 7 };
             _btnOk.Click += BtnOk_Click;
-            Controls.Add(_btnOk);
+            _btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, Top = 7 };
+            _btnOk.Left = 1000 - btnW * 2 - 20;
+            _btnCancel.Left = 1000 - btnW - 10;
+            panelBottom.Controls.Add(_btnOk);
+            panelBottom.Controls.Add(_btnCancel);
 
-            _btnCancel = new Button
+            // 添加顺序:Dock=Fill 先,然后 Bottom,最后 Top(后添加的先布局,保证 Fill 填剩余空间)
+            Controls.Add(splitMain);
+            Controls.Add(panelBottom);
+            Controls.Add(panelTop);
+
+            // 分隔位置在Load时设(此时控件已布局,避免Width/Height为0时设值异常)
+            Load += (s, e) =>
             {
-                Text = "取消",
-                DialogResult = DialogResult.Cancel,
-                Location = new Point(560, y),
-                Size = new Size(btnW, 30)
+                if (splitMain.Width > 200) splitMain.SplitterDistance = (int)(splitMain.Width * 0.7);  // 占位符框占30%
+                if (splitLeft.Height > 40) splitLeft.SplitterDistance = splitLeft.Height / 2;
             };
-            Controls.Add(_btnCancel);
 
             AcceptButton = _btnOk;
             CancelButton = _btnCancel;
@@ -218,14 +142,25 @@ namespace PCAN_Client.ReportAuto
             Controls.Add(new Label { Text = text, Location = new Point(x, y), AutoSize = true });
         }
 
-        /// <summary>点击信号列按钮，弹出SignalSelector选择信号</summary>
+        /// <summary>点击信号列/复制列:SignalBtn弹SignalSelector(单选+多通道),CopyBtn复制占位符名</summary>
         private void DgvPlaceholders_CellClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
-            if (_dgvPlaceholders.Columns[e.ColumnIndex].Name != "SignalBtn") return;
+            string colName = _dgvPlaceholders.Columns[e.ColumnIndex].Name;
+
+            // 复制按钮:把该行占位符名复制到剪贴板(粘贴时自动加括号)
+            if (colName == "CopyBtn")
+            {
+                string key = _dgvPlaceholders.Rows[e.RowIndex].Cells["Key"].Value?.ToString();
+                if (!string.IsNullOrEmpty(key))
+                    Clipboard.SetText(key);
+                return;
+            }
+
+            if (colName != "SignalBtn") return;
 
             var row = _dgvPlaceholders.Rows[e.RowIndex];
-            using (var selector = new SignalSelector())
+            using (var selector = new SignalSelector(_busChannels) { SingleSelect = true })
             {
                 // 如果当前行已有信号，预选中
                 string currentSignalName = row.Cells["SignalName"].Value?.ToString();
@@ -253,23 +188,23 @@ namespace PCAN_Client.ReportAuto
 
                 if (selector.ShowDialog(this) == DialogResult.OK && selector.SelectedSignals.Count > 0)
                 {
-                    var sig = selector.SelectedSignals[0]; // 只取第一个
+                    var sig = selector.SelectedSignals[0]; // 单选模式只取第一个
                     row.Cells["SignalName"].Value = sig.SignalName;
-                    // 自动填充单位
-                    if (string.IsNullOrEmpty(row.Cells["Unit"].Value?.ToString()))
-                        row.Cells["Unit"].Value = sig.Unit ?? "";
+                    // 单位存行Tag(不单独显示列)
+                    row.Tag = sig.Unit ?? "";
                     // 自动生成占位符名（如果当前为空）
                     if (string.IsNullOrEmpty(row.Cells["Key"].Value?.ToString()))
                     {
                         string autoKey = GeneratePlaceholderName(sig.SignalName, row.Cells["Calc"].Value?.ToString());
                         row.Cells["Key"].Value = autoKey;
                     }
+                    UpdatePreview();
                 }
             }
         }
 
         /// <summary>根据信号名和计算方式自动生成占位符名</summary>
-        private static string GeneratePlaceholderName(string signalName, string calcDisplay)
+        internal static string GeneratePlaceholderName(string signalName, string calcDisplay)
         {
             if (string.IsNullOrEmpty(signalName)) return "PLACEHOLDER";
             string prefix = "";
@@ -286,93 +221,18 @@ namespace PCAN_Client.ReportAuto
             return prefix + clean;
         }
 
-        /// <summary>从PPT模板中读取所有Shape名称</summary>
-        private void LoadPptShapeNames()
-        {
-            if (string.IsNullOrEmpty(_templatePath) || !File.Exists(_templatePath)) return;
-            try
-            {
-                string readablePath = _templatePath;
-                // DLP兼容：尝试直接打开
-                try
-                {
-                    using (var doc = PresentationDocument.Open(_templatePath, false)) { }
-                }
-                catch
-                {
-                    // 提取明文副本
-                    string tmp = Path.Combine(Path.GetTempPath(), "EditorTpl_" + Guid.NewGuid().ToString("N") + ".pptx");
-                    var psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c type \"" + _templatePath + "\" > \"" + tmp + "\"")
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    };
-                    var p = System.Diagnostics.Process.Start(psi);
-                    if (p != null) p.WaitForExit(15000);
-                    if (File.Exists(tmp) && new FileInfo(tmp).Length > 0)
-                        readablePath = tmp;
-                    else
-                        return;
-                }
-
-                using (var doc = PresentationDocument.Open(readablePath, false))
-                {
-                    var presPart = doc.PresentationPart;
-                    var slidePart = presPart?.SlideParts?.FirstOrDefault();
-                    if (slidePart?.Slide == null) return;
-
-                    // 文本Shape
-                    foreach (var sp in slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Shape>())
-                    {
-                        string name = sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value;
-                        if (!string.IsNullOrEmpty(name) && !_pptShapeNames.Contains(name))
-                            _pptShapeNames.Add(name);
-                    }
-                    // 图片Shape
-                    foreach (var pic in slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Picture>())
-                    {
-                        string name = pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value;
-                        if (!string.IsNullOrEmpty(name) && !_pptShapeNames.Contains(name))
-                            _pptShapeNames.Add(name);
-                    }
-                    // 表格Shape
-                    foreach (var gf in slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.GraphicFrame>())
-                    {
-                        string name = gf.NonVisualGraphicFrameProperties?.NonVisualDrawingProperties?.Name?.Value;
-                        if (!string.IsNullOrEmpty(name) && !_pptShapeNames.Contains(name))
-                            _pptShapeNames.Add(name);
-                    }
-                }
-
-                // 填充下拉
-                _cmbTextShape.Items.AddRange(_pptShapeNames.ToArray());
-                _cmbImageShape.Items.AddRange(_pptShapeNames.ToArray());
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("[AnalysisTypeEditor] 加载PPT Shape失败: " + ex.Message);
-            }
-        }
-
         /// <summary>从编辑中的AnalysisType加载数据到UI</summary>
         private void LoadFromType()
         {
             if (_editingType == null) return;
 
             _txtName.Text = _editingType.Name ?? "";
-            _cmbTextShape.Text = _editingType.TextShapeName ?? "";
             _rtbText.Text = _editingType.TextTemplate ?? "";
 
-            // 图片Shape（取第一个Source="chart"的）
-            if (_editingType.ImageShapes != null)
-            {
-                var chartImg = _editingType.ImageShapes.FirstOrDefault(i => i.Source == "chart");
-                if (chartImg != null)
-                    _cmbImageShape.Text = chartImg.ShapeName ?? "";
-            }
-
-            // 占位符配置
-            if (_editingType.Signals != null)
+            // 占位符配置:只加载TextTemplate中实际存在的占位符
+            // 如果TextTemplate不包含任何{{...}}占位符,完全跳过Signals加载(避免DLP旧数据残留)
+            bool hasAnyPlaceholder = Regex.IsMatch(_rtbText.Text ?? "", @"\{\{\w+\}\}");
+            if (_editingType.Signals != null && hasAnyPlaceholder)
             {
                 foreach (var stat in _editingType.Signals)
                 {
@@ -381,6 +241,9 @@ namespace PCAN_Client.ReportAuto
                     {
                         string placeholderKey = kv.Value;
                         string metric = kv.Key;
+                        // 只加载TextTemplate中实际包含的占位符
+                        if (!_rtbText.Text.Contains("{{" + placeholderKey + "}}"))
+                            continue;
                         // 找到对应的行，避免重复添加
                         bool exists = false;
                         foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
@@ -395,10 +258,12 @@ namespace PCAN_Client.ReportAuto
 
                         string signalName = stat.SignalName ?? "";
                         string calcDisplay = MetricToDisplay(metric);
-                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, "选择信号...", signalName, calcDisplay, stat.Unit ?? "");
+                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, "选择信号", signalName, calcDisplay);
+                        _dgvPlaceholders.Rows[rowIdx].Tag = stat.Unit ?? "";  // 单位存行Tag
                     }
                 }
             }
+            UpdatePreview();
         }
 
         private static string MetricToDisplay(string metric)
@@ -428,6 +293,31 @@ namespace PCAN_Client.ReportAuto
         private void RtbText_TextChanged(object sender, EventArgs e)
         {
             SyncPlaceholdersFromText();
+            UpdatePreview();
+        }
+
+        /// <summary>Ctrl+V粘贴:若剪贴板内容是已配置的占位符名,自动包裹{{}}</summary>
+        private void RtbText_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Control && e.KeyCode == Keys.V)
+            {
+                string clip = "";
+                try { clip = Clipboard.GetText(); } catch { }
+                clip = clip?.Trim() ?? "";
+                if (string.IsNullOrEmpty(clip)) return;
+                // 去掉可能带的括号,取纯KEY
+                string key = clip.Replace("{{", "").Replace("}}", "").Trim();
+                if (FindRowByKey(key) != null)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    int sel = _rtbText.SelectionStart;
+                    string ins = "{{" + key + "}}";
+                    _rtbText.Text = _rtbText.Text.Insert(sel, ins);
+                    _rtbText.SelectionStart = sel + ins.Length;
+                    _rtbText.Focus();
+                }
+            }
         }
 
         private void SyncPlaceholdersFromText()
@@ -449,7 +339,10 @@ namespace PCAN_Client.ReportAuto
             foreach (string key in keysInText)
             {
                 if (!existingKeys.Contains(key))
-                    _dgvPlaceholders.Rows.Add(key, "选择信号...", "", "平均值(avg)", "");
+                {
+                    int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", "", "平均值(avg)");
+                    _dgvPlaceholders.Rows[idx].Tag = "";  // 单位默认空,选信号后自动填
+                }
             }
 
             // 删除文本中已没有的（标记灰色行或直接删除）
@@ -464,37 +357,72 @@ namespace PCAN_Client.ReportAuto
                 _dgvPlaceholders.Rows.Remove(row);
         }
 
-        /// <summary>点击"插入占位符"按钮</summary>
+        /// <summary>点击"插入信号占位符"按钮:弹对话框选信号+勾指标→插入文字+建立绑定</summary>
         private void BtnInsertPlaceholder_Click(object sender, EventArgs e)
         {
-            using (var inputForm = new Form
+            using (var dlg = new InsertSignalPlaceholderDialog(_busChannels))
             {
-                Text = "输入占位符名称",
-                Size = new Size(350, 150),
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false,
-                StartPosition = FormStartPosition.CenterParent
-            })
-            {
-                var label = new Label { Text = "占位符名称（英文/数字）:", Location = new Point(15, 15), AutoSize = true };
-                var txtInput = new TextBox { Location = new Point(15, 40), Width = 300 };
-                var btnOk = new Button { Text = "确定", DialogResult = DialogResult.OK, Location = new Point(130, 75), Width = 80 };
-                var btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(220, 75), Width = 80 };
-                inputForm.Controls.AddRange(new Control[] { label, txtInput, btnOk, btnCancel });
-                inputForm.AcceptButton = btnOk;
-                inputForm.CancelButton = btnCancel;
-
-                if (inputForm.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(txtInput.Text))
-                {
-                    string key = txtInput.Text.Trim().Replace(" ", "").Replace("{", "").Replace("}", "");
-                    string placeholder = "{{" + key + "}}";
-                    int selStart = _rtbText.SelectionStart;
-                    _rtbText.Text = _rtbText.Text.Insert(selStart, placeholder);
-                    _rtbText.SelectionStart = selStart + placeholder.Length;
-                    _rtbText.Focus();
-                }
+                if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null || dlg.Result.Count == 0)
+                    return;
+                // 1) 把勾选的 {{占位符}} 插入到 RichTextBox 光标处
+                string insertText = string.Join(" ", dlg.Result.Select(r => "{{" + r.Key + "}}"));
+                int selStart = _rtbText.SelectionStart;
+                _rtbText.Text = _rtbText.Text.Insert(selStart, insertText);
+                _rtbText.SelectionStart = selStart + insertText.Length;
+                _rtbText.Focus();
+                // 2) TextChanged→SyncPlaceholdersFromText 已自动加空行,
+                //    这里按 Key 把信号名/计算方式/单位填进对应行
+                ApplyBindings(dlg.Result);
+                UpdatePreview();
             }
+        }
+
+        /// <summary>把对话框返回的绑定列表填入占位符配置表(按Key找行,找不到则加)</summary>
+        private void ApplyBindings(List<InsertedBinding> bindings)
+        {
+            foreach (var b in bindings)
+            {
+                DataGridViewRow row = FindRowByKey(b.Key);
+                if (row == null)
+                {
+                    int idx = _dgvPlaceholders.Rows.Add(b.Key, "选择信号", b.SignalName, MetricToDisplay(b.Metric));
+                    row = _dgvPlaceholders.Rows[idx];
+                }
+                else
+                {
+                    row.Cells["SignalName"].Value = b.SignalName;
+                    row.Cells["Calc"].Value = MetricToDisplay(b.Metric);
+                }
+                row.Tag = b.Unit;  // 单位存行Tag(不单独显示列)
+            }
+        }
+
+        /// <summary>按占位符Key在配置表中查找行,找不到返回null</summary>
+        private DataGridViewRow FindRowByKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
+            {
+                if (row.Cells["Key"].Value?.ToString() == key)
+                    return row;
+            }
+            return null;
+        }
+
+        /// <summary>实时预览:把文字里的 {{KEY}} 替换成 [信号名·计算方式],未绑定显示 [未绑定]</summary>
+        private void UpdatePreview()
+        {
+            if (_txtPreview == null || _rtbText == null) return;
+            string text = _rtbText.Text;
+            _txtPreview.Text = Regex.Replace(text, @"\{\{(\w+)\}\}", m =>
+            {
+                DataGridViewRow row = FindRowByKey(m.Groups[1].Value);
+                if (row == null) return "[未绑定]";
+                string sig = row.Cells["SignalName"].Value?.ToString() ?? "";
+                string calc = row.Cells["Calc"].Value?.ToString() ?? "";
+                if (string.IsNullOrEmpty(sig)) return "[未绑定]";
+                return "[" + sig + "·" + calc + "]";
+            });
         }
 
         /// <summary>点击确定：构建AnalysisType结果</summary>
@@ -511,17 +439,12 @@ namespace PCAN_Client.ReportAuto
             var type = new AnalysisType();
             type.Name = name;
             type.TextTemplate = _rtbText.Text;
-            type.TextShapeName = _cmbTextShape.Text.Trim();
-
-            // 图片Shape
-            string imageShapeName = _cmbImageShape.Text.Trim();
-            if (!string.IsNullOrEmpty(imageShapeName))
+            // 文本框/图片框定位固定为模板内标识符,编辑器不再暴露选择
+            type.TextShapeName = TemplateShapeIds.TextDesc;
+            type.ImageShapes = new List<ImageShapeItem>
             {
-                type.ImageShapes = new List<ImageShapeItem>
-                {
-                    new ImageShapeItem { ShapeName = imageShapeName, Source = "chart" }
-                };
-            }
+                new ImageShapeItem { ShapeName = TemplateShapeIds.ChartImage, Source = "chart" }
+            };
 
             // 占位符 → Signals
             type.Signals = new List<SignalStat>();
@@ -530,7 +453,7 @@ namespace PCAN_Client.ReportAuto
                 string key = row.Cells["Key"].Value?.ToString();
                 string signalName = row.Cells["SignalName"].Value?.ToString();
                 string calcDisplay = row.Cells["Calc"].Value?.ToString();
-                string unit = row.Cells["Unit"].Value?.ToString() ?? "";
+                string unit = row.Tag?.ToString() ?? "";
 
                 if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(signalName)) continue;
 

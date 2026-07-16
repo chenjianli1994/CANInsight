@@ -17,6 +17,34 @@ namespace PCAN_Client
         private DbcHelper _customDbcHelper = null;
         private int _busChannelIndex = -1;
 
+        // 多通道模式:各CAN通道的DBC;为空则仅用全局DBC
+        private List<CanBusChannel> _busChannels = null;
+        // 单选模式:勾选新信号自动取消其他(占位符场景一个占位符只能绑一个信号)
+        public bool SingleSelect { get; set; } = false;
+        // 当前选中报文的上下文(多通道时记录来自哪个DBC)
+        private MsgCtx _currentMsgCtx = null;
+
+        // 报文节点上下文:记录该报文来自哪个DBC/通道
+        private class MsgCtx
+        {
+            public DbcHelper Helper;
+            public Message Msg;
+            public int MsgIndex;
+            public int ChannelIndex;  // -1=全局
+        }
+
+        // 信号行上下文:记录该信号来自哪个DBC/报文/通道
+        private class SigCtx
+        {
+            public DbcHelper Helper;
+            public Message Msg;
+            public int MsgIndex;
+            public int SignalIndex;
+            public int ChannelIndex;
+            public string SignalName;
+            public string SignalComment;
+        }
+
         public List<SelectedSignalInfo> SelectedSignals
         {
             get { return selectedSignals; }
@@ -48,8 +76,20 @@ namespace PCAN_Client
             _busChannelIndex = busChannelIndex;
         }
 
+        /// <summary>
+        /// 多通道模式:合并显示全局DBC与各CAN通道DBC的所有报文(占位符选信号覆盖多路CAN)
+        /// </summary>
+        /// <param name="busChannels">CAN总线通道列表(含各通道DBC)</param>
+        public SignalSelector(List<CanBusChannel> busChannels) : this()
+        {
+            _busChannels = busChannels ?? new List<CanBusChannel>();
+        }
+
         private void SignalSelector_Load(object sender, EventArgs e)
         {
+            // 单选模式:隐藏全选框(一个占位符只能绑一个信号)
+            if (SingleSelect)
+                chkSelectAll.Visible = false;
             LoadMessages();
         }
 
@@ -57,48 +97,71 @@ namespace PCAN_Client
         {
             tvMessages.Nodes.Clear();
 
-            var dbcHelper = ActiveDbcHelper;
-            if (dbcHelper == null || dbcHelper.dbcFile == null)
+            // 收集所有可用DBC:优先各CAN通道DBC,无已配置通道时才回退全局
+            var sources = new List<(DbcHelper helper, string label, int channelIndex)>();
+            if (_busChannels != null)
+            {
+                for (int i = 0; i < _busChannels.Count; i++)
+                {
+                    var bc = _busChannels[i];
+                    if (bc != null && bc.IsConfigured && bc.DbcHelper?.dbcFile != null)
+                        sources.Add((bc.DbcHelper, bc.Name ?? ("CAN" + i), i));
+                }
+            }
+            // 仅当没有已配置通道时,才用全局DBC(多通道模式下全局DBC不相关)
+            if (sources.Count == 0)
+            {
+                if (BaseParamter.dbcHelper?.dbcFile != null)
+                    sources.Add((BaseParamter.dbcHelper, "全局", -1));
+                else if (_customDbcHelper?.dbcFile != null)
+                    sources.Add((_customDbcHelper, "DBC", _busChannelIndex));
+            }
+
+            if (sources.Count == 0)
             {
                 MessageBox.Show("DBC文件未加载，请先加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            foreach (var message in dbcHelper.dbcFile.messages)
+            bool multi = sources.Count > 1;
+            foreach (var src in sources)
             {
-                TreeNode node = new TreeNode();
-                node.Text = $"0x{message.messgeId:X3} - {message.messageName}";
-                node.Tag = message;
-                tvMessages.Nodes.Add(node);
+                string prefix = multi ? ("[" + src.label + "] ") : "";
+                for (int mi = 0; mi < src.helper.dbcFile.messages.Count; mi++)
+                {
+                    var message = src.helper.dbcFile.messages[mi];
+                    var node = new TreeNode
+                    {
+                        Text = $"{prefix}0x{message.messgeId:X3} - {message.messageName}"
+                    };
+                    node.Tag = new MsgCtx { Helper = src.helper, Msg = message, MsgIndex = mi, ChannelIndex = src.channelIndex };
+                    tvMessages.Nodes.Add(node);
+                }
             }
 
             if (tvMessages.Nodes.Count > 0)
-            {
                 tvMessages.Nodes[0].Expand();
-            }
         }
 
         private void tvMessages_AfterSelect(object sender, TreeViewEventArgs e)
         {
-            if (e.Node.Tag is Message message)
+            if (e.Node.Tag is MsgCtx ctx)
             {
-                currentMessage = message;
-                LoadSignals(message);
+                currentMessage = ctx.Msg;
+                _currentMsgCtx = ctx;
+                LoadSignals(ctx);
             }
         }
 
-        private void LoadSignals(Message message)
+        private void LoadSignals(MsgCtx ctx)
         {
             dgvSignals.Rows.Clear();
 
-            if (message == null || message.signals == null)
-            {
+            if (ctx?.Msg?.signals == null)
                 return;
-            }
 
-            var dbcHelper = ActiveDbcHelper;
-            int msgIndex = dbcHelper.dbcFile.messages.IndexOf(message);
-            uint cycleTime = message.cycleTime;
+            var helper = ctx.Helper;
+            var message = ctx.Msg;
 
             for (int i = 0; i < message.signals.Count; i++)
             {
@@ -108,15 +171,26 @@ namespace PCAN_Client
                 dgvSignals.Rows[rowIndex].Cells[colSignalName.Name].Value = signal.signalName;
                 dgvSignals.Rows[rowIndex].Cells[colSignalComment.Name].Value = signal.Comment ?? "";
                 dgvSignals.Rows[rowIndex].Cells[colMessageId.Name].Value = $"0x{message.messgeId:X3}";
-                dgvSignals.Rows[rowIndex].Cells[colMsgIndex.Name].Value = msgIndex;
+                dgvSignals.Rows[rowIndex].Cells[colMsgIndex.Name].Value = ctx.MsgIndex;
                 dgvSignals.Rows[rowIndex].Cells[colSignalIndex.Name].Value = i;
-                dgvSignals.Rows[rowIndex].Tag = cycleTime;
+                // 行Tag存SigCtx(多通道时记录来源DBC/通道)
+                dgvSignals.Rows[rowIndex].Tag = new SigCtx
+                {
+                    Helper = helper,
+                    Msg = message,
+                    MsgIndex = ctx.MsgIndex,
+                    SignalIndex = i,
+                    ChannelIndex = ctx.ChannelIndex,
+                    SignalName = signal.signalName,
+                    SignalComment = signal.Comment ?? ""
+                };
 
-                bool isSelected = selectedSignals.Any(s => 
-                    s.SignalName == signal.signalName && 
-                    s.MsgIndex == msgIndex && 
-                    s.SignalIndex == i);
-                
+                bool isSelected = selectedSignals.Any(s =>
+                    s.SignalName == signal.signalName &&
+                    s.MsgIndex == ctx.MsgIndex &&
+                    s.SignalIndex == i &&
+                    s.BusChannelIndex == ctx.ChannelIndex);
+
                 dgvSignals.Rows[rowIndex].Cells[colSelect.Name].Value = isSelected;
             }
         }
@@ -126,66 +200,67 @@ namespace PCAN_Client
             if (e.RowIndex >= 0 && e.ColumnIndex == colSelect.Index)
             {
                 bool isSelected = Convert.ToBoolean(dgvSignals.Rows[e.RowIndex].Cells[colSelect.Name].Value);
-                string signalName = dgvSignals.Rows[e.RowIndex].Cells[colSignalName.Name].Value?.ToString();
-                string signalComment = dgvSignals.Rows[e.RowIndex].Cells[colSignalComment.Name].Value?.ToString();
-                int msgIndex = Convert.ToInt32(dgvSignals.Rows[e.RowIndex].Cells[colMsgIndex.Name].Value);
-                int signalIndex = Convert.ToInt32(dgvSignals.Rows[e.RowIndex].Cells[colSignalIndex.Name].Value);
-                uint cycleTime = dgvSignals.Rows[e.RowIndex].Tag is uint ? (uint)dgvSignals.Rows[e.RowIndex].Tag : 0;
+                var ctx = dgvSignals.Rows[e.RowIndex].Tag as SigCtx;
+                if (ctx == null) return;
 
                 uint msgId = 0;
-                var dbcHelper = ActiveDbcHelper;
-                if (msgIndex >= 0 && msgIndex < dbcHelper.dbcFile.messages.Count)
-                {
-                    msgId = dbcHelper.dbcFile.messages[msgIndex].messgeId;
-                }
+                var helper = ctx.Helper;
+                if (ctx.MsgIndex >= 0 && ctx.MsgIndex < helper.dbcFile.messages.Count)
+                    msgId = helper.dbcFile.messages[ctx.MsgIndex].messgeId;
+                uint cycleTime = ctx.Msg?.cycleTime ?? 0;
 
                 if (isSelected)
                 {
+                    // 单选模式:勾选新信号前先清空已选(一个占位符只能绑一个信号)
+                    if (SingleSelect && selectedSignals.Count > 0)
+                    {
+                        selectedSignals.Clear();
+                        _suppressUpdateList = true;
+                        foreach (DataGridViewRow r in dgvSignals.Rows)
+                        {
+                            if (r.Index != e.RowIndex)
+                                r.Cells[colSelect.Name].Value = false;
+                        }
+                        _suppressUpdateList = false;
+                    }
+
                     // 获取枚举值定义和单位
                     Dictionary<double, string> enumDefs = new Dictionary<double, string>();
                     string unit = "";
-                    if (msgIndex >= 0 && msgIndex < dbcHelper.dbcFile.messages.Count)
+                    if (ctx.SignalIndex >= 0 && ctx.SignalIndex < ctx.Msg.signals.Count)
                     {
-                        var msg = dbcHelper.dbcFile.messages[msgIndex];
-                        if (signalIndex >= 0 && signalIndex < msg.signals.Count)
+                        var sig = ctx.Msg.signals[ctx.SignalIndex];
+                        if (sig.enumDefinitions != null)
                         {
-                            var sig = msg.signals[signalIndex];
-                            if (sig.enumDefinitions != null)
-                            {
-                                foreach (var kv in sig.enumDefinitions)
-                                {
-                                    enumDefs[kv.Key] = kv.Value;
-                                }
-                            }
-                            // 获取单位，过滤掉 "-" 和空字符串
-                            string rawUnit = sig.unitStr ?? "";
-                            if (rawUnit != "-" && rawUnit != "\"\"" && !string.IsNullOrWhiteSpace(rawUnit))
-                            {
-                                unit = rawUnit;
-                            }
+                            foreach (var kv in sig.enumDefinitions)
+                                enumDefs[kv.Key] = kv.Value;
                         }
+                        string rawUnit = sig.unitStr ?? "";
+                        if (rawUnit != "-" && rawUnit != "\"\"" && !string.IsNullOrWhiteSpace(rawUnit))
+                            unit = rawUnit;
                     }
 
                     var signalInfo = new SelectedSignalInfo
                     {
-                        SignalName = signalName,
-                        SignalComment = signalComment,
+                        SignalName = ctx.SignalName,
+                        SignalComment = ctx.SignalComment,
                         MsgId = msgId,
-                        MsgIndex = msgIndex,
-                        SignalIndex = signalIndex,
+                        MsgIndex = ctx.MsgIndex,
+                        SignalIndex = ctx.SignalIndex,
                         CycleTime = cycleTime,
                         EnumDefinitions = enumDefs,
                         Unit = unit,
-                        BusChannelIndex = _busChannelIndex
+                        BusChannelIndex = ctx.ChannelIndex
                     };
                     selectedSignals.Add(signalInfo);
                 }
                 else
                 {
-                    selectedSignals.RemoveAll(s => 
-                        s.SignalName == signalName && 
-                        s.MsgIndex == msgIndex && 
-                        s.SignalIndex == signalIndex);
+                    selectedSignals.RemoveAll(s =>
+                        s.SignalName == ctx.SignalName &&
+                        s.MsgIndex == ctx.MsgIndex &&
+                        s.SignalIndex == ctx.SignalIndex &&
+                        s.BusChannelIndex == ctx.ChannelIndex);
                 }
 
                 if (!_suppressUpdateList)
@@ -238,48 +313,79 @@ namespace PCAN_Client
 
             if (string.IsNullOrWhiteSpace(searchText))
             {
-                if (currentMessage != null)
-                {
-                    LoadSignals(currentMessage);
-                }
+                if (_currentMsgCtx != null)
+                    LoadSignals(_currentMsgCtx);
                 return;
             }
 
             dgvSignals.Rows.Clear();
 
-            var dbcHelper = ActiveDbcHelper;
-            foreach (var message in dbcHelper.dbcFile.messages)
+            // 收集所有DBC源(与LoadMessages一致:优先通道DBC,无则全局)
+            var sources = new List<(DbcHelper helper, int channelIndex, string label)>();
+            if (_busChannels != null)
             {
-                int msgIndex = dbcHelper.dbcFile.messages.IndexOf(message);
-                uint cycleTime = message.cycleTime;
-                
-                for (int i = 0; i < message.signals.Count; i++)
+                for (int i = 0; i < _busChannels.Count; i++)
                 {
-                    var signal = message.signals[i];
-                    string signalName = signal.signalName?.ToLower() ?? "";
-                    string signalComment = signal.Comment?.ToLower() ?? "";
-                    string messageName = message.messageName?.ToLower() ?? "";
+                    var bc = _busChannels[i];
+                    if (bc != null && bc.IsConfigured && bc.DbcHelper?.dbcFile != null)
+                        sources.Add((bc.DbcHelper, i, bc.Name ?? ("CAN" + i)));
+                }
+            }
+            if (sources.Count == 0)
+            {
+                if (BaseParamter.dbcHelper?.dbcFile != null)
+                    sources.Add((BaseParamter.dbcHelper, -1, "全局"));
+                else if (_customDbcHelper?.dbcFile != null)
+                    sources.Add((_customDbcHelper, _busChannelIndex, "DBC"));
+            }
 
-                    bool isMatch = signalName.Contains(searchText) || 
-                                   signalComment.Contains(searchText) ||
-                                   messageName.Contains(searchText);
+            bool multi = sources.Count > 1;
 
-                    if (isMatch)
+            foreach (var src in sources)
+            {
+                var helper = src.helper;
+                for (int mi = 0; mi < helper.dbcFile.messages.Count; mi++)
+                {
+                    var message = helper.dbcFile.messages[mi];
+                    for (int i = 0; i < message.signals.Count; i++)
                     {
-                        int rowIndex = dgvSignals.Rows.Add();
-                        dgvSignals.Rows[rowIndex].Cells[colSignalName.Name].Value = signal.signalName;
-                        dgvSignals.Rows[rowIndex].Cells[colSignalComment.Name].Value = signal.Comment ?? "";
-                        dgvSignals.Rows[rowIndex].Cells[colMessageId.Name].Value = $"0x{message.messgeId:X3}";
-                        dgvSignals.Rows[rowIndex].Cells[colMsgIndex.Name].Value = msgIndex;
-                        dgvSignals.Rows[rowIndex].Cells[colSignalIndex.Name].Value = i;
-                        dgvSignals.Rows[rowIndex].Tag = cycleTime;
+                        var signal = message.signals[i];
+                        string signalNameLower = signal.signalName?.ToLower() ?? "";
+                        string signalCommentLower = signal.Comment?.ToLower() ?? "";
+                        string messageNameLower = message.messageName?.ToLower() ?? "";
 
-                        bool isSelected = selectedSignals.Any(s => 
-                            s.SignalName == signal.signalName && 
-                            s.MsgIndex == msgIndex && 
-                            s.SignalIndex == i);
-                        
-                        dgvSignals.Rows[rowIndex].Cells[colSelect.Name].Value = isSelected;
+                        bool isMatch = signalNameLower.Contains(searchText) ||
+                                       signalCommentLower.Contains(searchText) ||
+                                       messageNameLower.Contains(searchText);
+
+                        if (isMatch)
+                        {
+                            string prefix = multi ? ("[" + src.label + "] ") : "";
+                            int rowIndex = dgvSignals.Rows.Add();
+                            dgvSignals.Rows[rowIndex].Cells[colSignalName.Name].Value = prefix + signal.signalName;
+                            dgvSignals.Rows[rowIndex].Cells[colSignalComment.Name].Value = signal.Comment ?? "";
+                            dgvSignals.Rows[rowIndex].Cells[colMessageId.Name].Value = $"0x{message.messgeId:X3}";
+                            dgvSignals.Rows[rowIndex].Cells[colMsgIndex.Name].Value = mi;
+                            dgvSignals.Rows[rowIndex].Cells[colSignalIndex.Name].Value = i;
+                            dgvSignals.Rows[rowIndex].Tag = new SigCtx
+                            {
+                                Helper = helper,
+                                Msg = message,
+                                MsgIndex = mi,
+                                SignalIndex = i,
+                                ChannelIndex = src.channelIndex,
+                                SignalName = signal.signalName,
+                                SignalComment = signal.Comment ?? ""
+                            };
+
+                            bool isSelected = selectedSignals.Any(s =>
+                                s.SignalName == signal.signalName &&
+                                s.MsgIndex == mi &&
+                                s.SignalIndex == i &&
+                                s.BusChannelIndex == src.channelIndex);
+
+                            dgvSignals.Rows[rowIndex].Cells[colSelect.Name].Value = isSelected;
+                        }
                     }
                 }
             }
@@ -314,55 +420,14 @@ namespace PCAN_Client
             for (int i = 0; i < dgvSignals.Rows.Count; i++)
             {
                 var row = dgvSignals.Rows[i];
-                string signalName = row.Cells[colSignalName.Name].Value?.ToString();
-                if (string.IsNullOrEmpty(signalName))
-                    continue;
+                var ctx = row.Tag as SigCtx;
+                if (ctx == null) continue;
 
-                int msgIndex = Convert.ToInt32(row.Cells[colMsgIndex.Name].Value);
-                int signalIndex = Convert.ToInt32(row.Cells[colSignalIndex.Name].Value);
                 bool currentlyChecked = Convert.ToBoolean(row.Cells[colSelect.Name].Value ?? false);
-
                 if (checkAll != currentlyChecked)
                 {
+                    // 设值触发CellValueChanged(基于row.Tag的SigCtx处理selectedSignals增减)
                     row.Cells[colSelect.Name].Value = checkAll;
-
-                    if (checkAll)
-                    {
-                        // 添加
-                        if (!selectedSignals.Any(s => s.SignalName == signalName && s.MsgIndex == msgIndex && s.SignalIndex == signalIndex))
-                        {
-                            uint cycleTime = row.Tag is uint ? (uint)row.Tag : 0;
-                            uint msgId = 0;
-                            if (msgIndex >= 0 && msgIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
-                                msgId = BaseParamter.dbcHelper.dbcFile.messages[msgIndex].messgeId;
-
-                            var sig = BaseParamter.dbcHelper.dbcFile.messages[msgIndex].signals[signalIndex];
-                            Dictionary<double, string> enumDefs = new Dictionary<double, string>();
-                            if (sig.enumDefinitions != null)
-                            {
-                                foreach (var kv in sig.enumDefinitions)
-                                    enumDefs[kv.Key] = kv.Value;
-                            }
-                            string rawUnit = sig.unitStr ?? "";
-                            string unit = (rawUnit != "-" && rawUnit != "\"\"" && !string.IsNullOrWhiteSpace(rawUnit)) ? rawUnit : "";
-
-                            selectedSignals.Add(new SelectedSignalInfo
-                            {
-                                SignalName = signalName,
-                                SignalComment = row.Cells[colSignalComment.Name].Value?.ToString(),
-                                MsgId = msgId,
-                                MsgIndex = msgIndex,
-                                SignalIndex = signalIndex,
-                                CycleTime = cycleTime,
-                                EnumDefinitions = enumDefs,
-                                Unit = unit
-                            });
-                        }
-                    }
-                    else
-                    {
-                        selectedSignals.RemoveAll(s => s.SignalName == signalName && s.MsgIndex == msgIndex && s.SignalIndex == signalIndex);
-                    }
                 }
             }
 

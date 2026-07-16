@@ -169,30 +169,31 @@ namespace PCAN_Client.ReportAuto
         {
             var slide = slidePart.Slide;
 
-            // 1) 图片:按Shape名定位Picture,替换其ImagePart字节
-            if (type.ImageShapes != null)
+            // 1) 图片:按Shape名定位Picture,替换其ImagePart字节。
+            //    先按 type.ImageShapes 配置匹配;配置为空或未命中时,按固定标识符兜底填chart截图。
+            bool anyImageFilled = false;
+            foreach (var pic in slide.Descendants<Picture>())
+            {
+                string name = pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value;
+                var item = (type.ImageShapes != null)
+                    ? type.ImageShapes.FirstOrDefault(i => i.ShapeName == name)
+                    : null;
+                // 兜底:配置未命中但该图片是固定图表占位框,按chart填充
+                if (item == null && name == TemplateShapeIds.ChartImage && images != null && images.ContainsKey("chart"))
+                    item = new ImageShapeItem { ShapeName = name, Source = "chart" };
+                if (item == null) continue;
+                if (images == null || !images.TryGetValue(item.Source, out var bmp) || bmp == null) continue;
+                if (ReplacePictureImage(slidePart, pic, bmp)) anyImageFilled = true;
+            }
+            // 旧JSON用中文名、模板改名后一个都匹配不到时,按固定标识符兜底
+            if (!anyImageFilled && images != null && images.TryGetValue("chart", out var chartBmp) && chartBmp != null)
             {
                 foreach (var pic in slide.Descendants<Picture>())
                 {
                     string name = pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value;
-                    var item = type.ImageShapes.FirstOrDefault(i => i.ShapeName == name);
-                    if (item == null) continue;
-                    if (images == null || !images.TryGetValue(item.Source, out var bmp) || bmp == null) continue;
-                    var blip = pic.BlipFill?.Blip;
-                    if (blip == null || blip.Embed == null || string.IsNullOrEmpty(blip.Embed.Value)) continue;
-                    var imgPart = slidePart.GetPartById(blip.Embed.Value) as ImagePart;
-                    if (imgPart == null) continue;
-                    try
-                    {
-                        using (var ms = new MemoryStream())
-                        {
-                            bmp.Save(ms, ImageFormat.Png);
-                            ms.Position = 0;
-                            using (var dst = imgPart.GetStream(FileMode.Create))
-                                ms.CopyTo(dst);
-                        }
-                    }
-                    catch (Exception ex) { Debug.WriteLine("替换图片失败: " + ex.Message); }
+                    if (name != TemplateShapeIds.ChartImage) continue;
+                    ReplacePictureImage(slidePart, pic, chartBmp);
+                    break;
                 }
             }
 
@@ -240,59 +241,107 @@ namespace PCAN_Client.ReportAuto
                 }
             }
 
-            // 4) 文字模板填充:将 __TEXT_TEMPLATE__ 内容写入指定的文字Shape
-            if (!string.IsNullOrEmpty(type.TextShapeName) && values != null && values.ContainsKey("__TEXT_TEMPLATE__"))
+            // 4) 文字模板填充:将 __TEXT_TEMPLATE__ 内容写入文字Shape。
+            //    优先按 type.TextShapeName 匹配;为空或未命中时按固定标识符兜底。
+            if (values != null && values.ContainsKey("__TEXT_TEMPLATE__"))
             {
                 string text = values["__TEXT_TEMPLATE__"];
+                string targetName = !string.IsNullOrEmpty(type.TextShapeName)
+                    ? type.TextShapeName : TemplateShapeIds.TextDesc;
+                Shape target = null;
+                // 第一轮:按目标名匹配
                 foreach (var sp in slide.Descendants<Shape>())
                 {
                     string name = sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value;
-                    if (name != type.TextShapeName) continue;
-                    var txBody = sp.TextBody;
-                    if (txBody == null) break;
-
-                    // 按换行拆分文字
-                    var lines = text.Split('\n');
-
-                    // 获取第一个段落作为模板（保留其格式属性）
-                    var firstPara = txBody.Elements<A.Paragraph>().FirstOrDefault();
-                    if (firstPara == null) break;
-
-                    // 先清空所有段落
-                    var existingParas = txBody.Elements<A.Paragraph>().ToList();
-                    foreach (var p in existingParas) p.Remove();
-
-                    // 为每行创建新段落（克隆第一个段落以保留格式）
-                    foreach (string line in lines)
-                    {
-                        var newPara = (A.Paragraph)firstPara.CloneNode(true);
-                        // 设置文字到第一个run
-                        var firstRun = newPara.Descendants<A.Run>().FirstOrDefault();
-                        if (firstRun != null)
-                        {
-                            var textElement = firstRun.GetFirstChild<A.Text>();
-                            if (textElement != null)
-                                textElement.Text = line.TrimEnd('\r');
-                            // 清除后续run的文字（保留格式）
-                            foreach (var r in newPara.Descendants<A.Run>().Skip(1))
-                            {
-                                var t = r.GetFirstChild<A.Text>();
-                                if (t != null)
-                                    t.Text = "";
-                            }
-                        }
-                        else
-                        {
-                            // 没有run，创建一个
-                            var run = new A.Run();
-                            run.RunProperties = new A.RunProperties { Language = "zh-CN" };
-                            run.Text = new A.Text { Text = line.TrimEnd('\r') };
-                            newPara.Append(run);
-                        }
-                        txBody.Append(newPara);
-                    }
-                    break;
+                    if (name == targetName) { target = sp; break; }
                 }
+                // 第二轮兜底:目标名未命中且非固定标识符,按固定标识符再找
+                if (target == null && targetName != TemplateShapeIds.TextDesc)
+                {
+                    foreach (var sp in slide.Descendants<Shape>())
+                    {
+                        string name = sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value;
+                        if (name == TemplateShapeIds.TextDesc) { target = sp; break; }
+                    }
+                }
+                if (target != null)
+                {
+                    FillTextShape(target, text);
+                }
+                else
+                {
+                    Debug.WriteLine("[PptReportBuilder] 未找到文字模板Shape: " + targetName
+                        + " (兜底 " + TemplateShapeIds.TextDesc + " 也未找到)");
+                }
+            }
+        }
+
+        /// <summary>辅助方法:把文字写入指定Shape(按换行拆段,克隆首段保留格式)</summary>
+        void FillTextShape(Shape sp, string text)
+        {
+            var txBody = sp.TextBody;
+            if (txBody == null) return;
+            // 按换行拆分文字
+            var lines = text.Split('\n');
+            // 获取第一个段落作为模板（保留其格式属性）
+            var firstPara = txBody.Elements<A.Paragraph>().FirstOrDefault();
+            if (firstPara == null) return;
+            // 先清空所有段落
+            var existingParas = txBody.Elements<A.Paragraph>().ToList();
+            foreach (var p in existingParas) p.Remove();
+            // 为每行创建新段落（克隆第一个段落以保留格式）
+            foreach (string line in lines)
+            {
+                var newPara = (A.Paragraph)firstPara.CloneNode(true);
+                // 设置文字到第一个run
+                var firstRun = newPara.Descendants<A.Run>().FirstOrDefault();
+                if (firstRun != null)
+                {
+                    var textElement = firstRun.GetFirstChild<A.Text>();
+                    if (textElement != null)
+                        textElement.Text = line.TrimEnd('\r');
+                    // 清除后续run的文字（保留格式）
+                    foreach (var r in newPara.Descendants<A.Run>().Skip(1))
+                    {
+                        var t = r.GetFirstChild<A.Text>();
+                        if (t != null)
+                            t.Text = "";
+                    }
+                }
+                else
+                {
+                    // 没有run，创建一个
+                    var run = new A.Run();
+                    run.RunProperties = new A.RunProperties { Language = "zh-CN" };
+                    run.Text = new A.Text { Text = line.TrimEnd('\r') };
+                    newPara.Append(run);
+                }
+                txBody.Append(newPara);
+            }
+        }
+
+        /// <summary>辅助方法:替换Picture的ImagePart字节为指定PNG,成功返回true</summary>
+        bool ReplacePictureImage(SlidePart sp, Picture pic, Bitmap bmp)
+        {
+            var blip = pic.BlipFill?.Blip;
+            if (blip == null || blip.Embed == null || string.IsNullOrEmpty(blip.Embed.Value)) return false;
+            var imgPart = sp.GetPartById(blip.Embed.Value) as ImagePart;
+            if (imgPart == null) return false;
+            try
+            {
+                using (var ms = new MemoryStream())
+                {
+                    bmp.Save(ms, ImageFormat.Png);
+                    ms.Position = 0;
+                    using (var dst = imgPart.GetStream(FileMode.Create))
+                        ms.CopyTo(dst);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("替换图片失败: " + ex.Message);
+                return false;
             }
         }
 

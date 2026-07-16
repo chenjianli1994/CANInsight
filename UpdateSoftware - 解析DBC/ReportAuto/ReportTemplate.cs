@@ -149,4 +149,17 @@ namespace PCAN_Client.ReportAuto
             return result;
         }
     }
+
+    /// <summary>
+    /// PPT模板中固定Shape的标识符常量。编辑器不再让用户选择Shape，
+    /// 文本框/图片框在模板中用这些固定名称定位，填充逻辑按此匹配（找不到时兜底）。
+    /// </summary>
+    public static class TemplateShapeIds
+    {
+        /// <summary>截图右侧的叙述文字框（放文字内容+{{占位符}}）</summary>
+        public const string TextDesc = "RPT_TEXT_DESC";
+
+        /// <summary>图表截图图片框（放绘图区截图）</summary>
+        public const string ChartImage = "RPT_IMAGE_CHART";
+    }
 }

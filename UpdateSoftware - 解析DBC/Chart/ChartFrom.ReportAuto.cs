@@ -307,8 +307,7 @@ namespace PCAN_Client
                 return;
             }
 
-            var editor = new AnalysisTypeEditor(currentType, Channels,
-                ReportAutoService.GetTemplatePath());
+            var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
             if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
             {
                 var newType = editor.Result;
@@ -331,8 +330,7 @@ namespace PCAN_Client
         /// <summary>新增工况分类</summary>
         private void _btnNewAnalysisType_Click(object sender, EventArgs e)
         {
-            var editor = new AnalysisTypeEditor(null, Channels,
-                ReportAutoService.GetTemplatePath());
+            var editor = new AnalysisTypeEditor(null, Channels, _busChannels);
             if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
             {
                 SaveAnalysisTypeJson(editor.Result, null);
@@ -349,8 +347,7 @@ namespace PCAN_Client
                 return;
             }
 
-            var editor = new AnalysisTypeEditor(currentType, Channels,
-                ReportAutoService.GetTemplatePath());
+            var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
             if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
             {
                 var newType = editor.Result;
