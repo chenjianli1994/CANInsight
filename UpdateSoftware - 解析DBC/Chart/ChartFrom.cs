@@ -214,6 +214,7 @@ namespace PCAN_Client
             if (_speedComboBox.Items.Count > 0)
                 _speedComboBox.SelectedIndex = 0;
             this.KeyPreview = true;
+            this.KeyDown += ChartFrom_KeyDown;
             this._loadingRefreshTimer = new System.Windows.Forms.Timer();
             this._loadingRefreshTimer.Interval = 100;
             this._loadingRefreshTimer.Tick += _loadingRefreshTimer_Tick;
@@ -2803,6 +2804,17 @@ namespace PCAN_Client
             }
 
             e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
+        }
+
+        private void ChartFrom_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Ctrl+W: 自适应调整所有坐标轴（类似CANoe）
+            if (e.Control && e.KeyCode == Keys.W)
+            {
+                _chartControl.AutoFitView();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+            }
         }
 
         private void _channelGrid_KeyDown(object sender, KeyEventArgs e)
