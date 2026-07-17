@@ -1639,6 +1639,7 @@ namespace PCAN_Client
                         _chartControl.SetChannels(Channels);
                         _chartControl.SetGlobalXRange(0, Math.Max(_fileMaxTime, 1));
                         _chartControl.Invalidate();
+                        SetReportStartTime(0);
                     }));
 
                     Task.Run(() =>
@@ -1776,6 +1777,7 @@ namespace PCAN_Client
                                 _btnStart.Enabled = true;
                                 _btnStop.Enabled = false;
                                 SyncToolbarStateFromLegacyControls();
+                                SetReportEndTime(GetMaxChannelTime());
                                 // 缓存模式：切回内存模式
                                 FinalizeCachePlayback(totalMsgCount);
                             }));
@@ -2138,6 +2140,7 @@ namespace PCAN_Client
                     _btnAutoScroll.Text = "自动滑动";
 
                     UpdateChannelGridValues();
+                    SetReportEndTime(GetMaxChannelTime());
 
                     SyncToolbarStateFromLegacyControls();
                     // 缓存模式：切回内存模式
@@ -2422,6 +2425,8 @@ namespace PCAN_Client
             _statusLabel.ForeColor = Color.Red;
             _chartControl.AutoFitView();
 
+            // 设置报告结束时间为当前数据最大时间
+            SetReportEndTime(GetMaxChannelTime());
 
             _chartControl.SetAutoScroll(false);
             _btnAutoScroll.Text = "自动滑动";
@@ -4407,6 +4412,26 @@ namespace PCAN_Client
             public bool changeFlag = false;
 
 
+        }
+
+        /// <summary>获取所有通道中的最大时间点</summary>
+        private double GetMaxChannelTime()
+        {
+            if (Channels == null || Channels.Count == 0)
+                return 10.0;
+
+            double maxTime = 0;
+            foreach (var channel in Channels)
+            {
+                if (channel.Points != null && channel.Points.Count > 0)
+                {
+                    var lastPoint = channel.Points[channel.Points.Count - 1];
+                    if (lastPoint.X > maxTime)
+                        maxTime = lastPoint.X;
+                }
+            }
+
+            return maxTime > 0 ? maxTime : 10.0;
         }
     }
 

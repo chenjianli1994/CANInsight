@@ -450,6 +450,7 @@ namespace PCAN_Client
             if (totalPoints < 2) return;
 
             RangeResult yRange = _autoScroll ? channel.GetYRangeInXRange(_globalXMin, _globalXMax) : channel.GetYRange();
+            if (yRange == null) return;
             double yMin = yRange.Min;
             double yMax = yRange.Max;
             

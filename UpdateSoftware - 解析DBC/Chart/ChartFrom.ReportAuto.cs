@@ -45,12 +45,16 @@ namespace PCAN_Client
             _txtReportStart = new ToolStripTextBox();
             _txtReportStart.Width = 60;
             _txtReportStart.Text = "0";
-            _txtReportStart.ToolTipText = "报告起始时间(秒)";
+            _txtReportStart.ToolTipText = "报告起始时间(秒,输入后按回车生效)";
+            _txtReportStart.KeyDown += _txtReportTime_KeyDown;
+            _txtReportStart.TextBox.Validated += _txtReportTime_Validated;
 
             _txtReportEnd = new ToolStripTextBox();
             _txtReportEnd.Width = 60;
             _txtReportEnd.Text = "10";
-            _txtReportEnd.ToolTipText = "报告结束时间(秒)";
+            _txtReportEnd.ToolTipText = "报告结束时间(秒,输入后按回车生效)";
+            _txtReportEnd.KeyDown += _txtReportTime_KeyDown;
+            _txtReportEnd.TextBox.Validated += _txtReportTime_Validated;
 
             _btnEditAnalysisType = new ToolStripButton("编辑");
             _btnEditAnalysisType.ToolTipText = "编辑当前选中的工况分类";
@@ -428,6 +432,57 @@ namespace PCAN_Client
                 _cmbAnalysisType.Items.Add(t);
             if (_cmbAnalysisType.Items.Count > 0)
                 _cmbAnalysisType.SelectedIndex = 0;
+        }
+
+        /// <summary>时间输入框按回车时立即缩放到时间范围</summary>
+        private void _txtReportTime_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                ApplyReportTimeRange();
+            }
+        }
+
+        /// <summary>时间输入框失去焦点时立即缩放到时间范围</summary>
+        private void _txtReportTime_Validated(object sender, EventArgs e)
+        {
+            ApplyReportTimeRange();
+        }
+
+        /// <summary>解析时间输入框并缩放绘图区到指定时间范围</summary>
+        private void ApplyReportTimeRange()
+        {
+            if (!double.TryParse(_txtReportStart.Text, out double t0) ||
+                !double.TryParse(_txtReportEnd.Text, out double t1))
+                return;
+            if (!(t1 > t0)) return;
+            try
+            {
+                _chartControl.SetGlobalXRange(t0, t1);
+                _chartControl.Invalidate();
+                _statusLabel.Text = $"状态: 已缩放到 {t0:F2}-{t1:F2} 秒";
+                _statusLabel.ForeColor = Color.Green;
+            }
+            catch (Exception ex)
+            {
+                _statusLabel.Text = "状态: 缩放失败 - " + ex.Message;
+                _statusLabel.ForeColor = Color.Red;
+            }
+        }
+
+        /// <summary>设置报告起始时间（由主文件在播放开始时调用）</summary>
+        internal void SetReportStartTime(double t)
+        {
+            _txtReportStart.Text = t.ToString("F2");
+        }
+
+        /// <summary>设置报告结束时间并缩放到完整范围（由主文件在播放停止/完成时调用）</summary>
+        internal void SetReportEndTime(double t)
+        {
+            _txtReportEnd.Text = t.ToString("F2");
+            ApplyReportTimeRange();
         }
     }
 }

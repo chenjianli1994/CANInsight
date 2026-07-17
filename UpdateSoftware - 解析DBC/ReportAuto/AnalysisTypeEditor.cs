@@ -26,7 +26,7 @@ namespace PCAN_Client.ReportAuto
         // UI 控件
         private TextBox _txtName;
         private RichTextBox _rtbText;
-        private TextBox _txtPreview;        // 实时预览:{{占位符}}→[信号·指标]
+        private RichTextBox _txtPreview;    // 实时预览:{{占位符}}→[信号·指标]
         private DataGridView _dgvPlaceholders;
         private Button _btnInsertPlaceholder;
         private Button _btnOk;
@@ -84,10 +84,10 @@ namespace PCAN_Client.ReportAuto
             panelText.Controls.Add(new Label { Text = "文字内容（可输入 {{占位符}}）:", Dock = DockStyle.Top, Height = 20 });  // Top 最上
             splitLeft.Panel1.Controls.Add(panelText);
             
-            // 预览区
-            splitLeft.Panel2.Controls.Add(new Label { Text = "预览（{{占位符}}→[信号·指标]）:", Dock = DockStyle.Top, Height = 20 });
-            _txtPreview = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, BackColor = SystemColors.Control, Font = new Font("Microsoft YaHei UI", 9F) };
+            // 预览区:Fill先添加,Top后添加(Dock反向布局)
+            _txtPreview = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BackColor = SystemColors.Control, Font = new Font("Microsoft YaHei UI", 9F) };
             splitLeft.Panel2.Controls.Add(_txtPreview);
+            splitLeft.Panel2.Controls.Add(new Label { Text = "预览（{{占位符}}→[信号·指标]）:", Dock = DockStyle.Top, Height = 20 });
             splitMain.Panel1.Controls.Add(splitLeft);
 
             // 右栏:占位符配置表(宽度随分隔条可调)
