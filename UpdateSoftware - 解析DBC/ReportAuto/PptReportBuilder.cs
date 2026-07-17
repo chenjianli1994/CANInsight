@@ -44,6 +44,8 @@ namespace PCAN_Client.ReportAuto
             _currentPath = Path.Combine(Path.GetTempPath(),
                 "ReportAuto_" + Guid.NewGuid().ToString("N") + ".pptx");
             File.Copy(templatePath, _currentPath, true);
+            System.Diagnostics.Debug.WriteLine($"[PptReportBuilder] 复制模板: {templatePath}");
+            System.Diagnostics.Debug.WriteLine($"[PptReportBuilder] 工作副本: {_currentPath}");
             _tplDoc = PresentationDocument.Open(_templatePath, false);
             _reportDoc = PresentationDocument.Open(_currentPath, true);
             _firstPageFilled = false;

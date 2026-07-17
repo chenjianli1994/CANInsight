@@ -108,7 +108,11 @@ namespace PCAN_Client
             _cmbAnalysisType.SelectedIndexChanged += _cmbAnalysisType_SelectedIndexChanged;
 
             // 默认模板路径:依次找 exe同级/项目根 的 模板文件.pptx
-            ReportAutoService.SetTemplatePath(ResolveDefaultTemplate(baseDir));
+            string templatePath = ResolveDefaultTemplate(baseDir);
+            ReportAutoService.SetTemplatePath(templatePath);
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] exe目录: {baseDir}");
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板原始路径: {templatePath}");
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板实际路径: {ReportAutoService.GetTemplatePath()}");
         }
 
         /// <summary>按候选位置寻找默认单页模板</summary>

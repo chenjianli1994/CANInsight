@@ -39,21 +39,52 @@ namespace PCAN_Client.ReportAuto
             return _templatePath;
         }
 
-        /// <summary>确保模板可被OpenXml打开:先直接试打开,失败则用cmd /c type走DLP授权路径提取明文副本</summary>
+        /// <summary>确保模板可被OpenXml打开:先直接试打开并验证内容,失败则用cmd /c type走DLP授权路径提取明文副本</summary>
         private static string TryEnsureReadableTemplate(string path)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return path;
-            // 1) 先尝试直接用OpenXml打开
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 尝试验证模板: {path}");
+            
+            // 1) 先尝试直接用OpenXml打开并验证模板内容
             try
             {
-                using (var doc = PresentationDocument.Open(path, false)) { }
-                return path; // 能直接打开,无需解密
+                using (var doc = PresentationDocument.Open(path, false))
+                {
+                    var presPart = doc.PresentationPart;
+                    var slidePart = presPart?.SlideParts?.FirstOrDefault();
+                    if (slidePart?.Slide != null)
+                    {
+                        // 验证模板是否包含预期的Shape标识符
+                        // 如果DLP透明加密,OpenXml可能读到损坏的数据,找不到这些Shape
+                        bool hasTextDesc = slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Shape>()
+                            .Any(sp => sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value == TemplateShapeIds.TextDesc);
+                        bool hasChartImage = slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Picture>()
+                            .Any(pic => pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value == TemplateShapeIds.ChartImage);
+                        
+                        if (hasTextDesc && hasChartImage)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板可直接打开且验证通过");
+                            return path;
+                        }
+                        System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板打开但验证失败: TextDesc={hasTextDesc}, ChartImage={hasChartImage}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板打开但无有效幻灯片");
+                    }
+                }
             }
-            catch { /* 可能DLP透明加密或zip结构异常,走授权路径 */ }
-            // 2) 用cmd /c type提取明文(DLP授权进程,本机已验证可用)
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板打开失败: {ex.Message}");
+            }
+            
+            // 2) 直接打开失败或验证不通过,用cmd /c type提取明文(DLP授权进程,本机已验证可用)
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 需要DLP解密");
             try
             {
                 string tmp = Path.Combine(Path.GetTempPath(), "ReportAutoTpl_" + Guid.NewGuid().ToString("N") + ".pptx");
+                System.Diagnostics.Debug.WriteLine($"[ReportAuto] 尝试DLP解密到: {tmp}");
                 var psi = new ProcessStartInfo("cmd.exe", "/c type \"" + path + "\" > \"" + tmp + "\"")
                 {
                     UseShellExecute = false,
@@ -61,9 +92,43 @@ namespace PCAN_Client.ReportAuto
                 };
                 var p = Process.Start(psi);
                 if (p != null) p.WaitForExit(30000);
-                if (File.Exists(tmp) && new FileInfo(tmp).Length > 0) return tmp;
+                if (File.Exists(tmp) && new FileInfo(tmp).Length > 0)
+                {
+                    // 验证解密后的副本
+                    try
+                    {
+                        using (var doc = PresentationDocument.Open(tmp, false))
+                        {
+                            var presPart = doc.PresentationPart;
+                            var slidePart = presPart?.SlideParts?.FirstOrDefault();
+                            if (slidePart?.Slide != null)
+                            {
+                                bool hasTextDesc = slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Shape>()
+                                    .Any(sp => sp.NonVisualShapeProperties?.NonVisualDrawingProperties?.Name?.Value == TemplateShapeIds.TextDesc);
+                                bool hasChartImage = slidePart.Slide.Descendants<DocumentFormat.OpenXml.Presentation.Picture>()
+                                    .Any(pic => pic.NonVisualPictureProperties?.NonVisualDrawingProperties?.Name?.Value == TemplateShapeIds.ChartImage);
+                                
+                                if (hasTextDesc && hasChartImage)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[ReportAuto] DLP解密成功且验证通过: {tmp}");
+                                    return tmp;
+                                }
+                                System.Diagnostics.Debug.WriteLine($"[ReportAuto] DLP解密后验证失败: TextDesc={hasTextDesc}, ChartImage={hasChartImage}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ReportAuto] DLP解密副本打开失败: {ex.Message}");
+                    }
+                }
+                System.Diagnostics.Debug.WriteLine($"[ReportAuto] DLP解密失败或文件为空");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ReportAuto] DLP解密异常: {ex.Message}");
+            }
+            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 解密失败, 返回原路径: {path}");
             return path; // 解密失败,返回原路径(后续StartReport会报错提示)
         }
 
