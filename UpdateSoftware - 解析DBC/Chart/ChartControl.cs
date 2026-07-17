@@ -16,8 +16,8 @@ namespace PCAN_Client
         private bool _isZooming = false;
         private Point _zoomStart;
         private Rectangle _zoomRect;
-        private Font _axisFont = new Font("Arial", 6.5f);
-        private Font _nameFont = new Font("Arial", 7);
+        private Font _axisFont = new Font("Arial", 9f);
+        private Font _nameFont = new Font("Arial", 9f);
         private Pen _gridPen = new Pen(Color.LightGray, 0.5f);
         private Pen _axisPen = new Pen(Color.DarkGray, 2f); // 深灰色，加粗至2px确保HighSpeed模式下清晰可见
         private Pen _xAxisBottomPen = new Pen(Color.Gray, 1.5f); // 加粗网格线
@@ -60,7 +60,7 @@ namespace PCAN_Client
         public double? MeasureLineX2 => _measureLine2X;
         private bool _isDraggingMeasureLine1 = false;
         private bool _isDraggingMeasureLine2 = false;
-        private Font _measureLineFont = new Font("Arial", 7);
+        private Font _measureLineFont = new Font("Arial", 9f);
         private ContextMenuStrip _measurementMenu;
         private Timer _measurementMenuTimer;
         private double? _contextMenuMeasureX = null;
@@ -232,10 +232,9 @@ namespace PCAN_Client
             base.OnPaint(e);
             Graphics g = e.Graphics;
 
-            // X轴范围小于等于12秒时开启抗锯齿（曲线更平滑），否则用HighSpeed模式节省CPU
-            double xRange = _globalXMax - _globalXMin;
-            g.SmoothingMode = xRange <= 12 ? SmoothingMode.AntiAlias : SmoothingMode.HighSpeed;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SystemDefault;
+            // 始终开启抗锯齿，确保曲线平滑清晰
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
             DrawBackground(g);
             DrawPanels(g);
@@ -250,9 +249,9 @@ namespace PCAN_Client
         public void RenderTo(Graphics g)
         {
             if (g == null) return;
-            double xRange = _globalXMax - _globalXMin;
-            g.SmoothingMode = xRange <= 12 ? SmoothingMode.AntiAlias : SmoothingMode.HighSpeed;
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SystemDefault;
+            // 始终开启抗锯齿，确保曲线平滑清晰
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             DrawBackground(g);
             DrawPanels(g);
             DrawMeasureLines(g);
@@ -370,11 +369,14 @@ namespace PCAN_Client
             if (isLastPanel)
             {
                 int xLabelCount = 5;
+                double range = xMax - xMin;
+                // 智能选择小数位数：范围越小精度越高
+                string format = range < 1 ? "F3" : range < 10 ? "F2" : range < 100 ? "F1" : "F0";
                 for (int i = 0; i <= xLabelCount; i++)
                 {
-                    double xValue = xMin + (xMax - xMin) * i / xLabelCount;
+                    double xValue = xMin + range * i / xLabelCount;
                     int x = ValueToScreenX(xValue, rect);
-                    string label = xValue.ToString("F3") + "s";
+                    string label = xValue.ToString(format) + "s";
                     SizeF labelSize = g.MeasureString(label, _axisFont);
                     // X轴刻度线
                     g.DrawLine(_axisPen, x, rect.Bottom, x, rect.Bottom + 4);
@@ -477,9 +479,9 @@ namespace PCAN_Client
 
             using (GraphicsPath solidPath = new GraphicsPath())
             using (GraphicsPath dashPath = new GraphicsPath())
-            using (Pen dashPen = new Pen(channel.Color, 0.1f))
+            using (Pen dashPen = new Pen(channel.Color, 1.5f))
             {
-                Pen solidPen = GetCachedPen(channel.Color, 0.1f);
+                Pen solidPen = GetCachedPen(channel.Color, 1.5f);
                 dashPen.DashStyle = DashStyle.Dash;
                 dashPen.DashPattern = new float[] { 5f, 3f };
 
