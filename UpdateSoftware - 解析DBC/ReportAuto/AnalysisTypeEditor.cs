@@ -101,15 +101,16 @@ namespace PCAN_Client.ReportAuto
                 Dock = DockStyle.Fill,
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = true,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,  // 列宽自动填满，按比例分配
+                AllowUserToResizeColumns = true,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 RowHeadersVisible = false
             };
             _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; };
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Key", HeaderText = "占位符", FillWeight = 28 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 12 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 42 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 15, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Key", HeaderText = "占位符", FillWeight = 25 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 15 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 30 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 20, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 10 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
             _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
@@ -131,7 +132,7 @@ namespace PCAN_Client.ReportAuto
             // 分隔位置+按钮位置在Load时设(此时控件已布局,避免Width/Height为0时设值异常)
             Load += (s, e) =>
             {
-                if (splitMain.Width > 200) splitMain.SplitterDistance = (int)(splitMain.Width * 0.7);  // 占位符框占30%
+                if (splitMain.Width > 200) splitMain.SplitterDistance = (int)(splitMain.Width * 0.6);  // 占位符框占40%
                 if (splitLeft.Height > 40) splitLeft.SplitterDistance = splitLeft.Height / 2;
                 // 按钮位置:基于panelBottom实际宽度,靠右排列
                 int pw = panelBottom.ClientSize.Width;
