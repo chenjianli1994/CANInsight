@@ -35,6 +35,9 @@ namespace PCAN_Client.ReportAuto
         // 结果
         public AnalysisType Result { get; private set; }
 
+        /// <summary>编辑器保存工况分类时触发的事件，传递新保存的AnalysisType</summary>
+        public event EventHandler<AnalysisType> Saved;
+
         /// <summary>
         /// 创建编辑器。editingType为null时新建，否则编辑现有类型。
         /// </summary>
@@ -54,7 +57,8 @@ namespace PCAN_Client.ReportAuto
             MinimumSize = new Size(700, 500);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
-            MinimizeBox = false;
+            MinimizeBox = true;  // 允许最小化
+            WindowState = FormWindowState.Maximized;  // 默认最大化
             StartPosition = FormStartPosition.CenterParent;
             Padding = new Padding(10);  // 四周留10px边距,不贴边框
 
@@ -514,6 +518,12 @@ namespace PCAN_Client.ReportAuto
 
             Result = type;
             this.DialogResult = DialogResult.OK;
+
+            // 触发保存事件，通知主窗口刷新下拉
+            Saved?.Invoke(this, type);
+
+            // 非模态模式下关闭窗口
+            this.Close();
         }
     }
 }

@@ -223,6 +223,20 @@ namespace PCAN_Client
                 _btnBusConfig.Text = $"通道配置({_busChannels.Count})";
             }
 
+            // 如果当前绘图区的信号列表与工况分类保存的相同，跳过重新加载（避免编辑/保存工况后清空绘图区）
+            if (type.SignalList != null && type.SignalList.Count > 0)
+            {
+                var currentSignalNames = Channels?.Select(c => c.DbcSignalName).OrderBy(n => n).ToList() ?? new List<string>();
+                var savedSignalNames = type.SignalList.Select(s => s.SignalName).OrderBy(n => n).ToList();
+                if (currentSignalNames.SequenceEqual(savedSignalNames))
+                {
+                    // 信号列表相同，只更新状态不重新加载
+                    _statusLabel.Text = $"状态: 已切换到工况分类 \"{type.Name}\"";
+                    _statusLabel.ForeColor = Color.Green;
+                    return;
+                }
+            }
+
             if (type.SignalList == null || type.SignalList.Count == 0) return;
 
             // 需要DBC已加载（兼容模式或至少一个CAN通道已配置）
@@ -312,12 +326,10 @@ namespace PCAN_Client
             }
 
             var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
-            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            string oldName = currentType.Name;  // 保存旧名称用于刷新
+            editor.Saved += (s, newType) =>
             {
-                var newType = editor.Result;
-                // 保存到JSON
-                SaveAnalysisTypeJson(newType, currentType.Name);
-                // 刷新下拉
+                SaveAnalysisTypeJson(newType, oldName);
                 RefreshAnalysisTypeList();
                 // 选中编辑后的类型
                 for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
@@ -328,18 +340,20 @@ namespace PCAN_Client
                         break;
                     }
                 }
-            }
+            };
+            editor.Show();
         }
 
         /// <summary>新增工况分类</summary>
         private void _btnNewAnalysisType_Click(object sender, EventArgs e)
         {
             var editor = new AnalysisTypeEditor(null, Channels, _busChannels);
-            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            editor.Saved += (s, newType) =>
             {
-                SaveAnalysisTypeJson(editor.Result, null);
+                SaveAnalysisTypeJson(newType, null);
                 RefreshAnalysisTypeList();
-            }
+            };
+            editor.Show();
         }
 
         /// <summary>保存当前选中的工况分类（打开编辑器编辑并保存）</summary>
@@ -352,10 +366,10 @@ namespace PCAN_Client
             }
 
             var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
-            if (editor.ShowDialog(this) == DialogResult.OK && editor.Result != null)
+            string oldName = currentType.Name;
+            editor.Saved += (s, newType) =>
             {
-                var newType = editor.Result;
-                SaveAnalysisTypeJson(newType, currentType.Name);
+                SaveAnalysisTypeJson(newType, oldName);
                 RefreshAnalysisTypeList();
                 // 选中保存后的类型
                 for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
@@ -368,7 +382,8 @@ namespace PCAN_Client
                 }
                 _statusLabel.Text = $"状态: 工况分类 \"{newType.Name}\" 已保存";
                 _statusLabel.ForeColor = Color.Green;
-            }
+            };
+            editor.Show();
         }
 
         /// <summary>删除当前选中的工况分类</summary>
