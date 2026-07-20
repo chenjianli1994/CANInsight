@@ -60,6 +60,10 @@ namespace PCAN_Client
         /// 所属CAN总线通道索引（-1 = 兼容模式，使用全局DBC）
         /// </summary>
         public int BusChannelIndex = -1;
+        /// <summary>
+        /// 占位符报告专用通道（true=不在绘图区显示，仅为报告统计采集数据）
+        /// </summary>
+        public bool IsReportOnly { get; set; } = false;
 
         // Y轴范围缓存（用于滑动时避免重复计算）
         private double _cachedXMin = double.NaN;

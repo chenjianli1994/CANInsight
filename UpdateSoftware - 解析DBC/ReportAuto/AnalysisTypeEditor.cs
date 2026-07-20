@@ -41,6 +41,9 @@ namespace PCAN_Client.ReportAuto
         /// <summary>编辑器保存工况分类时触发的事件，传递新保存的AnalysisType</summary>
         public event EventHandler<AnalysisType> Saved;
 
+        /// <summary>一键计算前触发:请求宿主确保占位符信号的数据通道已建立(供宿主补建隐藏通道并补采)</summary>
+        public event EventHandler EnsureSignalsRequested;
+
         /// <summary>
         /// 创建编辑器。editingType为null时新建，否则编辑现有类型。
         /// </summary>
@@ -167,11 +170,12 @@ namespace PCAN_Client.ReportAuto
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 10 });
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 18 });
             _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 14, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeRange", HeaderText = "时间范围", FillWeight = 16, ToolTipText = "格式: 开始时间,结束时间（秒）。留空则使用报告默认时间范围。" });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeRange", HeaderText = "时间范围", FillWeight = 16, ToolTipText = "格式: 开始时间,结束时间（秒）。留空时使用默认时间范围（灰色显示），输入自定义值可覆盖。" });
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Result", HeaderText = "结果预览", ReadOnly = true, FillWeight = 16 });
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 7 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
             _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
+            _dgvPlaceholders.CellFormatting += DgvPlaceholders_CellFormatting;
             _dgvPlaceholders.ColumnHeadersHeight = 28;
             
             // 右栏添加顺序(后添加的先布局,Fill最后填充剩余空间):
@@ -540,9 +544,25 @@ namespace PCAN_Client.ReportAuto
             return (min, max);
         }
 
+        /// <summary>时间范围列:留空时灰色显示默认时间范围(仅显示不写入,保留"留空=自动使用默认范围"的语义)</summary>
+        private void DgvPlaceholders_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (_dgvPlaceholders.Columns[e.ColumnIndex].Name != "TimeRange") return;
+            if (!string.IsNullOrWhiteSpace(e.Value?.ToString())) return;  // 手动配置过,按原值正常显示
+
+            var (t0, t1) = GetGlobalTimeRange();
+            e.Value = t0.ToString("0.###") + "," + t1.ToString("0.###");
+            e.CellStyle.ForeColor = Color.Gray;  // 灰色表示这是默认值而非手动输入
+            e.FormattingApplied = true;
+        }
+
         /// <summary>点击一键计算:对所有占位符行的信号进行计算,结果显示在结果预览列</summary>
         private void BtnCalculate_Click(object sender, EventArgs e)
         {
+            // 先让宿主确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
+            EnsureSignalsRequested?.Invoke(this, EventArgs.Empty);
+
             var (globalT0, globalT1) = GetGlobalTimeRange();
             int calculatedCount = 0;
 
@@ -556,8 +576,9 @@ namespace PCAN_Client.ReportAuto
                     continue;
                 }
 
-                // 查找通道
-                var ch = _channels.FirstOrDefault(c => c.DbcSignalName == signalName);
+                // 查找通道(精确匹配优先,再大小写不敏感兜底,与报告生成服务一致)
+                var ch = _channels.FirstOrDefault(c => c.DbcSignalName == signalName)
+                      ?? _channels.FirstOrDefault(c => string.Equals(c.DbcSignalName, signalName, StringComparison.OrdinalIgnoreCase));
                 if (ch == null)
                 {
                     row.Cells["Result"].Value = "[未找到信号]";
@@ -615,8 +636,23 @@ namespace PCAN_Client.ReportAuto
                 return;
             }
 
+            var type = BuildAnalysisType();
+
+            Result = type;
+            this.DialogResult = DialogResult.OK;
+
+            // 触发保存事件，通知主窗口刷新下拉
+            Saved?.Invoke(this, type);
+
+            // 非模态模式下关闭窗口
+            this.Close();
+        }
+
+        /// <summary>按当前UI内容构建AnalysisType(不做名称校验;供确定保存和宿主预建信号通道使用)</summary>
+        public AnalysisType BuildAnalysisType()
+        {
             var type = new AnalysisType();
-            type.Name = name;
+            type.Name = _txtName.Text.Trim();
             type.TextTemplate = _rtbText.Text;
             // 文本框/图片框定位固定为模板内标识符,编辑器不再暴露选择
             type.TextShapeName = TemplateShapeIds.TextDesc;
@@ -679,14 +715,7 @@ namespace PCAN_Client.ReportAuto
                 });
             }
 
-            Result = type;
-            this.DialogResult = DialogResult.OK;
-
-            // 触发保存事件，通知主窗口刷新下拉
-            Saved?.Invoke(this, type);
-
-            // 非模态模式下关闭窗口
-            this.Close();
+            return type;
         }
     }
 }

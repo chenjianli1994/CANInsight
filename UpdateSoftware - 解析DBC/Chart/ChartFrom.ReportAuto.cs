@@ -151,6 +151,8 @@ namespace PCAN_Client
                     MessageBox.Show("请输入有效的起始/结束时间(秒,数字)", "提示");
                     return;
                 }
+                // 确保该工况配置的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
+                EnsureReportSignalChannels(type);
                 int n = ReportAutoService.AppendPage(this, type, t0, t1);
                 _statusLabel.Text = "状态: 已添加第 " + n + " 页";
                 _statusLabel.ForeColor = Color.Green;
@@ -320,6 +322,82 @@ namespace PCAN_Client
             _statusLabel.ForeColor = Color.Green;
         }
 
+        /// <summary>
+        /// 确保占位符配置中的信号都有对应的数据通道:不在绘图区的信号创建隐藏通道(Visible=false, IsReportOnly),
+        /// 之后随文件加载流程自动采集;若数据已加载则立即补采。与绘图区信号同等处理,仅不绘制曲线。
+        /// </summary>
+        private void EnsureReportSignalChannels(AnalysisType type)
+        {
+            if (type?.Signals == null || type.Signals.Count == 0) return;
+
+            var added = new List<ChannelData>();
+            var seen = new HashSet<string>();  // 同一报文+信号只建一次
+
+            foreach (var stat in type.Signals)
+            {
+                if (stat == null || string.IsNullOrEmpty(stat.SignalName)) continue;
+
+                // 已存在(绘图区或已建的报告通道)则跳过;MessageId=0表示仅按信号名匹配
+                bool exists = stat.MessageId == 0
+                    ? Channels.Any(c => c.DbcSignalName == stat.SignalName)
+                    : Channels.Any(c => c.DbcMessageId == stat.MessageId && c.DbcSignalName == stat.SignalName);
+                if (exists) continue;
+
+                if (!seen.Add(stat.MessageId + "|" + stat.SignalName)) continue;
+
+                // 在DBC中定位信号定义(多通道模式遍历各总线DBC,兼容模式用全局DBC)
+                CAN_Data.Signal sigDef = null;
+                int foundMsgId = stat.MessageId, msgIndex = -1, sigIndex = -1, busIdx = -1;
+                double cycleTime = 0.1;
+
+                for (int bi = -1; bi < _busChannels.Count && sigDef == null; bi++)
+                {
+                    // bi=-1:兼容模式(全局DBC); bi>=0:多通道模式各总线DBC
+                    CAN_Data.DbcFile dbc = (bi < 0)
+                        ? (_busChannels.Count == 0 ? BaseParamter.dbcHelper?.dbcFile : null)
+                        : (_busChannels[bi].IsConfigured ? _busChannels[bi].DbcHelper?.dbcFile : null);
+                    if (dbc?.messages == null) continue;
+
+                    for (int mi = 0; mi < dbc.messages.Count && sigDef == null; mi++)
+                    {
+                        if (stat.MessageId != 0 && (int)dbc.messages[mi].messgeId != stat.MessageId) continue;
+                        for (int si = 0; si < dbc.messages[mi].signals.Count; si++)
+                        {
+                            if (dbc.messages[mi].signals[si].signalName != stat.SignalName) continue;
+                            sigDef = dbc.messages[mi].signals[si];
+                            foundMsgId = (int)dbc.messages[mi].messgeId;
+                            msgIndex = mi; sigIndex = si; busIdx = bi < 0 ? -1 : bi;
+                            cycleTime = dbc.messages[mi].cycleTime > 0 ? dbc.messages[mi].cycleTime / 1000.0 : 0.1;
+                            break;
+                        }
+                    }
+                }
+
+                if (sigDef == null) continue;  // DBC中找不到该信号,无法采集
+
+                var ch = new ChannelData(sigDef.signalName, Color.Gray, DateTime.Now,
+                    sigDef.enumDefinitions, sigDef.unitStr, cycleTime,
+                    foundMsgId, msgIndex, sigIndex, sigDef.signalName, busIdx);
+                ch.Visible = false;      // 不绘制曲线
+                ch.IsReportOnly = true;  // 标记为占位符报告专用通道
+                Channels.Add(ch);
+                added.Add(ch);
+            }
+
+            if (added.Count == 0) return;
+
+            // 刷新通道显示(信号列表中可见但未勾选,不参与绘图)
+            _chartControl.SetChannels(Channels);
+            _chartControl.Invalidate();
+            PopulateChannelGrid();
+
+            // 数据已加载时立即补采;未加载则随下次加载自动采集
+            BackfillReportChannels(added);
+
+            _statusLabel.Text = $"状态: 已为占位符配置补充 {added.Count} 个信号的数据采集";
+            _statusLabel.ForeColor = Color.Green;
+        }
+
         /// <summary>编辑当前选中的工况分类</summary>
         private void _btnEditAnalysisType_Click(object sender, EventArgs e)
         {
@@ -331,9 +409,12 @@ namespace PCAN_Client
 
             var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
             string oldName = currentType.Name;  // 保存旧名称用于刷新
+            // 一键计算前:确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
+            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
             editor.Saved += (s, newType) =>
             {
                 SaveAnalysisTypeJson(newType, oldName);
+                EnsureReportSignalChannels(newType);
                 RefreshAnalysisTypeList();
                 // 选中编辑后的类型
                 for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
@@ -352,9 +433,11 @@ namespace PCAN_Client
         private void _btnNewAnalysisType_Click(object sender, EventArgs e)
         {
             var editor = new AnalysisTypeEditor(null, Channels, _busChannels);
+            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
             editor.Saved += (s, newType) =>
             {
                 SaveAnalysisTypeJson(newType, null);
+                EnsureReportSignalChannels(newType);
                 RefreshAnalysisTypeList();
             };
             editor.Show();
@@ -371,9 +454,11 @@ namespace PCAN_Client
 
             var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
             string oldName = currentType.Name;
+            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
             editor.Saved += (s, newType) =>
             {
                 SaveAnalysisTypeJson(newType, oldName);
+                EnsureReportSignalChannels(newType);
                 RefreshAnalysisTypeList();
                 // 选中保存后的类型
                 for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)

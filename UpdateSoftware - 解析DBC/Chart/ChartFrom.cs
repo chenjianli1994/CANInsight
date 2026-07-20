@@ -2262,6 +2262,58 @@ namespace PCAN_Client
             return -2; // 未找到匹配的通道
         }
 
+        /// <summary>
+        /// 为新增的占位符报告通道补采数据:扫描内存缓存帧(内存模式)或重新遍历文件(流式模式),
+        /// 解析目标信号并存点。实时模式无历史数据可回溯,直接跳过(下次加载文件时随正常流程采集)。
+        /// </summary>
+        private void BackfillReportChannels(List<ChannelData> newChannels)
+        {
+            if (newChannels == null || newChannels.Count == 0) return;
+
+            // 数据源:优先内存缓存帧;否则文件模式下重新流式遍历文件
+            IEnumerable<CanRawMessage> source = null;
+            if (_rawMessages != null && _rawMessages.Count > 0)
+                source = _rawMessages;
+            else if (_isFileMode)
+                source = EnumerateRawMessages();
+            if (source == null) return;  // 实时模式:无历史数据,跳过
+
+            var parser = new CAN_Data.CanSignalParser();
+            var globalMsgDict = (_busChannels.Count == 0) ? BaseParamter.dbcHelper?.dbcFile?.messageDict : null;
+
+            foreach (var rawMsg in source)
+            {
+                int busIdx = GetBusChannelIndex(rawMsg.Channel);
+                if (busIdx == -2) continue;
+
+                // 本帧可能命中的报告通道(按 CAN ID + 总线索引匹配)
+                List<ChannelData> hits = null;
+                foreach (var ch in newChannels)
+                {
+                    if (ch.DbcMessageId != (int)rawMsg.CanId) continue;
+                    if (busIdx >= 0 && ch.BusChannelIndex >= 0 && ch.BusChannelIndex != busIdx) continue;
+                    if (hits == null) hits = new List<ChannelData>();
+                    hits.Add(ch);
+                }
+                if (hits == null) continue;
+
+                // 获取对应总线的DBC报文定义并解析全部信号
+                Dictionary<uint, CAN_Data.Message> msgDict;
+                if (busIdx >= 0 && busIdx < _busChannels.Count && _busChannels[busIdx].DbcHelper != null)
+                    msgDict = _busChannels[busIdx].DbcHelper.dbcFile.messageDict;
+                else
+                    msgDict = globalMsgDict;
+                if (msgDict == null || !msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage)) continue;
+
+                var allValues = parser.ParseSignals(rawMsg.Data, dbcMessage.signals);
+                foreach (var ch in hits)
+                {
+                    if (allValues.TryGetValue(ch.DbcSignalName, out double val))
+                        ch.AddPoint(rawMsg.TimeStampSeconds, val, false);
+                }
+            }
+        }
+
         private bool IsChannelMatched(CanRawMessageRead msg)
         {
             return _selectedChannels == null || _selectedChannels.Contains(msg.Channel);
