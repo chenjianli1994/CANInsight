@@ -29,6 +29,14 @@ namespace PCAN_Client.ReportAuto
             // 保存控件原布局状态，渲染结束后恢复
             DockStyle oldDock = ctl.Dock;
             Size oldSize = ctl.Size;
+            
+            // 计算渲染缩放比例（目标分辨率与原始尺寸的比例）
+            float scaleX = (float)width / oldSize.Width;
+            float scaleY = (float)height / oldSize.Height;
+            float renderScale = Math.Min(scaleX, scaleY);
+            
+            // 设置渲染缩放，使线宽和字体按比例放大
+            ctl.SetRenderScale(renderScale);
 
             Bitmap bmp = null;
             try
@@ -66,6 +74,7 @@ namespace PCAN_Client.ReportAuto
                 {
                     ctl.Dock = oldDock;
                     ctl.Size = oldSize;
+                    ctl.SetRenderScale(1.0f);
                     ctl.Invalidate();
                 }
                 catch (Exception)

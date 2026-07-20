@@ -24,6 +24,10 @@ namespace PCAN_Client
         private Pen _selectedAxisPen = new Pen(Color.Blue, 1f);
         private Brush _textBrush = Brushes.Black;
         private Brush _whiteBrush = new SolidBrush(Color.White);
+
+        // 渲染缩放因子（默认1.0，截图时按比例放大线宽/字体）
+        private float _renderScale = 1.0f;
+        public void SetRenderScale(float scale) { _renderScale = Math.Max(scale, 0.1f); }
         private struct PenKey : IEquatable<PenKey>
         {
             public int ColorArgb;
@@ -122,6 +126,17 @@ namespace PCAN_Client
                 _brushCache[color] = brush;
             }
             return brush;
+        }
+
+        /// <summary>获取缩放后的字体（缓存避免重复创建）</summary>
+        private Font GetScaledFont(Font baseFont)
+        {
+            if (_renderScale <= 1.01f) return baseFont;
+            float size = baseFont.Size * _renderScale;
+            // 用缓存避免每次渲染都创建新字体
+            var key = new PenKey(Color.Black, size); // 复用PenKey做缓存key
+            // 简化处理：每次缩放时创建新字体（截图频率低，可接受）
+            return new Font(baseFont.FontFamily, size, baseFont.Style);
         }
 
         protected override void Dispose(bool disposing)
@@ -372,22 +387,25 @@ namespace PCAN_Client
                 double range = xMax - xMin;
                 // 智能选择小数位数：范围越小精度越高
                 string format = range < 1 ? "F3" : range < 10 ? "F2" : range < 100 ? "F1" : "F0";
+                Font scaledAxisFont = GetScaledFont(_axisFont);
                 for (int i = 0; i <= xLabelCount; i++)
                 {
                     double xValue = xMin + range * i / xLabelCount;
                     int x = ValueToScreenX(xValue, rect);
                     string label = xValue.ToString(format) + "s";
-                    SizeF labelSize = g.MeasureString(label, _axisFont);
+                    SizeF labelSize = g.MeasureString(label, scaledAxisFont);
                     // X轴刻度线
                     g.DrawLine(_axisPen, x, rect.Bottom, x, rect.Bottom + 4);
-                    g.DrawString(label, _axisFont, _textBrush, x - labelSize.Width / 2, rect.Bottom + 5);
+                    g.DrawString(label, scaledAxisFont, _textBrush, x - labelSize.Width / 2, rect.Bottom + 5);
                 }
+                if (scaledAxisFont != _axisFont) scaledAxisFont.Dispose();
             }
 
             // Y轴标签：有枚举定义时显示枚举描述，否则显示数值
             // 限制标签不越过灰色分隔线（固定 _graySeparatorAbsX）
             Region prevClip = g.Clip;
             g.SetClip(new Rectangle(_graySeparatorAbsX, rect.Top - 10, rect.Left - _graySeparatorAbsX + 10, rect.Height + 20));
+            Font scaledFont = GetScaledFont(_axisFont);
             if (channel.EnumDefinitions != null && channel.EnumDefinitions.Count > 0)
             {
                 // 枚举类型：在每个枚举值位置显示描述
@@ -399,14 +417,14 @@ namespace PCAN_Client
 
                     int y = ValueToScreenY(enumValue, yMin, yMax, rect);
                     string label = kvp.Value;
-                    SizeF labelSize = g.MeasureString(label, _axisFont);
+                    SizeF labelSize = g.MeasureString(label, scaledFont);
 
                     float labelY = y - labelSize.Height / 2;
                     if (labelY < rect.Top) labelY = rect.Top;
                     if (labelY + labelSize.Height > rect.Bottom - 1) labelY = rect.Bottom - labelSize.Height - 1;
 
                     g.DrawLine(_axisPen, rect.Left - 4, y, rect.Left, y);
-                    g.DrawString(label, _axisFont, _textBrush, rect.Left - labelSize.Width - 6, labelY);
+                    g.DrawString(label, scaledFont, _textBrush, rect.Left - labelSize.Width - 6, labelY);
                 }
             }
             else
@@ -419,7 +437,7 @@ namespace PCAN_Client
                     double step = (yMax - yMin) / yLabelCount;
                     int decimals = step >= 1 ? 0 : (step >= 0.1 ? 1 : (step >= 0.01 ? 2 : 3));
                     string label = Math.Round(yValue, decimals).ToString("F" + decimals);
-                    SizeF labelSize = g.MeasureString(label, _axisFont);
+                    SizeF labelSize = g.MeasureString(label, scaledFont);
 
                     // 标签限制在面板顶部和底部直线之间，避免与相邻面板重叠
                     float labelY = y - labelSize.Height / 2;
@@ -479,9 +497,9 @@ namespace PCAN_Client
 
             using (GraphicsPath solidPath = new GraphicsPath())
             using (GraphicsPath dashPath = new GraphicsPath())
-            using (Pen dashPen = new Pen(channel.Color, 1.5f))
+            using (Pen dashPen = new Pen(channel.Color, 1.5f * _renderScale))
             {
-                Pen solidPen = GetCachedPen(channel.Color, 1.5f);
+                Pen solidPen = GetCachedPen(channel.Color, 1.5f * _renderScale);
                 dashPen.DashStyle = DashStyle.Dash;
                 dashPen.DashPattern = new float[] { 5f, 3f };
 
