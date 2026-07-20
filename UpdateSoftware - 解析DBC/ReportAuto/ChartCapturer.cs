@@ -88,7 +88,7 @@ namespace PCAN_Client.ReportAuto
 
         /// <summary>
         /// 合成截图：将绘图区高清Bitmap与信号列表控件截图左右拼接。
-        /// 信号列表在左侧(等比缩放到300px宽)，绘图区在右侧(保持原尺寸)。
+        /// 信号列表在左侧，绘图区在右侧，保持与软件界面相同的宽度比例。
         /// 返回合成后的Bitmap；入参异常时返回null。
         /// chartBmp 的所有权转移给此方法，合成后会释放原始chartBmp。
         /// </summary>
@@ -99,33 +99,41 @@ namespace PCAN_Client.ReportAuto
             Bitmap gridBmp = null;
             try
             {
-                // 信号列表截图
+                // 信号列表截图（原始分辨率）
                 gridBmp = CaptureControl(signalGrid);
 
-                int gridWidth = 300;
-                int gridHeight = 0;
-                if (gridBmp != null && gridBmp.Width > 0 && gridBmp.Height > 0)
+                // 获取软件中的实际宽度比例
+                int signalGridWidth = signalGrid?.Width ?? 300;
+                int chartViewWidth = chartBmp.Width; // 渲染后的宽度，与控件宽度成比例
+
+                // 计算缩放比例：使信号列表的高度匹配绘图区高度（保持宽度比例）
+                float gridScale = 1.0f;
+                if (gridBmp != null && gridBmp.Height > 0)
                 {
-                    double scale = (double)gridWidth / gridBmp.Width;
-                    gridHeight = (int)(gridBmp.Height * scale);
+                    gridScale = (float)chartBmp.Height / gridBmp.Height;
                 }
 
-                int totalWidth = gridWidth + chartBmp.Width;
-                int totalHeight = Math.Max(chartBmp.Height, gridHeight);
+                // 按相同比例缩放信号列表宽度
+                int scaledGridWidth = (int)(signalGridWidth * gridScale);
+                int scaledGridHeight = (int)(gridBmp?.Height * gridScale ?? chartBmp.Height);
+
+                int totalWidth = scaledGridWidth + chartBmp.Width;
+                int totalHeight = Math.Max(scaledGridHeight, chartBmp.Height);
                 if (totalHeight < 1) totalHeight = chartBmp.Height;
 
                 Bitmap composite = new Bitmap(totalWidth, totalHeight);
                 using (Graphics g = Graphics.FromImage(composite))
                 {
                     g.Clear(Color.White);
-                    // 左侧：信号列表(等比缩放)
-                    if (gridBmp != null && gridHeight > 0)
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    
+                    // 左侧：信号列表（按比例缩放，高度与绘图区一致）
+                    if (gridBmp != null)
                     {
-                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                        g.DrawImage(gridBmp, 0, 0, gridWidth, gridHeight);
+                        g.DrawImage(gridBmp, 0, 0, scaledGridWidth, scaledGridHeight);
                     }
-                    // 右侧：绘图区(高清原图)
-                    g.DrawImage(chartBmp, gridWidth, 0);
+                    // 右侧：绘图区（保持原始高分辨率）
+                    g.DrawImage(chartBmp, scaledGridWidth, 0);
                 }
 
                 return composite;
