@@ -22,6 +22,8 @@ namespace PCAN_Client.ReportAuto
         private readonly List<ChannelData> _channels;
         // CAN总线通道列表(供信号选择器显示多路CAN通道DBC)
         private readonly List<CanBusChannel> _busChannels;
+        // 临时抑制TextChange同步,避免程序化插入文本时清空已有绑定
+        private bool _suppressTextSync = false;
 
         // UI 控件
         private TextBox _txtName;
@@ -29,6 +31,7 @@ namespace PCAN_Client.ReportAuto
         private RichTextBox _txtPreview;    // 实时预览:{{占位符}}→[信号·指标]
         private DataGridView _dgvPlaceholders;
         private Button _btnInsertPlaceholder;
+        private Button _btnCalculate;      // 一键计算按钮
         private Button _btnOk;
         private Button _btnCancel;
 
@@ -82,10 +85,28 @@ namespace PCAN_Client.ReportAuto
             _rtbText.TextChanged += RtbText_TextChanged;
             _rtbText.KeyDown += RtbText_KeyDown;
             panelText.Controls.Add(_rtbText);  // Fill 先添加（后布局）
-            _btnInsertPlaceholder = new Button { Text = "插入信号占位符...", Dock = DockStyle.Top, Height = 26 };
+            // 标题行:标题居左 + 插入按钮居右(合并一行,节省纵向空间)
+            var panelTextHeader = new Panel { Dock = DockStyle.Top, Height = 28 };
+            panelTextHeader.Controls.Add(new Label
+            {
+                Text = "文字内容（可输入 {{占位符}}）:",
+                Dock = DockStyle.Left,
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleLeft
+            });
+            _btnInsertPlaceholder = new Button
+            {
+                Text = "插入信号占位符...",
+                Dock = DockStyle.Right,
+                Width = 130,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 130, 200),
+                ForeColor = Color.White
+            };
+            _btnInsertPlaceholder.FlatAppearance.BorderSize = 0;
             _btnInsertPlaceholder.Click += BtnInsertPlaceholder_Click;
-            panelText.Controls.Add(_btnInsertPlaceholder);  // Top 中间
-            panelText.Controls.Add(new Label { Text = "文字内容（可输入 {{占位符}}）:", Dock = DockStyle.Top, Height = 20 });  // Top 最上
+            panelTextHeader.Controls.Add(_btnInsertPlaceholder);
+            panelText.Controls.Add(panelTextHeader);  // Top 最上
             splitLeft.Panel1.Controls.Add(panelText);
             
             // 预览区:Fill先添加,Top后添加(Dock反向布局)
@@ -95,32 +116,75 @@ namespace PCAN_Client.ReportAuto
             splitMain.Panel1.Controls.Add(splitLeft);
 
             // 右栏:占位符配置表(宽度随分隔条可调)
-            splitMain.Panel2.Controls.Add(new Label { Text = "占位符计算配置:", Dock = DockStyle.Top, Height = 20 });
-            _dgvPlaceholders = new DataGridView
+            // 标题行:标题居左 + 一键计算按钮居右(合并一行,节省纵向空间)
+            var panelConfigHeader = new Panel { Dock = DockStyle.Top, Height = 28 };
+            panelConfigHeader.Controls.Add(new Label
             {
-                Dock = DockStyle.Fill,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = true,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,  // 列宽自动填满，按比例分配
-                AllowUserToResizeColumns = true,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                RowHeadersVisible = false
+                Text = "占位符计算配置:",
+                Dock = DockStyle.Left,
+                AutoSize = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold)
+            });
+            _btnCalculate = new Button
+            {
+                Text = "一键计算",
+                Dock = DockStyle.Right,
+                Width = 90,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(70, 130, 200),
+                ForeColor = Color.White
             };
+            _btnCalculate.FlatAppearance.BorderSize = 0;
+            _btnCalculate.Click += BtnCalculate_Click;
+            panelConfigHeader.Controls.Add(_btnCalculate);
+            _dgvPlaceholders = new DataGridView();
+            _dgvPlaceholders.Dock = DockStyle.Fill;
+            _dgvPlaceholders.AllowUserToAddRows = false;
+            _dgvPlaceholders.AllowUserToDeleteRows = true;
+            _dgvPlaceholders.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            _dgvPlaceholders.AllowUserToResizeColumns = true;
+            _dgvPlaceholders.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            _dgvPlaceholders.RowHeadersVisible = false;
+            _dgvPlaceholders.ColumnHeadersVisible = true;
+            _dgvPlaceholders.BackgroundColor = SystemColors.Window;
+            _dgvPlaceholders.GridColor = Color.LightGray;
+            _dgvPlaceholders.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            _dgvPlaceholders.EnableHeadersVisualStyles = false;
+            
+            // 显式设置表头样式
+            var headerStyle = new DataGridViewCellStyle();
+            headerStyle.BackColor = Color.LightSteelBlue;
+            headerStyle.ForeColor = Color.Black;
+            headerStyle.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
+            headerStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            headerStyle.WrapMode = DataGridViewTriState.False;
+            _dgvPlaceholders.ColumnHeadersDefaultCellStyle = headerStyle;
+            
             _dgvPlaceholders.DataError += (s, e) => { e.Cancel = true; };
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Key", HeaderText = "占位符", FillWeight = 25 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 15 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 30 });
-            _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 20, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
-            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 10 });
+            // 列定义
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Key", HeaderText = "占位符", FillWeight = 16 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "SignalBtn", HeaderText = "信号", Text = "选择信号", UseColumnTextForButtonValue = true, FillWeight = 10 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "SignalName", HeaderText = "信号名", ReadOnly = true, FillWeight = 18 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewComboBoxColumn { Name = "Calc", HeaderText = "计算方式", FillWeight = 14, FlatStyle = FlatStyle.Flat, Items = { "平均值(avg)", "最大值(max)", "最小值(min)", "极差(range)" } });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeRange", HeaderText = "时间范围", FillWeight = 16, ToolTipText = "格式: 开始时间,结束时间（秒）。留空则使用报告默认时间范围。" });
+            _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Result", HeaderText = "结果预览", ReadOnly = true, FillWeight = 16 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 7 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
             _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
+            _dgvPlaceholders.ColumnHeadersHeight = 28;
+            
+            // 右栏添加顺序(后添加的先布局,Fill最后填充剩余空间):
+            // DGV(Fill) → 标题行(Top,最上方)
             splitMain.Panel2.Controls.Add(_dgvPlaceholders);
+            splitMain.Panel2.Controls.Add(panelConfigHeader);
 
             // === 底部:确定/取消按钮 ===
             var panelBottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
             _btnOk = new Button { Text = "确定", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             _btnOk.Click += BtnOk_Click;
-            _btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _btnCancel = new Button { Text = "取消", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _btnCancel.Click += (s, ev) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
             panelBottom.Controls.Add(_btnOk);
             panelBottom.Controls.Add(_btnCancel);
 
@@ -267,7 +331,11 @@ namespace PCAN_Client.ReportAuto
 
                         string signalName = stat.SignalName ?? "";
                         string calcDisplay = MetricToDisplay(metric);
-                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, "选择信号", signalName, calcDisplay);
+                        // 从TimeRangeMap加载该占位符的独立时间范围
+                        string timeRange = "";
+                        if (stat.TimeRangeMap != null && stat.TimeRangeMap.TryGetValue(placeholderKey, out var tr))
+                            timeRange = tr ?? "";
+                        int rowIdx = _dgvPlaceholders.Rows.Add(placeholderKey, "选择信号", signalName, calcDisplay, timeRange, "");
                         _dgvPlaceholders.Rows[rowIdx].Tag = stat.Unit ?? "";  // 单位存行Tag
                     }
                 }
@@ -301,6 +369,7 @@ namespace PCAN_Client.ReportAuto
         /// <summary>文字变化时自动扫描 {{...}} 占位符，同步到DataGridView</summary>
         private void RtbText_TextChanged(object sender, EventArgs e)
         {
+            if (_suppressTextSync) return;  // 程序化插入时不同步,避免清空已有绑定
             SyncPlaceholdersFromText();
             UpdatePreview();
         }
@@ -349,7 +418,7 @@ namespace PCAN_Client.ReportAuto
             {
                 if (!existingKeys.Contains(key))
                 {
-                    int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", "", "平均值(avg)");
+                    int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", "", "平均值(avg)", "", "");
                     _dgvPlaceholders.Rows[idx].Tag = "";  // 单位默认空,选信号后自动填
                 }
             }
@@ -373,28 +442,45 @@ namespace PCAN_Client.ReportAuto
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Result == null || dlg.Result.Count == 0)
                     return;
-                // 1) 把勾选的 {{占位符}} 插入到 RichTextBox 光标处
-                string insertText = string.Join(" ", dlg.Result.Select(r => "{{" + r.Key + "}}"));
-                int selStart = _rtbText.SelectionStart;
-                _rtbText.Text = _rtbText.Text.Insert(selStart, insertText);
-                _rtbText.SelectionStart = selStart + insertText.Length;
-                _rtbText.Focus();
-                // 2) TextChanged→SyncPlaceholdersFromText 已自动加空行,
-                //    这里按 Key 把信号名/计算方式/单位填进对应行
+                // 抑制TextChanged同步,避免SyncPlaceholdersFromText清空已有绑定
+                _suppressTextSync = true;
+                try
+                {
+                    // 1) 把勾选的 {{占位符}} 插入到 RichTextBox 光标处
+                    string insertText = string.Join(" ", dlg.Result.Select(r => "{{" + r.Key + "}}"));
+                    int selStart = _rtbText.SelectionStart;
+                    _rtbText.Text = _rtbText.Text.Insert(selStart, insertText);
+                    _rtbText.SelectionStart = selStart + insertText.Length;
+                    _rtbText.Focus();
+                }
+                finally
+                {
+                    _suppressTextSync = false;
+                }
+                // 2) 按 Key 把信号名/计算方式/单位填进对应行
                 ApplyBindings(dlg.Result);
                 UpdatePreview();
             }
         }
 
-        /// <summary>把对话框返回的绑定列表填入占位符配置表(按Key找行,找不到则加)</summary>
+        /// <summary>把对话框返回的绑定列表填入占位符配置表(自动处理重复Key)</summary>
         private void ApplyBindings(List<InsertedBinding> bindings)
         {
             foreach (var b in bindings)
             {
-                DataGridViewRow row = FindRowByKey(b.Key);
+                // 自动处理重复Key:如已存在则加后缀
+                string key = b.Key;
+                int suffix = 2;
+                while (FindRowByKey(key) != null)
+                {
+                    key = b.Key + "_" + suffix;
+                    suffix++;
+                }
+
+                DataGridViewRow row = FindRowByKey(key);
                 if (row == null)
                 {
-                    int idx = _dgvPlaceholders.Rows.Add(b.Key, "选择信号", b.SignalName, MetricToDisplay(b.Metric));
+                    int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", b.SignalName, MetricToDisplay(b.Metric), "", "");
                     row = _dgvPlaceholders.Rows[idx];
                 }
                 else
@@ -440,6 +526,84 @@ namespace PCAN_Client.ReportAuto
             _txtPreview.Refresh();  // 强制重绘,避免Dock布局时序导致不渲染
         }
 
+        /// <summary>获取所有通道数据的全局时间范围</summary>
+        private (double start, double end) GetGlobalTimeRange()
+        {
+            double min = double.MaxValue, max = double.MinValue;
+            foreach (var ch in _channels)
+            {
+                var range = ch.GetXRange();
+                if (range.Min < min) min = range.Min;
+                if (range.Max > max) max = range.Max;
+            }
+            if (min >= max) return (0, 10);
+            return (min, max);
+        }
+
+        /// <summary>点击一键计算:对所有占位符行的信号进行计算,结果显示在结果预览列</summary>
+        private void BtnCalculate_Click(object sender, EventArgs e)
+        {
+            var (globalT0, globalT1) = GetGlobalTimeRange();
+            int calculatedCount = 0;
+
+            foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
+            {
+                string signalName = row.Cells["SignalName"].Value?.ToString();
+                string calcDisplay = row.Cells["Calc"].Value?.ToString();
+                if (string.IsNullOrEmpty(signalName))
+                {
+                    row.Cells["Result"].Value = "";
+                    continue;
+                }
+
+                // 查找通道
+                var ch = _channels.FirstOrDefault(c => c.DbcSignalName == signalName);
+                if (ch == null)
+                {
+                    row.Cells["Result"].Value = "[未找到信号]";
+                    continue;
+                }
+
+                // 解析时间范围
+                string timeRange = row.Cells["TimeRange"].Value?.ToString() ?? "";
+                double t0 = globalT0, t1 = globalT1;
+                if (!string.IsNullOrWhiteSpace(timeRange))
+                {
+                    var parts = timeRange.Split(',');
+                    if (parts.Length == 2 && double.TryParse(parts[0].Trim(), out double parsedT0) && double.TryParse(parts[1].Trim(), out double parsedT1))
+                    {
+                        t0 = parsedT0;
+                        t1 = parsedT1;
+                    }
+                }
+
+                string metric = DisplayToMetric(calcDisplay);
+                string key = row.Cells["Key"].Value?.ToString() ?? "";
+
+                var tempStat = new SignalStat
+                {
+                    MessageId = ch.DbcMessageId,
+                    SignalName = signalName,
+                    Unit = ch.Unit ?? "",
+                    Metrics = new List<string> { metric },
+                    PlaceholderMap = new Dictionary<string, string> { { metric, key } }
+                };
+
+                var pv = SignalStatsCalculator.Calc(ch, t0, t1, tempStat);
+                if (pv != null && pv.Count > 0)
+                {
+                    row.Cells["Result"].Value = pv.Values.First();
+                    calculatedCount++;
+                }
+                else
+                {
+                    row.Cells["Result"].Value = "[无数据]";
+                }
+            }
+
+            MessageBox.Show($"计算完成，共处理 {calculatedCount} 个占位符", "一键计算", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
         /// <summary>点击确定：构建AnalysisType结果</summary>
         private void BtnOk_Click(object sender, EventArgs e)
         {
@@ -469,35 +633,33 @@ namespace PCAN_Client.ReportAuto
                 string signalName = row.Cells["SignalName"].Value?.ToString();
                 string calcDisplay = row.Cells["Calc"].Value?.ToString();
                 string unit = row.Tag?.ToString() ?? "";
+                string timeRange = row.Cells["TimeRange"].Value?.ToString() ?? "";
 
                 if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(signalName)) continue;
 
                 string metric = DisplayToMetric(calcDisplay);
 
-                // 查找已有同信号的SignalStat，合并PlaceholderMap
-                var existing = type.Signals.FirstOrDefault(s => s.SignalName == signalName);
-                if (existing != null)
-                {
-                    if (!existing.Metrics.Contains(metric))
-                        existing.Metrics.Add(metric);
-                    existing.PlaceholderMap[metric] = key;
-                }
-                else
-                {
-                    // 从channels中查找MessageId
-                    int msgId = 0;
-                    var ch = _channels.FirstOrDefault(c => c.DbcSignalName == signalName);
-                    if (ch != null) msgId = ch.DbcMessageId;
+                // 每行创建独立的SignalStat（允许相同信号+指标重复添加）
+                int msgId = 0;
+                var ch = _channels.FirstOrDefault(c => c.DbcSignalName == signalName);
+                if (ch != null) msgId = ch.DbcMessageId;
 
-                    type.Signals.Add(new SignalStat
-                    {
-                        MessageId = msgId,
-                        SignalName = signalName,
-                        Unit = unit,
-                        Metrics = new List<string> { metric },
-                        PlaceholderMap = new Dictionary<string, string> { { metric, key } }
-                    });
+                // 构建TimeRangeMap
+                Dictionary<string, string> timeRangeMap = null;
+                if (!string.IsNullOrWhiteSpace(timeRange))
+                {
+                    timeRangeMap = new Dictionary<string, string> { { key, timeRange } };
                 }
+
+                type.Signals.Add(new SignalStat
+                {
+                    MessageId = msgId,
+                    SignalName = signalName,
+                    Unit = unit,
+                    Metrics = new List<string> { metric },
+                    PlaceholderMap = new Dictionary<string, string> { { metric, key } },
+                    TimeRangeMap = timeRangeMap
+                });
             }
 
             // 保存信号列表（快照当前绘图区通道）

@@ -90,6 +90,8 @@ namespace PCAN_Client.ReportAuto
         public string Unit;        // 单位(如 ℃ km/h)，可空
         public List<string> Metrics;             // 要算的指标: "avg"/"min"/"max"/"range"
         public Dictionary<string, string> PlaceholderMap;  // metric→PPT占位符KEY，如 {"avg":"AVG_HEADTEMP"}
+        /// <summary>每个占位符的独立时间范围(key=占位符名, value="start,end")。为空时使用报告默认时间范围。</summary>
+        public Dictionary<string, string> TimeRangeMap;
     }
 
     /// <summary>

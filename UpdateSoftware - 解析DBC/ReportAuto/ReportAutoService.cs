@@ -208,16 +208,63 @@ namespace PCAN_Client.ReportAuto
                                 values[pm.Value] = "-";
                         continue;
                     }
-                    var pv = SignalStatsCalculator.Calc(ch, t0, t1, stat);
-                    if (pv == null || pv.Count == 0)
+                    
+                    // 按时间范围分组计算：相同时间范围的指标一起计算，提高效率
+                    var metricsByTimeRange = new Dictionary<string, List<string>>(); // "t0,t1" -> [metrics]
+                    foreach (var metric in stat.Metrics)
                     {
-                        // 算不出值(时间窗内无数据),同样填"-"
-                        if (stat.PlaceholderMap != null)
-                            foreach (var pm in stat.PlaceholderMap)
-                                values[pm.Value] = "-";
-                        continue;
+                        if (stat.PlaceholderMap == null || !stat.PlaceholderMap.ContainsKey(metric))
+                            continue;
+                        string placeholderKey = stat.PlaceholderMap[metric];
+                        
+                        // 检查该占位符是否有独立时间范围
+                        double calcT0 = t0, calcT1 = t1;
+                        if (stat.TimeRangeMap != null && stat.TimeRangeMap.TryGetValue(placeholderKey, out var tr) && !string.IsNullOrWhiteSpace(tr))
+                        {
+                            var parts = tr.Split(',');
+                            if (parts.Length == 2 && double.TryParse(parts[0].Trim(), out double parsedT0) && double.TryParse(parts[1].Trim(), out double parsedT1))
+                            {
+                                calcT0 = parsedT0;
+                                calcT1 = parsedT1;
+                            }
+                        }
+                        
+                        string timeKey = $"{calcT0},{calcT1}";
+                        if (!metricsByTimeRange.ContainsKey(timeKey))
+                            metricsByTimeRange[timeKey] = new List<string>();
+                        metricsByTimeRange[timeKey].Add(metric);
                     }
-                    foreach (var kv in pv) values[kv.Key] = kv.Value;
+                    
+                    // 对每个时间范围分别计算
+                    foreach (var kv in metricsByTimeRange)
+                    {
+                        var parts = kv.Key.Split(',');
+                        double calcT0 = double.Parse(parts[0]);
+                        double calcT1 = double.Parse(parts[1]);
+                        
+                        // 创建临时stat，只包含该时间范围的metrics
+                        var tempStat = new SignalStat
+                        {
+                            MessageId = stat.MessageId,
+                            SignalName = stat.SignalName,
+                            Unit = stat.Unit,
+                            Metrics = kv.Value,
+                            PlaceholderMap = kv.Value.ToDictionary(m => m, m => stat.PlaceholderMap[m])
+                        };
+                        
+                        var pv = SignalStatsCalculator.Calc(ch, calcT0, calcT1, tempStat);
+                        if (pv == null || pv.Count == 0)
+                        {
+                            // 算不出值(时间窗内无数据),同样填"-"
+                            foreach (var metric in kv.Value)
+                            {
+                                if (stat.PlaceholderMap.ContainsKey(metric))
+                                    values[stat.PlaceholderMap[metric]] = "-";
+                            }
+                            continue;
+                        }
+                        foreach (var pvKv in pv) values[pvKv.Key] = pvKv.Value;
+                    }
                 }
             }
 
