@@ -278,7 +278,7 @@ namespace PCAN_Client.ReportAuto
             }
         }
 
-        /// <summary>辅助方法:把文字写入指定Shape(按换行拆段,克隆首段保留格式)</summary>
+        /// <summary>辅助方法:把文字写入指定Shape(按换行拆段,自动识别标题和正文格式)</summary>
         void FillTextShape(Shape sp, string text)
         {
             var txBody = sp.TextBody;
@@ -295,13 +295,16 @@ namespace PCAN_Client.ReportAuto
             foreach (string line in lines)
             {
                 var newPara = (A.Paragraph)firstPara.CloneNode(true);
+                string trimmedLine = line.TrimEnd('\r');
+                bool isTitle = IsTitleLine(trimmedLine);
+                
                 // 设置文字到第一个run
                 var firstRun = newPara.Descendants<A.Run>().FirstOrDefault();
                 if (firstRun != null)
                 {
                     var textElement = firstRun.GetFirstChild<A.Text>();
                     if (textElement != null)
-                        textElement.Text = line.TrimEnd('\r');
+                        textElement.Text = trimmedLine;
                     // 清除后续run的文字（保留格式）
                     foreach (var r in newPara.Descendants<A.Run>().Skip(1))
                     {
@@ -309,16 +312,78 @@ namespace PCAN_Client.ReportAuto
                         if (t != null)
                             t.Text = "";
                     }
+                    // 应用标题或正文格式
+                    ApplyRunFormat(firstRun, isTitle);
                 }
                 else
                 {
                     // 没有run，创建一个
                     var run = new A.Run();
                     run.RunProperties = new A.RunProperties { Language = "zh-CN" };
-                    run.Text = new A.Text { Text = line.TrimEnd('\r') };
+                    run.Text = new A.Text { Text = trimmedLine };
                     newPara.Append(run);
+                    ApplyRunFormat(run, isTitle);
                 }
                 txBody.Append(newPara);
+            }
+        }
+
+        /// <summary>判断是否为标题行(以中文数字+顿号开头,如"一、"、"二、")</summary>
+        bool IsTitleLine(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(line, @"^[一二三四五六七八九十]+、");
+        }
+
+        /// <summary>为Run应用标题或正文格式</summary>
+        void ApplyRunFormat(A.Run run, bool isTitle)
+        {
+            var rPr = run.RunProperties;
+            if (rPr == null)
+            {
+                rPr = new A.RunProperties { Language = "zh-CN" };
+                run.RunProperties = rPr;
+            }
+            
+            // 设置字体大小(10pt = 1000百分之一磅)
+            rPr.FontSize = 1000;
+            
+            // 设置粗体
+            rPr.Bold = isTitle ? true : false;
+            
+            // 移除现有的字体设置
+            var existingLatin = rPr.GetFirstChild<A.LatinFont>();
+            if (existingLatin != null) existingLatin.Remove();
+            var existingEa = rPr.GetFirstChild<A.EastAsianFont>();
+            if (existingEa != null) existingEa.Remove();
+            
+            // 添加字体设置为黑体
+            rPr.AppendChild(new A.LatinFont { Typeface = "黑体" });
+            rPr.AppendChild(new A.EastAsianFont { Typeface = "黑体" });
+            
+            // 移除现有颜色设置
+            var existingSolidFill = rPr.GetFirstChild<A.SolidFill>();
+            if (existingSolidFill != null) existingSolidFill.Remove();
+            
+            // 设置颜色
+            if (isTitle)
+            {
+                // 标题：暗板岩蓝着色1浅色40% (使用固定RGB色值)
+                var solidFill = new A.SolidFill();
+                solidFill.RgbColorModelHex = new A.RgbColorModelHex 
+                { 
+                    Val = "5B9BD5"  // 浅蓝色
+                };
+                rPr.AppendChild(solidFill);
+            }
+            else
+            {
+                // 正文：黑色
+                var solidFill = new A.SolidFill 
+                { 
+                    RgbColorModelHex = new A.RgbColorModelHex { Val = "000000" } 
+                };
+                rPr.AppendChild(solidFill);
             }
         }
 
