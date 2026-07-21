@@ -16,7 +16,7 @@ namespace PCAN_Client.ReportAuto
         /// <summary>
         /// 对指定信号在 [t0, t1] 时间窗内计算指标，返回 PPT占位符KEY → 格式化值字符串。
         /// metrics 支持: "avg"(平均值) "min"(实测最小) "max"(实测最大) "range"(最大-最小)。
-        /// 值格式化: 数值保留3位小数(F3)，末尾追加 stat.Unit(若非空，前面加空格)。
+        /// 值格式化: 数值保留3位小数(F3)，不带单位。
         /// </summary>
         /// <param name="ch">待统计的信号通道数据</param>
         /// <param name="t0">时间窗起点（秒）</param>
@@ -106,12 +106,8 @@ namespace PCAN_Client.ReportAuto
                     continue;
                 }
 
-                // ---- 数值格式化：保留3位小数，末尾追加单位（非空时前面加空格）----
+                // ---- 数值格式化：保留3位小数，不带单位 ----
                 string s = val.ToString("F3");
-                if (!string.IsNullOrEmpty(stat.Unit))
-                {
-                    s += " " + stat.Unit;
-                }
 
                 // ---- 以占位符 KEY 写回结果 ----
                 // 用原始 metric 字符串作为 PlaceholderMap 的查找键，
