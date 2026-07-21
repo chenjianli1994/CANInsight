@@ -237,14 +237,30 @@ namespace PCAN_Client
                     MessageBox.Show("请输入有效的起始/结束时间(秒,数字)", "提示");
                     return;
                 }
-                // 确保该工况配置的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
-                EnsureReportSignalChannels(type);
-                int n = ReportAutoService.AppendPage(this, type, t0, t1);
-                _statusLabel.Text = "状态: 已添加第 " + n + " 页";
-                _statusLabel.ForeColor = Color.Green;
+                // 确保该工况配置的信号都有数据通道(绘图区外的信号补建隐藏通道并后台补采),
+                // 补采完成后再生成页面;期间禁用按钮防止重复点击
+                _btnAddReportPage.Enabled = false;
+                EnsureReportSignalChannels(type, () =>
+                {
+                    _btnAddReportPage.Enabled = true;
+                    try
+                    {
+                        int n = ReportAutoService.AppendPage(this, type, t0, t1);
+                        _statusLabel.Text = "状态: 已添加第 " + n + " 页";
+                        _statusLabel.ForeColor = Color.Green;
+                    }
+                    catch (Exception ex2)
+                    {
+                        MessageBox.Show("添加报告页失败:\n" + ex2.Message, "错误",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        _statusLabel.Text = "状态: 添加报告页失败";
+                        _statusLabel.ForeColor = Color.Red;
+                    }
+                });
             }
             catch (Exception ex)
             {
+                _btnAddReportPage.Enabled = true;  // 异常时恢复按钮可用
                 MessageBox.Show("添加报告页失败:\n" + ex.Message, "错误",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 _statusLabel.Text = "状态: 添加报告页失败";
@@ -428,7 +444,7 @@ namespace PCAN_Client
         /// 确保占位符配置中的信号都有对应的数据通道:不在绘图区的信号创建隐藏通道(Visible=false, IsReportOnly),
         /// 之后随文件加载流程自动采集;若数据已加载则立即补采。与绘图区信号同等处理,仅不绘制曲线。
         /// </summary>
-        private void EnsureReportSignalChannels(AnalysisType type)
+        private void EnsureReportSignalChannels(AnalysisType type, Action onComplete = null)
         {
             if (type?.Signals == null || type.Signals.Count == 0) return;
 
@@ -486,18 +502,20 @@ namespace PCAN_Client
                 added.Add(ch);
             }
 
-            if (added.Count == 0) return;
+            if (added.Count == 0)
+            {
+                onComplete?.Invoke();
+                return;
+            }
 
             // 刷新通道显示(信号列表中可见但未勾选,不参与绘图)
             _chartControl.SetChannels(Channels);
             _chartControl.Invalidate();
             PopulateChannelGrid();
 
-            // 数据已加载时立即补采;未加载则随下次加载自动采集
-            BackfillReportChannels(added);
-
-            _statusLabel.Text = $"状态: 已为占位符配置补充 {added.Count} 个信号的数据采集";
-            _statusLabel.ForeColor = Color.Green;
+            // 后台线程补采(状态栏显示进度,可取消),完成后回调;未加载数据时随下次加载自动采集
+            _statusLabel.Text = $"状态: 开始补采 {added.Count} 个信号的数据...";
+            BackfillReportChannelsAsync(added, onComplete);
         }
 
         /// <summary>编辑当前选中的工况分类</summary>
@@ -526,8 +544,12 @@ namespace PCAN_Client
             var editor = new AnalysisTypeEditor(type, Channels, _busChannels);
             string oldName = type?.Name;          // null=新建
             string oldGroup = type?.Group ?? "";  // 编辑时保留原分组
-            // 一键计算前:确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
-            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
+            // 一键计算前:补建缺失通道并后台补采,完成后回调编辑器继续计算
+            editor.EnsureSignalsRequested += (s2, e2) =>
+                EnsureReportSignalChannels(editor.BuildAnalysisType(), () =>
+                {
+                    if (!editor.IsDisposed) editor.CalculateNow();
+                });
             editor.Saved += (s, newType) =>
             {
                 // 分组:编辑保留原分组;新建归入指定分组(未指定则用当前选中工况的分组)

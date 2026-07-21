@@ -618,12 +618,21 @@ namespace PCAN_Client.ReportAuto
             e.FormattingApplied = true;
         }
 
-        /// <summary>点击一键计算:对所有占位符行的信号进行计算,结果显示在结果预览列</summary>
+        /// <summary>点击一键计算:先让宿主确保信号通道(可能后台补采),完成后回调CalculateNow执行计算</summary>
         private void BtnCalculate_Click(object sender, EventArgs e)
         {
-            // 先让宿主确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
-            EnsureSignalsRequested?.Invoke(this, EventArgs.Empty);
+            if (EnsureSignalsRequested != null)
+            {
+                // 宿主补建缺失通道并补采,完成后回调CalculateNow
+                EnsureSignalsRequested(this, EventArgs.Empty);
+                return;
+            }
+            CalculateNow();
+        }
 
+        /// <summary>对所有占位符行的信号进行计算,结果显示在结果预览列(一键计算或宿主补采完成回调触发)</summary>
+        public void CalculateNow()
+        {
             var (globalT0, globalT1) = GetGlobalTimeRange();
             int calculatedCount = 0;
 
