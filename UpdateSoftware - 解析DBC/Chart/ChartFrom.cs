@@ -1184,12 +1184,14 @@ namespace PCAN_Client
         private void PopulateChannelGrid()
         {
             _channelGrid.Rows.Clear();
+            int displayIndex = 0;  // 仅统计显示在列表中的通道(占位符报告专用通道不进列表)
             for (int i = 0; i < Channels.Count; i++)
             {
                 var channel = Channels[i];
+                if (channel.IsReportOnly) continue;  // 占位符报告专用通道:参与采集/计算,但不显示在信号列表
                 // 超过30条以后的信号在列表中默认取消勾选，但保留在Channels中
-                bool isChecked = channel.Visible && i < 30;
-                if (i >= 30 && channel.Visible)
+                bool isChecked = channel.Visible && displayIndex < 30;
+                if (displayIndex >= 30 && channel.Visible)
                 {
                     channel.Visible = false;
                 }
@@ -1197,6 +1199,7 @@ namespace PCAN_Client
                 _channelGrid.Rows[rowIndex].Tag = channel;
                 _channelGrid.Rows[rowIndex].Cells["Color"].ToolTipText = "点击修改颜色";
                 _channelGrid.Rows[rowIndex].Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
+                displayIndex++;
             }
             // 同步图表可见性（前30条显示，其余隐藏）
             _chartControl.SetChannels(Channels);
@@ -3191,10 +3194,17 @@ namespace PCAN_Client
             lock (_lockObj)
             {
                 Channels.Remove(channel);
-                if (safeInsertIndex > sourceIndex) safeInsertIndex--;
-                safeInsertIndex = Math.Max(0, Math.Min(safeInsertIndex, Channels.Count));
-                Channels.Insert(safeInsertIndex, channel);
                 _channelGrid.Rows.RemoveAt(sourceIndex);
+                if (safeInsertIndex > sourceIndex) safeInsertIndex--;
+                // 网格插入位映射到Channels索引:隐藏的IsReportOnly通道不在网格中,按锚点通道在Channels中的实际位置插入
+                int channelsIndex = Channels.Count;
+                if (safeInsertIndex < _channelGrid.Rows.Count)
+                {
+                    var anchor = GetChannelFromRow(safeInsertIndex);
+                    if (anchor != null)
+                        channelsIndex = Channels.IndexOf(anchor);
+                }
+                Channels.Insert(channelsIndex, channel);
                 InsertChannelGridRow(safeInsertIndex, channel, isChecked);
             }
 
