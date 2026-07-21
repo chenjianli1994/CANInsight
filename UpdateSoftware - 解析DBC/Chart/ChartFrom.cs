@@ -852,7 +852,7 @@ namespace PCAN_Client
             this._channelGrid.ContextMenuStrip = this._channelContextMenu;
             this._channelGrid.Dock = System.Windows.Forms.DockStyle.Fill;
             this._channelGrid.Location = new System.Drawing.Point(0, 0);
-            this._channelGrid.MultiSelect = false;
+            this._channelGrid.MultiSelect = true;
             this._channelGrid.Name = "_channelGrid";
             this._channelGrid.RowHeadersVisible = false;
             this._channelGrid.SelectionMode = System.Windows.Forms.DataGridViewSelectionMode.FullRowSelect;
@@ -2802,28 +2802,8 @@ namespace PCAN_Client
 
         private void _btnRemoveChannel_Click(object sender, EventArgs e)
         {
-            if (_channelGrid.SelectedRows.Count == 0)
-            {
-                return;
-            }
-
-            int index = _channelGrid.SelectedRows[0].Index;
-            if (index >= 0 && index < _channelGrid.Rows.Count)
-            {
-                ChannelData channel = GetChannelFromRow(index);
-                if (channel != null)
-                {
-                    lock (_lockObj)
-                    {
-                        channel.Clear();
-                        Channels.Remove(channel);
-                    }
-                    _channelGrid.Rows.RemoveAt(index);
-                    _chartControl.SetChannels(Channels);
-                    _statusLabel.Text = "状态: 已停止";
-                    _statusLabel.ForeColor = Color.Red;
-                }
-            }
+            // 与Delete键/右键菜单同一路径,支持多选批量移除
+            DeleteSelectedChannel();
         }
 
         private void ChartFrom_Load(object sender, EventArgs e)
@@ -2958,6 +2938,12 @@ namespace PCAN_Client
                 DeleteSelectedChannel();
                 e.Handled = true;
             }
+            else if (e.Control && e.KeyCode == Keys.A)
+            {
+                // Ctrl+A 全选列表行
+                _channelGrid.SelectAll();
+                e.Handled = true;
+            }
         }
 
         private void DeleteSelectedChannel()
@@ -2965,19 +2951,29 @@ namespace PCAN_Client
             if (_channelGrid.SelectedRows.Count == 0)
                 return;
 
-            int index = _channelGrid.SelectedRows[0].Index;
-            if (index < 0 || index >= _channelGrid.Rows.Count)
-                return;
-
-            ChannelData channel = GetChannelFromRow(index);
-            if (channel == null)
+            // 收集所有选中行的通道和行引用(支持Shift多选/Ctrl+A全选后批量删除)
+            var toDelete = new List<ChannelData>();
+            var rowsToRemove = new List<DataGridViewRow>();
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                var channel = row.Tag as ChannelData;
+                if (channel == null) continue;
+                toDelete.Add(channel);
+                rowsToRemove.Add(row);
+            }
+            if (toDelete.Count == 0)
                 return;
 
             lock (_lockObj)
             {
-                channel.Clear();
-                Channels.Remove(channel);
-                _channelGrid.Rows.RemoveAt(index);
+                foreach (var channel in toDelete)
+                {
+                    channel.Clear();
+                    Channels.Remove(channel);
+                }
+                // 按行引用删除,避免索引位移
+                foreach (var row in rowsToRemove)
+                    _channelGrid.Rows.Remove(row);
             }
 
             _chartControl.SetChannels(Channels);
