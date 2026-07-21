@@ -11,6 +11,14 @@ using DocumentFormat.OpenXml.Packaging;
 
 namespace PCAN_Client.ReportAuto
 {
+    /// <summary>报告中一页的元数据(供预览列表显示/排序/删除)</summary>
+    internal class ReportPageInfo
+    {
+        public string Name;        // 工况名
+        public double TimeStart;   // 报告时间范围起点(秒)
+        public double TimeEnd;     // 报告时间范围终点(秒)
+    }
+
     /// <summary>
     /// 报告自动生成服务:维护当前报告会话,编排 缩放→截图→计算→填PPT→追加。
     /// 一次AppendPage追加一页,多次累积,SaveAs输出多页PPT。
@@ -20,12 +28,17 @@ namespace PCAN_Client.ReportAuto
         private static PptReportBuilder _builder = null;
         private static bool _started = false;
         private static string _templatePath = null;
+        // 已累积页的元数据(与PPT文档内页顺序一致,随AppendPage/DeletePage/MovePage同步)
+        private static readonly List<ReportPageInfo> _pages = new List<ReportPageInfo>();
 
         /// <summary>已加载的分析项目类型列表(供下拉)</summary>
         public static List<AnalysisType> AnalysisTypes { get; private set; } = new List<AnalysisType>();
 
         /// <summary>当前报告页数</summary>
         public static int CurrentPageCount => _builder?.PageCount ?? 0;
+
+        /// <summary>当前报告页元数据列表(只读,顺序与PPT一致)</summary>
+        public static IReadOnlyList<ReportPageInfo> Pages => _pages;
 
         /// <summary>设置PPT模板路径(若受DLP透明加密则自动提取明文副本)</summary>
         public static void SetTemplatePath(string path)
@@ -143,6 +156,7 @@ namespace PCAN_Client.ReportAuto
         {
             if (_builder != null) { _builder.Dispose(); _builder = null; }
             _started = false;
+            _pages.Clear();
         }
 
         /// <summary>
@@ -289,7 +303,33 @@ namespace PCAN_Client.ReportAuto
 
             // 6) 追加并填充该页
             _builder.AppendPage(type, images, values);
+            _pages.Add(new ReportPageInfo { Name = type.Name ?? "", TimeStart = t0, TimeEnd = t1 });
             return _builder.PageCount;
+        }
+
+        /// <summary>删除指定页(索引基于Pages顺序),同步PPT文档与页列表</summary>
+        public static void DeletePage(int index)
+        {
+            if (!_started || _builder == null)
+                throw new InvalidOperationException("当前无报告内容");
+            if (index < 0 || index >= _pages.Count)
+                throw new ArgumentOutOfRangeException(nameof(index));
+            _builder.DeletePage(index);
+            _pages.RemoveAt(index);
+        }
+
+        /// <summary>把第from页移动到第to位(索引基于Pages顺序),同步PPT文档与页列表</summary>
+        public static void MovePage(int from, int to)
+        {
+            if (!_started || _builder == null)
+                throw new InvalidOperationException("当前无报告内容");
+            if (from < 0 || from >= _pages.Count || to < 0 || to >= _pages.Count)
+                throw new ArgumentOutOfRangeException();
+            if (from == to) return;
+            _builder.MovePage(from, to);
+            var item = _pages[from];
+            _pages.RemoveAt(from);
+            _pages.Insert(to, item);
         }
 
         /// <summary>保存当前累积报告到指定路径</summary>

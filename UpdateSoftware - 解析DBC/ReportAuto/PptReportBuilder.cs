@@ -87,6 +87,46 @@ namespace PCAN_Client.ReportAuto
             _reportDoc = PresentationDocument.Open(_currentPath, true);
         }
 
+        /// <summary>删除指定索引的页(基于SlideIdList顺序),同时移除其SlidePart</summary>
+        public void DeletePage(int index)
+        {
+            if (_reportDoc == null)
+                throw new InvalidOperationException("报告未开始");
+            var presPart = _reportDoc.PresentationPart;
+            var slideIds = presPart.Presentation.SlideIdList?.ChildElements.OfType<SlideId>().ToList();
+            if (slideIds == null || index < 0 || index >= slideIds.Count)
+                throw new ArgumentOutOfRangeException(nameof(index));
+
+            var slideId = slideIds[index];
+            string relId = slideId.RelationshipId?.Value;
+            slideId.Remove();
+            if (!string.IsNullOrEmpty(relId)
+                && presPart.GetPartById(relId) is SlidePart slidePart)
+            {
+                presPart.DeletePart(slidePart);
+            }
+            presPart.Presentation.Save();
+        }
+
+        /// <summary>把第from页移动到第to位(基于SlideIdList顺序)</summary>
+        public void MovePage(int from, int to)
+        {
+            if (_reportDoc == null)
+                throw new InvalidOperationException("报告未开始");
+            var presPart = _reportDoc.PresentationPart;
+            var slideIdList = presPart.Presentation.SlideIdList;
+            if (slideIdList == null) throw new InvalidOperationException("报告无页面");
+            if (from < 0 || from >= slideIdList.ChildElements.Count
+                || to < 0 || to >= slideIdList.ChildElements.Count)
+                throw new ArgumentOutOfRangeException();
+            if (from == to) return;
+
+            var item = slideIdList.ChildElements[from];
+            slideIdList.RemoveChild(item);
+            slideIdList.InsertAt(item, to);
+            presPart.Presentation.Save();
+        }
+
         /// <summary>取文档SlideIdList中第一个显示的slide(避免取到孤儿slide part)</summary>
         private static SlidePart GetFirstSlidePart(PresentationDocument doc)
         {

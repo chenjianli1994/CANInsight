@@ -26,6 +26,7 @@ namespace PCAN_Client
         private ToolStripTextBox _txtReportEnd;
         private ToolStripButton _btnAddReportPage;
         private ToolStripButton _btnSaveReport;
+        private ToolStripButton _btnPreviewReport;
         private string _templatesDir;   // 工况分类JSON目录路径
 
         /// <summary>报告自动化用:暴露绘图区控件(供ReportAutoService截图)</summary>
@@ -76,6 +77,10 @@ namespace PCAN_Client
             _btnAddReportPage.ToolTipText = "按当前时间范围和工况分类,追加一页到报告";
             _btnAddReportPage.Click += _btnAddReportPage_Click;
 
+            _btnPreviewReport = new ToolStripButton("预览报告");
+            _btnPreviewReport.ToolTipText = "预览当前报告页,可拖动调整顺序/删除页";
+            _btnPreviewReport.Click += _btnPreviewReport_Click;
+
             _btnSaveReport = new ToolStripButton("保存报告");
             _btnSaveReport.ToolTipText = "保存累积的报告为PPT文件";
             _btnSaveReport.Click += _btnSaveReport_Click;
@@ -93,6 +98,7 @@ namespace PCAN_Client
             _topToolStrip.Items.Add(new ToolStripLabel("-"));
             _topToolStrip.Items.Add(_txtReportEnd);
             _topToolStrip.Items.Add(_btnAddReportPage);
+            _topToolStrip.Items.Add(_btnPreviewReport);
             _topToolStrip.Items.Add(_btnSaveReport);
 
             // 加载分析项目类型JSON
@@ -196,6 +202,20 @@ namespace PCAN_Client
                 _statusLabel.Text = "状态: 保存报告失败";
                 _statusLabel.ForeColor = Color.Red;
             }
+        }
+
+        /// <summary>预览报告:弹出页面示意图列表,可拖动调整顺序/删除页,操作立即生效</summary>
+        private void _btnPreviewReport_Click(object sender, EventArgs e)
+        {
+            if (ReportAutoService.CurrentPageCount == 0)
+            {
+                MessageBox.Show("当前无报告内容,请先\"添加到报告\"", "提示");
+                return;
+            }
+            using (var dlg = new ReportPreviewDialog())
+                dlg.ShowDialog(this);
+            _statusLabel.Text = $"状态: 当前报告共 {ReportAutoService.CurrentPageCount} 页";
+            _statusLabel.ForeColor = Color.Green;
         }
 
         /// <summary>选中工况分类变化时，自动加载该类型保存的信号列表</summary>

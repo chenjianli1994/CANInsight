@@ -329,6 +329,9 @@
     <Compile Include="ReportAuto\InsertSignalPlaceholderDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="ReportAuto\ReportPreviewDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Chart\LogFileLoader.cs" />
     <Compile Include="Chart\SignalSelector.cs">
       <SubType>Form</SubType>
