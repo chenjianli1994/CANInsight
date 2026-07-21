@@ -129,6 +129,8 @@ namespace PCAN_Client.ReportAuto
                 return result;
             }
 
+            // 加载成功的类型及其文件修改时间(用于同名去重)
+            var loaded = new List<KeyValuePair<AnalysisType, DateTime>>();
             foreach (string file in jsonFiles)
             {
                 try
@@ -138,7 +140,7 @@ namespace PCAN_Client.ReportAuto
                     AnalysisType type = JsonConvert.DeserializeObject<AnalysisType>(jsonText);
                     if (type != null)
                     {
-                        result.Add(type);
+                        loaded.Add(new KeyValuePair<AnalysisType, DateTime>(type, File.GetLastWriteTime(file)));
                     }
                 }
                 catch (Exception ex)
@@ -147,6 +149,27 @@ namespace PCAN_Client.ReportAuto
                     Debug.WriteLine("[ReportAuto] 解析模板失败: " + file + " -> " + ex.Message);
                 }
             }
+
+            // 按工况名去重:同名时保留文件修改时间最新的,避免目录中残留旧文件导致下拉重复显示
+            if (loaded.Count > 1)
+            {
+                var newest = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                var order = new List<string>();
+                for (int i = 0; i < loaded.Count; i++)
+                {
+                    string key = loaded[i].Key.Name ?? "";
+                    if (!newest.ContainsKey(key)) order.Add(key);
+                    if (!newest.TryGetValue(key, out int idx) || loaded[i].Value > loaded[idx].Value)
+                        newest[key] = i;
+                }
+                var deduped = new List<KeyValuePair<AnalysisType, DateTime>>();
+                foreach (string key in order)
+                    deduped.Add(loaded[newest[key]]);
+                loaded = deduped;
+            }
+
+            foreach (var item in loaded)
+                result.Add(item.Key);
 
             return result;
         }
