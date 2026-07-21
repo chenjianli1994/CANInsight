@@ -24,6 +24,17 @@ namespace PCAN_Client.ReportAuto
         private readonly List<CanBusChannel> _busChannels;
         // 临时抑制TextChange同步,避免程序化插入文本时清空已有绑定
         private bool _suppressTextSync = false;
+        // 暂存从文本中移除的占位符绑定(剪切-粘贴瞬态:同名占位符再次出现时自动恢复)
+        private readonly Dictionary<string, DetachedBinding> _detachedBindings = new Dictionary<string, DetachedBinding>();
+
+        /// <summary>被移除占位符行的绑定快照</summary>
+        private class DetachedBinding
+        {
+            public string SignalName;
+            public string Calc;
+            public string TimeRange;
+            public string Unit;
+        }
 
         // UI 控件
         private TextBox _txtName;
@@ -115,7 +126,7 @@ namespace PCAN_Client.ReportAuto
             // 预览区:Fill先添加,Top后添加(Dock反向布局)
             _txtPreview = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BackColor = SystemColors.Control, Font = new Font("Microsoft YaHei UI", 9F) };
             splitLeft.Panel2.Controls.Add(_txtPreview);
-            splitLeft.Panel2.Controls.Add(new Label { Text = "预览（{{占位符}}→[信号·指标]）:", Dock = DockStyle.Top, Height = 20 });
+            splitLeft.Panel2.Controls.Add(new Label { Text = "预览（未计算:[信号·指标]; 一键计算后:直接显示计算结果）:", Dock = DockStyle.Top, Height = 20 });
             splitMain.Panel1.Controls.Add(splitLeft);
 
             // 右栏:占位符配置表(宽度随分隔条可调)
@@ -248,6 +259,8 @@ namespace PCAN_Client.ReportAuto
                 if (MessageBox.Show($"确定删除占位符 {{{{{key}}}}} 吗？\n文字内容和配置表中的该占位符都会被移除。",
                     "删除占位符", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                     return;
+                // 主动删除:清除暂存绑定,避免再次输入同名占位符时旧绑定被恢复
+                _detachedBindings.Remove(key);
                 // 从文字模板中移除 {{KEY}},触发 RtbText_TextChanged → SyncPlaceholdersFromText 自动删行+刷新预览
                 _rtbText.Text = Regex.Replace(_rtbText.Text, @"\{\{" + Regex.Escape(key) + @"\}\}", "");
                 // 兜底:文字中不存在该占位符时(残留行),直接删行
@@ -445,12 +458,21 @@ namespace PCAN_Client.ReportAuto
             {
                 if (!existingKeys.Contains(key))
                 {
-                    int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", "", "平均值(avg)", "", "");
-                    _dgvPlaceholders.Rows[idx].Tag = "";  // 单位默认空,选信号后自动填
+                    // 剪切-粘贴场景:暂存的绑定存在则恢复,否则按新占位符添加
+                    if (_detachedBindings.TryGetValue(key, out var b))
+                    {
+                        int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", b.SignalName, b.Calc, b.TimeRange, "");
+                        _dgvPlaceholders.Rows[idx].Tag = b.Unit ?? "";
+                    }
+                    else
+                    {
+                        int idx = _dgvPlaceholders.Rows.Add(key, "选择信号", "", "平均值(avg)", "", "");
+                        _dgvPlaceholders.Rows[idx].Tag = "";  // 单位默认空,选信号后自动填
+                    }
                 }
             }
 
-            // 删除文本中已没有的（标记灰色行或直接删除）
+            // 删除文本中已没有的:移除前暂存绑定,供剪切-粘贴后恢复
             var rowsToRemove = new List<DataGridViewRow>();
             foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
             {
@@ -459,7 +481,20 @@ namespace PCAN_Client.ReportAuto
                     rowsToRemove.Add(row);
             }
             foreach (var row in rowsToRemove)
+            {
+                string key = row.Cells["Key"].Value?.ToString();
+                if (!string.IsNullOrEmpty(key))
+                {
+                    _detachedBindings[key] = new DetachedBinding
+                    {
+                        SignalName = row.Cells["SignalName"].Value?.ToString() ?? "",
+                        Calc = row.Cells["Calc"].Value?.ToString() ?? "",
+                        TimeRange = row.Cells["TimeRange"].Value?.ToString() ?? "",
+                        Unit = row.Tag?.ToString() ?? ""
+                    };
+                }
                 _dgvPlaceholders.Rows.Remove(row);
+            }
         }
 
         /// <summary>点击"插入信号占位符"按钮:弹对话框选信号+勾指标→插入文字+建立绑定</summary>
@@ -531,7 +566,7 @@ namespace PCAN_Client.ReportAuto
             return null;
         }
 
-        /// <summary>实时预览:把文字里的 {{KEY}} 替换成 [信号名·计算方式],未绑定显示 [未绑定]</summary>
+        /// <summary>实时预览:{{KEY}}→已计算显示结果值,未计算显示[信号名·计算方式],未绑定显示原文</summary>
         private void UpdatePreview()
         {
             if (_txtPreview == null || _rtbText == null) return;
@@ -545,6 +580,9 @@ namespace PCAN_Client.ReportAuto
             {
                 DataGridViewRow row = FindRowByKey(m.Groups[1].Value);
                 if (row == null) return m.Value;  // 占位符未入表,保留原文
+                // 一键计算后结果列有值,直接填入计算结果(含[未找到信号]/[无数据]等异常提示)
+                string result = row.Cells["Result"].Value?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(result)) return result;
                 string sig = row.Cells["SignalName"].Value?.ToString() ?? "";
                 string calc = row.Cells["Calc"].Value?.ToString() ?? "";
                 if (string.IsNullOrEmpty(sig)) return m.Value;  // 未绑信号,保留原文
