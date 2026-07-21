@@ -56,6 +56,7 @@ namespace PCAN_Client
         private Button _btnLoadFile;
         private Button _btnLoadDbc;
         private ToolStrip _topToolStrip;
+        private ToolStripButton _btnShowMainForm;   // 唤出报文列表窗口(Main)
         private ToolStripButton _toolLoadProject, _toolLoadDbc, _toolLoadLog, _toolModeToggle, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear, _toolAddSignal;
         private ToolStripComboBox _toolSpeedComboBox;
         private ToolStripDropDownButton _toolMore;
@@ -218,6 +219,11 @@ namespace PCAN_Client
             InitializeToolbarBindings();
             InitReportToolbar();
             InitializeChannelGrid();
+            // "报文列表"按钮:唤出被隐藏的Main报文窗口(插入工具栏最前)
+            _btnShowMainForm = new ToolStripButton("报文列表");
+            _btnShowMainForm.ToolTipText = "显示报文列表窗口";
+            _btnShowMainForm.Click += _btnShowMainForm_Click;
+            _topToolStrip.Items.Insert(0, _btnShowMainForm);
             // 默认播放速度为"最快"
             if (_speedComboBox.Items.Count > 0)
                 _speedComboBox.SelectedIndex = 0;
@@ -2811,6 +2817,17 @@ namespace PCAN_Client
             Channels = new List<ChannelData>();
             Main.ChartShowOpenFlag = true;
             RefreshPresetComboBox();
+        }
+
+        /// <summary>唤出报文列表窗口(Main启动后被隐藏,需要查看报文时显示)</summary>
+        private void _btnShowMainForm_Click(object sender, EventArgs e)
+        {
+            if (Main.main == null) return;
+            Main.main.Show();
+            if (Main.main.WindowState == FormWindowState.Minimized)
+                Main.main.WindowState = FormWindowState.Normal;
+            Main.main.BringToFront();
+            Main.main.Activate();
         }
 
         private void _channelGrid_CellClick(object sender, DataGridViewCellEventArgs e)

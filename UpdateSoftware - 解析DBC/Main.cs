@@ -2155,6 +2155,27 @@ namespace PCAN_Client
                 textBox_InputPartVer.Text = Properties.Settings.Default.SetPartVer;
             }
             projectCheckDeal();
+
+            // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
+            this.FormClosing += Main_FormClosingEx;
+
+            // 启动后直接进入绘图界面:打开绘图窗口,绘图窗口关闭时退出程序
+            // (Main实例保持存活:初始化/清理逻辑及Main.main静态引用均依赖它)
+            chartFromShow = new ChartFrom();
+            chartFromShow.FormClosed += (s, ev) => System.Windows.Forms.Application.Exit();
+            chartFromShow.Show();
+            // Load事件中直接Hide不生效(显示流程会覆盖),延迟到显示完成后再隐藏
+            BeginInvoke(new Action(() => this.Hide()));
+        }
+
+        /// <summary>主窗口关闭拦截:绘图窗口仍开着时,点X只隐藏主窗口(需要看报文时可从绘图工具栏再次唤出)</summary>
+        private void Main_FormClosingEx(object sender, FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing && ChartShowOpenFlag)
+            {
+                e.Cancel = true;
+                this.Hide();
+            }
         }
 
         public void PCAN_Connect(bool ShowFlag)
