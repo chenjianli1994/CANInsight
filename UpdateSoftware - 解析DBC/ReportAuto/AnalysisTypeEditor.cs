@@ -32,7 +32,7 @@ namespace PCAN_Client.ReportAuto
         private DataGridView _dgvPlaceholders;
         private Button _btnInsertPlaceholder;
         private Button _btnCalculate;      // 一键计算按钮
-        private Button _btnOk;
+        private Button _btnSave;
         private Button _btnCancel;
 
         // 结果
@@ -184,13 +184,13 @@ namespace PCAN_Client.ReportAuto
             splitMain.Panel2.Controls.Add(_dgvPlaceholders);
             splitMain.Panel2.Controls.Add(panelConfigHeader);
 
-            // === 底部:确定/取消按钮 ===
+            // === 底部:保存/取消按钮 ===
             var panelBottom = new Panel { Dock = DockStyle.Bottom, Height = 44 };
-            _btnOk = new Button { Text = "确定", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            _btnOk.Click += BtnOk_Click;
+            _btnSave = new Button { Text = "保存", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            _btnSave.Click += BtnSave_Click;
             _btnCancel = new Button { Text = "取消", Size = new Size(btnW, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             _btnCancel.Click += (s, ev) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
-            panelBottom.Controls.Add(_btnOk);
+            panelBottom.Controls.Add(_btnSave);
             panelBottom.Controls.Add(_btnCancel);
 
             // 添加顺序:Dock=Fill 先,然后 Bottom,最后 Top(后添加的先布局,保证 Fill 填剩余空间)
@@ -207,11 +207,11 @@ namespace PCAN_Client.ReportAuto
                 int pw = panelBottom.ClientSize.Width;
                 _btnCancel.Left = pw - btnW - 10;
                 _btnCancel.Top = 7;
-                _btnOk.Left = pw - btnW * 2 - 20;
-                _btnOk.Top = 7;
+                _btnSave.Left = pw - btnW * 2 - 20;
+                _btnSave.Top = 7;
             };
 
-            AcceptButton = _btnOk;
+            AcceptButton = _btnSave;
             CancelButton = _btnCancel;
         }
 
@@ -648,8 +648,8 @@ namespace PCAN_Client.ReportAuto
             MessageBox.Show($"计算完成，共处理 {calculatedCount} 个占位符", "一键计算", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        /// <summary>点击确定：构建AnalysisType结果</summary>
-        private void BtnOk_Click(object sender, EventArgs e)
+        /// <summary>点击保存：构建AnalysisType并触发保存事件,不关闭编辑器(可继续编辑后再次保存)</summary>
+        private void BtnSave_Click(object sender, EventArgs e)
         {
             string name = _txtName.Text.Trim();
             if (string.IsNullOrEmpty(name))
@@ -662,13 +662,12 @@ namespace PCAN_Client.ReportAuto
             var type = BuildAnalysisType();
 
             Result = type;
-            this.DialogResult = DialogResult.OK;
 
             // 触发保存事件，通知主窗口刷新下拉
             Saved?.Invoke(this, type);
 
-            // 非模态模式下关闭窗口
-            this.Close();
+            // 不关闭窗口,标题栏显示保存时间作为反馈
+            Text = "工况分类编辑器 — 已保存 " + DateTime.Now.ToString("HH:mm:ss");
         }
 
         /// <summary>按当前UI内容构建AnalysisType(不做名称校验;供确定保存和宿主预建信号通道使用)</summary>
@@ -721,10 +720,11 @@ namespace PCAN_Client.ReportAuto
                 });
             }
 
-            // 保存信号列表（快照当前绘图区通道）
+            // 保存信号列表（快照当前绘图区通道;占位符报告专用通道不入快照,由主窗口按需重建）
             type.SignalList = new List<SignalPresetItem>();
             foreach (var ch in _channels)
             {
+                if (ch.IsReportOnly) continue;
                 type.SignalList.Add(new SignalPresetItem
                 {
                     SignalName = ch.DbcSignalName ?? "",

@@ -70,7 +70,7 @@ namespace PCAN_Client
             _btnDeleteAnalysisType.Click += _btnDeleteAnalysisType_Click;
 
             _btnSaveAnalysisType = new ToolStripButton("保存");
-            _btnSaveAnalysisType.ToolTipText = "保存当前工况分类（编辑并保存）";
+            _btnSaveAnalysisType.ToolTipText = "直接保存当前工况分类(不打开编辑器)";
             _btnSaveAnalysisType.Click += _btnSaveAnalysisType_Click;
 
             _btnAddReportPage = new ToolStripButton("添加到报告");
@@ -434,6 +434,7 @@ namespace PCAN_Client
             editor.Saved += (s, newType) =>
             {
                 SaveAnalysisTypeJson(newType, oldName);
+                oldName = newType.Name;  // 编辑器不再关闭,连续保存时以上次名为旧名,改名不留孤儿文件
                 EnsureReportSignalChannels(newType);
                 RefreshAnalysisTypeList();
                 // 选中编辑后的类型
@@ -454,16 +455,18 @@ namespace PCAN_Client
         {
             var editor = new AnalysisTypeEditor(null, Channels, _busChannels);
             editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
+            string oldName = null;  // 连续保存时跟踪上次保存名,改名后删除旧文件
             editor.Saved += (s, newType) =>
             {
-                SaveAnalysisTypeJson(newType, null);
+                SaveAnalysisTypeJson(newType, oldName);
+                oldName = newType.Name;
                 EnsureReportSignalChannels(newType);
                 RefreshAnalysisTypeList();
             };
             editor.Show();
         }
 
-        /// <summary>保存当前选中的工况分类（打开编辑器编辑并保存）</summary>
+        /// <summary>保存当前选中的工况分类(不打开编辑器):快照当前绘图区信号列表并写回JSON</summary>
         private void _btnSaveAnalysisType_Click(object sender, EventArgs e)
         {
             if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
@@ -472,27 +475,38 @@ namespace PCAN_Client
                 return;
             }
 
-            var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
-            string oldName = currentType.Name;
-            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
-            editor.Saved += (s, newType) =>
+            // 快照当前绘图区信号列表(占位符报告专用通道不入快照,由Ensure按需重建);
+            // 文字模板/占位符配置保持原样,仅在编辑器中修改
+            currentType.SignalList = new List<SignalPresetItem>();
+            foreach (var ch in Channels)
             {
-                SaveAnalysisTypeJson(newType, oldName);
-                EnsureReportSignalChannels(newType);
-                RefreshAnalysisTypeList();
-                // 选中保存后的类型
-                for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
+                if (ch.IsReportOnly) continue;
+                currentType.SignalList.Add(new SignalPresetItem
                 {
-                    if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == newType.Name)
-                    {
-                        _cmbAnalysisType.SelectedIndex = i;
-                        break;
-                    }
+                    SignalName = ch.DbcSignalName ?? "",
+                    MessageId = ch.DbcMessageId,
+                    MessageIndex = ch.DbcMessageIndex,
+                    SignalIndex = ch.DbcSignalIndex,
+                    Unit = ch.Unit ?? "",
+                    Color = ColorTranslator.ToHtml(ch.Color),
+                    Visible = ch.Visible,
+                    BusChannelIndex = ch.BusChannelIndex
+                });
+            }
+
+            SaveAnalysisTypeJson(currentType, null);  // 名称未变,无需删旧文件
+            RefreshAnalysisTypeList();
+            // 重新选中刚保存的工况(刷新后下拉项已重建)
+            for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
+            {
+                if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == currentType.Name)
+                {
+                    _cmbAnalysisType.SelectedIndex = i;
+                    break;
                 }
-                _statusLabel.Text = $"状态: 工况分类 \"{newType.Name}\" 已保存";
-                _statusLabel.ForeColor = Color.Green;
-            };
-            editor.Show();
+            }
+            _statusLabel.Text = $"状态: 工况分类 \"{currentType.Name}\" 已保存";
+            _statusLabel.ForeColor = Color.Green;
         }
 
         /// <summary>删除当前选中的工况分类</summary>
