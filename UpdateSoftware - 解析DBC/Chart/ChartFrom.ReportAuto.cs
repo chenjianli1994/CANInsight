@@ -17,7 +17,9 @@ namespace PCAN_Client
     /// </summary>
     public partial class ChartFrom
     {
-        private ToolStripComboBox _cmbAnalysisType;
+        private ToolStripButton _btnAnalysisTypeSelector;   // 工况选择按钮(弹出分组树面板)
+        private AnalysisType _currentAnalysisType;          // 当前选中的工况分类
+        private ToolStripDropDown _pickerDropDown;          // 工况快捷选择下拉面板
         private ToolStripButton _btnEditAnalysisType;
         private ToolStripButton _btnNewAnalysisType;
         private ToolStripButton _btnDeleteAnalysisType;
@@ -38,10 +40,9 @@ namespace PCAN_Client
         /// <summary>初始化报告自动化工具栏:下拉+时间输入框+两按钮,加载工况分类与模板路径</summary>
         private void InitReportToolbar()
         {
-            _cmbAnalysisType = new ToolStripComboBox();
-            _cmbAnalysisType.Width = 170;
-            _cmbAnalysisType.DropDownStyle = ComboBoxStyle.DropDownList;
-            _cmbAnalysisType.ToolTipText = "选择分析项目类型";
+            _btnAnalysisTypeSelector = new ToolStripButton("(未选择) ▾");
+            _btnAnalysisTypeSelector.ToolTipText = "选择工况分类(支持分组管理)";
+            _btnAnalysisTypeSelector.Click += _btnAnalysisTypeSelector_Click;
 
             _txtReportStart = new ToolStripTextBox();
             _txtReportStart.Width = 60;
@@ -88,7 +89,7 @@ namespace PCAN_Client
             // 追加到现有工具栏末尾(不改动原AddRange数组)
             _topToolStrip.Items.Add(new ToolStripSeparator());
             _topToolStrip.Items.Add(new ToolStripLabel("工况:"));
-            _topToolStrip.Items.Add(_cmbAnalysisType);
+            _topToolStrip.Items.Add(_btnAnalysisTypeSelector);
             _topToolStrip.Items.Add(_btnEditAnalysisType);
             _topToolStrip.Items.Add(_btnNewAnalysisType);
             _topToolStrip.Items.Add(_btnDeleteAnalysisType);
@@ -101,17 +102,11 @@ namespace PCAN_Client
             _topToolStrip.Items.Add(_btnPreviewReport);
             _topToolStrip.Items.Add(_btnSaveReport);
 
-            // 加载分析项目类型JSON
+            // 加载分析项目类型JSON(含一级子目录分组)
+            // 注意:此时Channels尚未初始化(ChartFrom_Load才创建),只加载列表,初始应用推迟到Load
             string baseDir = Path.GetDirectoryName(Application.ExecutablePath);
             _templatesDir = Path.Combine(baseDir, "ReportAuto", "templates");
-            ReportAutoService.LoadAnalysisTypes(_templatesDir);
-            foreach (var t in ReportAutoService.AnalysisTypes)
-                _cmbAnalysisType.Items.Add(t);
-            if (_cmbAnalysisType.Items.Count > 0)
-                _cmbAnalysisType.SelectedIndex = 0;
-
-            // 选中工况分类时自动加载信号列表
-            _cmbAnalysisType.SelectedIndexChanged += _cmbAnalysisType_SelectedIndexChanged;
+            ReloadAnalysisTypes(null, false);
 
             // 默认模板路径:依次找 exe同级/项目根 的 模板文件.pptx
             string templatePath = ResolveDefaultTemplate(baseDir);
@@ -142,11 +137,96 @@ namespace PCAN_Client
             return Path.Combine(baseDir, "模板文件.pptx"); // 兜底(运行时由按钮handler报错)
         }
 
+        /// <summary>模板目录(供工况管理对话框使用)</summary>
+        internal string TemplatesDir => _templatesDir;
+
+        /// <summary>当前选中的工况分类(供工况管理对话框使用)</summary>
+        internal AnalysisType CurrentAnalysisType => _currentAnalysisType;
+
+        /// <summary>点击工况选择按钮:弹出分组树快捷选择面板</summary>
+        private void _btnAnalysisTypeSelector_Click(object sender, EventArgs e)
+        {
+            ReportAutoService.LoadAnalysisTypes(_templatesDir);  // 弹出前同步磁盘最新
+            var panel = new AnalysisTypePickerPanel();
+            panel.Reload(ReportAutoService.AnalysisTypes, _currentAnalysisType?.Name);
+            panel.Picked += (s, t) =>
+            {
+                _pickerDropDown?.Close();
+                SelectAnalysisType(t);
+            };
+            panel.ManageRequested += (s, e2) =>
+            {
+                _pickerDropDown?.Close();
+                OpenAnalysisTypeManager();
+            };
+            var host = new ToolStripControlHost(panel)
+            {
+                AutoSize = false,
+                Size = panel.Size,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
+            };
+            _pickerDropDown = new ToolStripDropDown { Padding = Padding.Empty };
+            _pickerDropDown.Items.Add(host);
+            var b = _btnAnalysisTypeSelector.Bounds;
+            _pickerDropDown.Show(_topToolStrip, new Point(b.Left, b.Bottom));
+        }
+
+        /// <summary>打开工况管理对话框(分组管理),选好后应用选中工况</summary>
+        private void OpenAnalysisTypeManager()
+        {
+            using (var dlg = new AnalysisTypeManagerDialog(this))
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK && dlg.SelectedType != null)
+                    SelectAnalysisType(dlg.SelectedType);
+            }
+        }
+
+        /// <summary>选中并应用工况分类(选择面板/管理对话框/保存后重选共用)</summary>
+        internal void SelectAnalysisType(AnalysisType type)
+        {
+            if (type == null) return;
+            _currentAnalysisType = type;
+            UpdateAnalysisTypeButtonText();
+            ApplyAnalysisType(type);
+        }
+
+        /// <summary>重新加载工况列表:保持(或指定)选中项,更新按钮文本;apply=true时同步应用选中工况</summary>
+        internal void ReloadAnalysisTypes(string selectName, bool apply)
+        {
+            string nameToSelect = selectName ?? _currentAnalysisType?.Name;
+            ReportAutoService.LoadAnalysisTypes(_templatesDir);
+
+            AnalysisType found = null;
+            if (!string.IsNullOrEmpty(nameToSelect))
+            {
+                foreach (var t in ReportAutoService.AnalysisTypes)
+                {
+                    if (t.Name == nameToSelect) { found = t; break; }
+                }
+            }
+            if (found == null && ReportAutoService.AnalysisTypes.Count > 0)
+                found = ReportAutoService.AnalysisTypes[0];
+
+            _currentAnalysisType = found;
+            UpdateAnalysisTypeButtonText();
+            if (apply && found != null)
+                ApplyAnalysisType(found);
+        }
+
+        private void UpdateAnalysisTypeButtonText()
+        {
+            _btnAnalysisTypeSelector.Text = _currentAnalysisType != null
+                ? _currentAnalysisType.Name + " ▾"
+                : "(未选择) ▾";
+        }
+
         private void _btnAddReportPage_Click(object sender, EventArgs e)
         {
             try
             {
-                if (!(_cmbAnalysisType.SelectedItem is AnalysisType type))
+                var type = _currentAnalysisType;
+                if (type == null)
                 {
                     MessageBox.Show("请先选择分析项目类型", "提示");
                     return;
@@ -218,10 +298,10 @@ namespace PCAN_Client
             _statusLabel.ForeColor = Color.Green;
         }
 
-        /// <summary>选中工况分类变化时，自动加载该类型保存的信号列表</summary>
-        private void _cmbAnalysisType_SelectedIndexChanged(object sender, EventArgs e)
+        /// <summary>应用选中的工况分类:恢复CAN通道配置+信号列表(信号列表相同则跳过重载)</summary>
+        internal void ApplyAnalysisType(AnalysisType type)
         {
-            if (!(_cmbAnalysisType.SelectedItem is AnalysisType type)) return;
+            if (type == null) return;
 
             // 恢复CAN通道配置
             if (type.BusChannels != null && type.BusChannels.Count > 0)
@@ -250,6 +330,8 @@ namespace PCAN_Client
             }
 
             // 如果当前绘图区的信号列表与工况分类保存的相同，跳过重新加载（避免编辑/保存工况后清空绘图区）
+            // (构造函数阶段Channels尚未创建,信号列表恢复推迟到ChartFrom_Load中的应用)
+            if (Channels == null) return;
             if (type.SignalList != null && type.SignalList.Count > 0)
             {
                 var currentSignalNames = Channels?.Select(c => c.DbcSignalName).OrderBy(n => n).ToList() ?? new List<string>();
@@ -421,47 +503,43 @@ namespace PCAN_Client
         /// <summary>编辑当前选中的工况分类</summary>
         private void _btnEditAnalysisType_Click(object sender, EventArgs e)
         {
-            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            if (_currentAnalysisType == null)
             {
                 MessageBox.Show("请先选择要编辑的工况分类", "提示");
                 return;
             }
-
-            var editor = new AnalysisTypeEditor(currentType, Channels, _busChannels);
-            string oldName = currentType.Name;  // 保存旧名称用于刷新
-            // 一键计算前:确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
-            editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
-            editor.Saved += (s, newType) =>
-            {
-                SaveAnalysisTypeJson(newType, oldName);
-                oldName = newType.Name;  // 编辑器不再关闭,连续保存时以上次名为旧名,改名不留孤儿文件
-                EnsureReportSignalChannels(newType);
-                RefreshAnalysisTypeList();
-                // 选中编辑后的类型
-                for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
-                {
-                    if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == newType.Name)
-                    {
-                        _cmbAnalysisType.SelectedIndex = i;
-                        break;
-                    }
-                }
-            };
-            editor.Show();
+            OpenAnalysisTypeEditor(_currentAnalysisType, null);
         }
 
         /// <summary>新增工况分类</summary>
         private void _btnNewAnalysisType_Click(object sender, EventArgs e)
         {
-            var editor = new AnalysisTypeEditor(null, Channels, _busChannels);
+            OpenAnalysisTypeEditor(null, null);
+        }
+
+        /// <summary>
+        /// 打开工况编辑器(统一入口:工具栏编辑/新增、管理对话框共用)。
+        /// type=null表示新建;groupForNew=新建时归入的分组(null则用当前选中工况的分组)。
+        /// </summary>
+        internal void OpenAnalysisTypeEditor(AnalysisType type, string groupForNew)
+        {
+            var editor = new AnalysisTypeEditor(type, Channels, _busChannels);
+            string oldName = type?.Name;          // null=新建
+            string oldGroup = type?.Group ?? "";  // 编辑时保留原分组
+            // 一键计算前:确保配置中的信号都有数据通道(绘图区外的信号补建隐藏通道并补采)
             editor.EnsureSignalsRequested += (s2, e2) => EnsureReportSignalChannels(editor.BuildAnalysisType());
-            string oldName = null;  // 连续保存时跟踪上次保存名,改名后删除旧文件
             editor.Saved += (s, newType) =>
             {
-                SaveAnalysisTypeJson(newType, oldName);
-                oldName = newType.Name;
+                // 分组:编辑保留原分组;新建归入指定分组(未指定则用当前选中工况的分组)
+                newType.Group = type != null ? oldGroup
+                    : (groupForNew ?? _currentAnalysisType?.Group ?? "");
+                SaveAnalysisTypeJson(newType, oldName, oldGroup);
+                oldName = newType.Name;   // 编辑器不再关闭,连续保存时以上次名为旧名,改名不留孤儿文件
+                oldGroup = newType.Group;
                 EnsureReportSignalChannels(newType);
-                RefreshAnalysisTypeList();
+                ReloadAnalysisTypes(newType.Name, true);
+                _statusLabel.Text = $"状态: 工况分类 \"{newType.Name}\" 已保存";
+                _statusLabel.ForeColor = Color.Green;
             };
             editor.Show();
         }
@@ -469,7 +547,8 @@ namespace PCAN_Client
         /// <summary>保存当前选中的工况分类(不打开编辑器):快照当前绘图区信号列表并写回JSON</summary>
         private void _btnSaveAnalysisType_Click(object sender, EventArgs e)
         {
-            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            var currentType = _currentAnalysisType;
+            if (currentType == null)
             {
                 MessageBox.Show("请先选择要保存的工况分类", "提示");
                 return;
@@ -494,17 +573,8 @@ namespace PCAN_Client
                 });
             }
 
-            SaveAnalysisTypeJson(currentType, null);  // 名称未变,无需删旧文件
-            RefreshAnalysisTypeList();
-            // 重新选中刚保存的工况(刷新后下拉项已重建)
-            for (int i = 0; i < _cmbAnalysisType.Items.Count; i++)
-            {
-                if ((_cmbAnalysisType.Items[i] as AnalysisType)?.Name == currentType.Name)
-                {
-                    _cmbAnalysisType.SelectedIndex = i;
-                    break;
-                }
-            }
+            SaveAnalysisTypeJson(currentType, null);  // 名称/分组未变,无需删旧文件
+            ReloadAnalysisTypes(currentType.Name, true);
             _statusLabel.Text = $"状态: 工况分类 \"{currentType.Name}\" 已保存";
             _statusLabel.ForeColor = Color.Green;
         }
@@ -512,7 +582,8 @@ namespace PCAN_Client
         /// <summary>删除当前选中的工况分类</summary>
         private void _btnDeleteAnalysisType_Click(object sender, EventArgs e)
         {
-            if (!(_cmbAnalysisType.SelectedItem is AnalysisType currentType))
+            var currentType = _currentAnalysisType;
+            if (currentType == null)
             {
                 MessageBox.Show("请先选择要删除的工况分类", "提示");
                 return;
@@ -521,25 +592,49 @@ namespace PCAN_Client
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
                 return;
 
-            // 删除JSON文件
-            string jsonPath = Path.Combine(_templatesDir, currentType.Name + ".json");
+            // 删除JSON文件(按分组定位),分组目录空则一并删除
+            string dir = string.IsNullOrEmpty(currentType.Group)
+                ? _templatesDir : Path.Combine(_templatesDir, currentType.Group);
+            string jsonPath = Path.Combine(dir, currentType.Name + ".json");
             try { if (File.Exists(jsonPath)) File.Delete(jsonPath); } catch { }
+            CleanupEmptyGroupDir(currentType.Group);
 
-            // 刷新下拉
-            RefreshAnalysisTypeList();
+            // 刷新列表并应用新的默认选中
+            ReloadAnalysisTypes(null, true);
         }
 
-        /// <summary>将AnalysisType保存为JSON文件</summary>
-        private void SaveAnalysisTypeJson(AnalysisType type, string oldName)
+        /// <summary>分组目录空则删除该目录</summary>
+        private void CleanupEmptyGroupDir(string group)
         {
-            if (!Directory.Exists(_templatesDir))
-                Directory.CreateDirectory(_templatesDir);
-
-            // 如果改了名字，删除旧文件
-            if (!string.IsNullOrEmpty(oldName) && oldName != type.Name)
+            if (string.IsNullOrEmpty(group)) return;
+            try
             {
-                string oldPath = Path.Combine(_templatesDir, oldName + ".json");
+                string dir = Path.Combine(_templatesDir, group);
+                if (Directory.Exists(dir) && Directory.GetFiles(dir).Length == 0
+                    && Directory.GetDirectories(dir).Length == 0)
+                    Directory.Delete(dir);
+            }
+            catch { }
+        }
+
+        /// <summary>将AnalysisType保存为JSON文件(路径含分组:templates/<分组>/<工况名>.json)</summary>
+        private void SaveAnalysisTypeJson(AnalysisType type, string oldName, string oldGroup = null)
+        {
+            string dir = string.IsNullOrEmpty(type.Group)
+                ? _templatesDir : Path.Combine(_templatesDir, type.Group);
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            // 改名或改组:删除旧位置文件
+            bool renamed = !string.IsNullOrEmpty(oldName) && oldName != type.Name;
+            bool regrouped = oldGroup != null && oldGroup != (type.Group ?? "");
+            if (renamed || regrouped)
+            {
+                string oldDir = string.IsNullOrEmpty(oldGroup)
+                    ? _templatesDir : Path.Combine(_templatesDir, oldGroup);
+                string oldPath = Path.Combine(oldDir, oldName + ".json");
                 try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { }
+                if (oldGroup != null) CleanupEmptyGroupDir(oldGroup);
             }
 
             // 保存当前CAN通道配置
@@ -556,20 +651,9 @@ namespace PCAN_Client
                 type.BusChannels = null;
             }
 
-            string jsonPath = Path.Combine(_templatesDir, type.Name + ".json");
+            string jsonPath = Path.Combine(dir, type.Name + ".json");
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(type, Newtonsoft.Json.Formatting.Indented);
             File.WriteAllText(jsonPath, json, System.Text.Encoding.UTF8);
-        }
-
-        /// <summary>重新加载工况分类列表并刷新下拉</summary>
-        private void RefreshAnalysisTypeList()
-        {
-            ReportAutoService.LoadAnalysisTypes(_templatesDir);
-            _cmbAnalysisType.Items.Clear();
-            foreach (var t in ReportAutoService.AnalysisTypes)
-                _cmbAnalysisType.Items.Add(t);
-            if (_cmbAnalysisType.Items.Count > 0)
-                _cmbAnalysisType.SelectedIndex = 0;
         }
 
         /// <summary>时间输入框按回车时立即缩放到时间范围</summary>

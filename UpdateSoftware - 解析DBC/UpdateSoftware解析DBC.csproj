@@ -332,6 +332,7 @@
     <Compile Include="ReportAuto\ReportPreviewDialog.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="ReportAuto\AnalysisTypeSelector.cs" />
     <Compile Include="Chart\LogFileLoader.cs" />
     <Compile Include="Chart\SignalSelector.cs">
       <SubType>Form</SubType>

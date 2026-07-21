@@ -20,6 +20,9 @@ namespace PCAN_Client.ReportAuto
         public string TextShapeName;              // PPT模板中接收文字内容的Shape名称
         public List<SignalPresetItem> SignalList; // 保存的绘图信号列表（加载时自动恢复）
         public List<BusChannelConfig> BusChannels; // CAN总线通道配置（多通道模式）
+        /// <summary>所属分组名(templates下的一级子文件夹名;""=未分组)。由文件位置决定,不入JSON</summary>
+        [JsonIgnore]
+        public string Group { get; set; } = "";
 
         public override string ToString() { return Name ?? "(未命名)"; }
     }
@@ -117,10 +120,13 @@ namespace PCAN_Client.ReportAuto
                 return result;
             }
 
-            string[] jsonFiles;
+            // 枚举根目录及一级子目录(子目录=分组)
+            var fileList = new List<string>();
             try
             {
-                jsonFiles = Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly);
+                fileList.AddRange(Directory.GetFiles(dir, "*.json", SearchOption.TopDirectoryOnly));
+                foreach (string sub in Directory.GetDirectories(dir))
+                    fileList.AddRange(Directory.GetFiles(sub, "*.json", SearchOption.TopDirectoryOnly));
             }
             catch (Exception ex)
             {
@@ -131,7 +137,7 @@ namespace PCAN_Client.ReportAuto
 
             // 加载成功的类型及其文件修改时间(用于同名去重)
             var loaded = new List<KeyValuePair<AnalysisType, DateTime>>();
-            foreach (string file in jsonFiles)
+            foreach (string file in fileList)
             {
                 try
                 {
@@ -140,6 +146,10 @@ namespace PCAN_Client.ReportAuto
                     AnalysisType type = JsonConvert.DeserializeObject<AnalysisType>(jsonText);
                     if (type != null)
                     {
+                        // 分组由文件位置决定:根目录=""(未分组),一级子目录=子目录名
+                        string fileDir = Path.GetDirectoryName(file);
+                        type.Group = string.Equals(fileDir, dir, StringComparison.OrdinalIgnoreCase)
+                            ? "" : Path.GetFileName(fileDir);
                         loaded.Add(new KeyValuePair<AnalysisType, DateTime>(type, File.GetLastWriteTime(file)));
                     }
                 }

@@ -2818,6 +2818,9 @@ namespace PCAN_Client
         {
             Channels = new List<ChannelData>();
             Main.ChartShowOpenFlag = true;
+            // 初始选中工况在构造函数阶段仅加载未应用,此时Channels已就绪,补应用(恢复信号列表)
+            if (_currentAnalysisType != null)
+                ApplyAnalysisType(_currentAnalysisType);
             RefreshPresetComboBox();
         }
 
