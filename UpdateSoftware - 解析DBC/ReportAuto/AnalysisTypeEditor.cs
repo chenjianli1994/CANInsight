@@ -173,6 +173,7 @@ namespace PCAN_Client.ReportAuto
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "TimeRange", HeaderText = "时间范围", FillWeight = 16, ToolTipText = "格式: 开始时间,结束时间（秒）。留空时使用默认时间范围（灰色显示），输入自定义值可覆盖。" });
             _dgvPlaceholders.Columns.Add(new DataGridViewTextBoxColumn { Name = "Result", HeaderText = "结果预览", ReadOnly = true, FillWeight = 16 });
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 7 });
+            _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "DeleteBtn", HeaderText = "删除", Text = "删除", UseColumnTextForButtonValue = true, FillWeight = 7 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
             _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
             _dgvPlaceholders.CellFormatting += DgvPlaceholders_CellFormatting;
@@ -219,7 +220,7 @@ namespace PCAN_Client.ReportAuto
             Controls.Add(new Label { Text = text, Location = new Point(x, y), AutoSize = true });
         }
 
-        /// <summary>点击信号列/复制列:SignalBtn弹SignalSelector(单选+多通道),CopyBtn复制占位符名</summary>
+        /// <summary>点击信号列/复制列/删除列:SignalBtn弹SignalSelector(单选+多通道),CopyBtn复制占位符名,DeleteBtn删除占位符</summary>
         private void DgvPlaceholders_CellClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
@@ -231,6 +232,28 @@ namespace PCAN_Client.ReportAuto
                 string key = _dgvPlaceholders.Rows[e.RowIndex].Cells["Key"].Value?.ToString();
                 if (!string.IsNullOrEmpty(key))
                     Clipboard.SetText(key);
+                return;
+            }
+
+            // 删除按钮:移除文字中的 {{KEY}}(TextChanged同步会自动删除表中行)并兜底直接删行
+            if (colName == "DeleteBtn")
+            {
+                var delRow = _dgvPlaceholders.Rows[e.RowIndex];
+                string key = delRow.Cells["Key"].Value?.ToString();
+                if (string.IsNullOrEmpty(key))
+                {
+                    _dgvPlaceholders.Rows.Remove(delRow);
+                    return;
+                }
+                if (MessageBox.Show($"确定删除占位符 {{{{{key}}}}} 吗？\n文字内容和配置表中的该占位符都会被移除。",
+                    "删除占位符", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return;
+                // 从文字模板中移除 {{KEY}},触发 RtbText_TextChanged → SyncPlaceholdersFromText 自动删行+刷新预览
+                _rtbText.Text = Regex.Replace(_rtbText.Text, @"\{\{" + Regex.Escape(key) + @"\}\}", "");
+                // 兜底:文字中不存在该占位符时(残留行),直接删行
+                if (FindRowByKey(key) != null)
+                    _dgvPlaceholders.Rows.Remove(delRow);
+                UpdatePreview();
                 return;
             }
 
