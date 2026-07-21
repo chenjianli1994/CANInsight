@@ -1921,7 +1921,9 @@ namespace PCAN_Client
 
         private void Main_Load(object sender, EventArgs e)
         {
-            this.Text = "Main  " + BaseParamter.softVersion;
+            // 应用图标:读取exe内嵌图标(csproj ApplicationIcon)
+            this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
+            this.Text = "CANInsight  " + BaseParamter.softVersion;
             treeView1.Nodes.Add("Nodes");
             treeView1.Nodes.Add("Message");
 

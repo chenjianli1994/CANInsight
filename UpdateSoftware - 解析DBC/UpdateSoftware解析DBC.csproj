@@ -8,7 +8,7 @@
     <ProjectGuid>{074BAC77-B5EA-4BF4-9AC2-B20E5ECEDD8E}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>PCAN_Client</RootNamespace>
-    <AssemblyName>TMS Update-标准版</AssemblyName>
+    <AssemblyName>CANInsight</AssemblyName>
     <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>

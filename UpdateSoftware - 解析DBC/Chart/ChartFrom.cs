@@ -209,6 +209,8 @@ namespace PCAN_Client
         public ChartFrom()
         {
             InitializeComponent();
+            // 应用图标:读取exe内嵌图标(csproj ApplicationIcon)
+            this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             // _chartControl 创建和配置（放在这里避免设计器无法序列化自定义控件）
             this._chartControl = new PCAN_Client.ChartControl();
             this._chartControl.BackColor = System.Drawing.Color.White;
@@ -1054,7 +1056,7 @@ namespace PCAN_Client
             this.Controls.Add(this._topToolStrip);
             this.Name = "ChartFrom";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "曲线绘制工具";
+            this.Text = "CANInsight · 曲线绘制工具";
             this.FormClosing += new System.Windows.Forms.FormClosingEventHandler(this.ChartFrom_FormClosing);
             this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.ChartFrom_FormClosed);
             this.Load += new System.EventHandler(this.ChartFrom_Load);

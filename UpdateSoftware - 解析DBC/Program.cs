@@ -80,7 +80,7 @@ namespace PCAN_Client
                 if (string.IsNullOrEmpty(exeName))
                 {
                     // 如果无法获取可执行文件名，使用默认命名模式
-                    exeName = "TMS Update-标准版";
+                    exeName = "CANInsight";
                     Console.WriteLine($"使用默认文件名: {exeName}");
                 }
 
@@ -152,7 +152,7 @@ namespace PCAN_Client
 
                 if (string.IsNullOrEmpty(exeName))
                 {
-                    exeName = "TMS Update-标准版";
+                    exeName = "CANInsight";
                 }
 
                 string configPath = Path.Combine(Path.GetDirectoryName(exePath), $"{exeName}.exe.config");
