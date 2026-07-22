@@ -56,13 +56,16 @@ namespace PCAN_Client
         private Button _btnLoadFile;
         private Button _btnLoadDbc;
         private ToolStrip _topToolStrip;
+        private ToolStrip _analysisToolStrip;   // 第二行工具栏(信号与报告)
         private ToolStripButton _btnShowMainForm;   // 唤出报文列表窗口(Main)
-        private ToolStripButton _toolLoadProject, _toolLoadDbc, _toolLoadLog, _toolModeToggle, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear, _toolAddSignal;
+        private ToolStripButton _toolLoadDbc, _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear, _toolAddSignal;
+        private ToolStripDropDownButton _toolSignalGroup;   // 信号组(加载/保存)下拉
+        private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
         private ToolStripDropDownButton _toolMore;
         private ToolStripTextBox _txtStartTime;
         private ToolStripTextBox _txtEndTime;
-        private ToolStripTextBox _txtStreamingThreshold;
+        private int _streamingThresholdMB = 150;            // 流式阈值(MB,超过该值走流式读取)
         private ToolStripButton _btnShowData;
         private ToolStripButton _btnChannelFilter;
         internal HashSet<byte> _selectedChannels = null; // null=全部通道
@@ -233,9 +236,12 @@ namespace PCAN_Client
             InitializeChannelGrid();
             // "报文列表"按钮:唤出被隐藏的Main报文窗口(插入工具栏最前)
             _btnShowMainForm = new ToolStripButton("报文列表");
+            _btnShowMainForm.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnShowMainForm.Image = ToolbarIcons.Get("list");
             _btnShowMainForm.ToolTipText = "显示报文列表窗口";
             _btnShowMainForm.Click += _btnShowMainForm_Click;
             _topToolStrip.Items.Insert(0, _btnShowMainForm);
+            _topToolStrip.Items.Insert(1, new ToolStripSeparator());
             // "取消补采"按钮:补采信号数据时显示在状态栏右上(默认隐藏)
             _btnCancelBackfill = new Button
             {
@@ -260,17 +266,14 @@ namespace PCAN_Client
             this._playbackTimer.Tick += _playbackTimer_Tick;
             // 加载已保存的流式阈值
             int savedThreshold = PCAN_Client.Properties.Settings.Default.StreamingThresholdMB;
-            if (savedThreshold >= 50)
-                _txtStreamingThreshold.Text = savedThreshold.ToString();
-            else
-                _txtStreamingThreshold.Text = "150";
+            _streamingThresholdMB = (savedThreshold >= 50) ? savedThreshold : 150;
             this._chartControl.OnAutoScrollChanged += (enabled) =>
             {
                 string text = enabled ? "停止滑动" : "自动滑动";
                 if (InvokeRequired)
-                    Invoke(new Action(() => { _btnAutoScroll.Text = text; _toolAutoScroll.Text = text; }));
+                    Invoke(new Action(() => { _btnAutoScroll.Text = text; _toolAutoScroll.Checked = enabled; }));
                 else
-                    { _btnAutoScroll.Text = text; _toolAutoScroll.Text = text; }
+                    { _btnAutoScroll.Text = text; _toolAutoScroll.Checked = enabled; }
             };
             // 通道颜色变化时，更新通道列表中的颜色显示
             this._chartControl.OnChannelColorChanged += (channel) =>
@@ -317,16 +320,6 @@ namespace PCAN_Client
                     }
                 }
             };
-
-            // 加载上次保存的图表模式（实时/报文）
-            var savedMode = (string)PCAN_Client.Properties.Settings.Default["ChartMode"];
-            if (savedMode == "FileData")
-                RealTimeDataSta = false;
-            else
-                RealTimeDataSta = true;
-
-            // 初始化单选按钮状态
-            _toolModeToggle.Text = RealTimeDataSta ? "实时数据" : "报文数据";
 
             // 加载上次保存的通道筛选设置
             var savedFilter = (string)PCAN_Client.Properties.Settings.Default["ChartChannelFilter"];
@@ -384,7 +377,15 @@ namespace PCAN_Client
                         _streamingFilePath = _logFilePaths[0]; // 保留兼容性
                 }
             }
-            
+
+            // 加载上次保存的图表模式（实时/报文）:报文模式走完整切换,保证状态栏/模式指示器/内部标志一致
+            // 注意必须放在日志路径恢复之后,否则 _isFileMode 判断不到已勾选的报文文件
+            var savedMode = (string)PCAN_Client.Properties.Settings.Default["ChartMode"];
+            if (savedMode == "FileData")
+                SwitchToFileModeInternal();
+            else
+                RealTimeDataSta = true;
+
             if (RealTimeDataSta)
             {
                 _radioRealTime.Checked = true;
@@ -418,10 +419,11 @@ namespace PCAN_Client
             this._btnLoadDbc = new System.Windows.Forms.Button();
             this._btnLoadFile = new System.Windows.Forms.Button();
             this._topToolStrip = new System.Windows.Forms.ToolStrip();
-            this._toolLoadProject = new System.Windows.Forms.ToolStripButton();
+            this._analysisToolStrip = new System.Windows.Forms.ToolStrip();
+            this._toolSignalGroup = new System.Windows.Forms.ToolStripDropDownButton();
             this._toolLoadDbc = new System.Windows.Forms.ToolStripButton();
             this._toolLoadLog = new System.Windows.Forms.ToolStripButton();
-            this._toolModeToggle = new System.Windows.Forms.ToolStripButton();
+            this._toolModeToggle = new System.Windows.Forms.ToolStripDropDownButton();
             this._toolStart = new System.Windows.Forms.ToolStripButton();
             this._toolStop = new System.Windows.Forms.ToolStripButton();
             this._toolSpeedComboBox = new System.Windows.Forms.ToolStripComboBox();
@@ -435,7 +437,6 @@ namespace PCAN_Client
             this._btnShowData = new System.Windows.Forms.ToolStripButton();
             this._btnChannelFilter = new System.Windows.Forms.ToolStripButton();
             this._btnBusConfig = new System.Windows.Forms.ToolStripButton();
-            this._txtStreamingThreshold = new System.Windows.Forms.ToolStripTextBox();
             this._btnSaveBlf = new System.Windows.Forms.Button();
             this._progressBar = new System.Windows.Forms.ProgressBar();
             this._statusLabel = new System.Windows.Forms.Label();
@@ -460,6 +461,7 @@ namespace PCAN_Client
             this._measurementTitleLabel = new System.Windows.Forms.Label();
             this._controlGroup.SuspendLayout();
             this._topToolStrip.SuspendLayout();
+            this._analysisToolStrip.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this._channelGrid)).BeginInit();
             this._channelContextMenu.SuspendLayout();
             this.panel.SuspendLayout();
@@ -643,48 +645,66 @@ namespace PCAN_Client
             this._btnLoadFile.Text = "加载文件...";
             this._btnLoadFile.Click += new System.EventHandler(this._btnLoadFile_Click);
             // 
-            // _topToolStrip
-            // 
+            // _topToolStrip (行1: 数据与采集)
+            //
             this._topToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this._topToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
             this._topToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this._toolLoadProject,
             this._toolLoadDbc,
-            this._btnBusConfig,
             this._toolLoadLog,
+            this._btnBusConfig,
+            this._toolSignalGroup,
+            new System.Windows.Forms.ToolStripSeparator(),
             this._toolModeToggle,
             this._toolStart,
             this._toolStop,
             this._toolSpeedComboBox,
+            new System.Windows.Forms.ToolStripSeparator(),
             this._toolShowAll,
             this._toolAutoScroll,
             this._toolClear,
-            this._toolAddSignal,
-            this._toolMore,
-            this._txtStartTime,
-            this._txtEndTime,
-            this._btnShowData,
-            this._btnChannelFilter,
-            this._txtStreamingThreshold});
+            new System.Windows.Forms.ToolStripSeparator(),
+            this._toolMore});
             this._topToolStrip.Location = new System.Drawing.Point(0, 0);
             this._topToolStrip.Name = "_topToolStrip";
             this._topToolStrip.Padding = new System.Windows.Forms.Padding(8, 6, 8, 6);
             this._topToolStrip.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
             this._topToolStrip.Size = new System.Drawing.Size(1480, 37);
             this._topToolStrip.TabIndex = 1;
-            // 
-            // _toolLoadProject
-            // 
-            this._toolLoadProject.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
-            this._toolLoadProject.Name = "_toolLoadProject";
-            this._toolLoadProject.Size = new System.Drawing.Size(72, 22);
-            this._toolLoadProject.Text = "加载信号组";
-            this._toolLoadProject.ToolTipText = "加载已保存的信号组";
-            this._toolLoadProject.Click += new System.EventHandler(this._btnLoadPreset_Click);
-            // 
+            //
+            // _analysisToolStrip (行2: 信号与报告; 工况/报告组由 InitReportToolbar 追加)
+            //
+            this._analysisToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
+            this._analysisToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
+            this._analysisToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            this._toolAddSignal,
+            this._btnChannelFilter,
+            new System.Windows.Forms.ToolStripSeparator(),
+            new System.Windows.Forms.ToolStripLabel("区间:"),
+            this._txtStartTime,
+            new System.Windows.Forms.ToolStripLabel("~"),
+            this._txtEndTime,
+            this._btnShowData});
+            this._analysisToolStrip.Location = new System.Drawing.Point(0, 37);
+            this._analysisToolStrip.Name = "_analysisToolStrip";
+            this._analysisToolStrip.Padding = new System.Windows.Forms.Padding(8, 4, 8, 4);
+            this._analysisToolStrip.RenderMode = System.Windows.Forms.ToolStripRenderMode.System;
+            this._analysisToolStrip.Size = new System.Drawing.Size(1480, 35);
+            this._analysisToolStrip.TabIndex = 2;
+            //
+            // _toolSignalGroup
+            //
+            this._toolSignalGroup.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolSignalGroup.Image = ToolbarIcons.Get("bookmark");
+            this._toolSignalGroup.Name = "_toolSignalGroup";
+            this._toolSignalGroup.Size = new System.Drawing.Size(72, 22);
+            this._toolSignalGroup.Text = "信号组";
+            this._toolSignalGroup.ToolTipText = "加载/保存信号组";
+            //
             // _toolLoadDbc
-            // 
-            this._toolLoadDbc.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolLoadDbc.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolLoadDbc.Image = ToolbarIcons.Get("dbc");
             this._toolLoadDbc.Name = "_toolLoadDbc";
             this._toolLoadDbc.Size = new System.Drawing.Size(61, 22);
             this._toolLoadDbc.Text = "加载DBC";
@@ -693,7 +713,8 @@ namespace PCAN_Client
             //
             // _btnBusConfig
             //
-            this._btnBusConfig.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            this._btnBusConfig.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._btnBusConfig.Image = ToolbarIcons.Get("gear");
             this._btnBusConfig.Name = "_btnBusConfig";
             this._btnBusConfig.Size = new System.Drawing.Size(72, 22);
             this._btnBusConfig.Text = "通道配置";
@@ -701,134 +722,138 @@ namespace PCAN_Client
             this._btnBusConfig.Click += new System.EventHandler(this._btnBusConfig_Click);
             //
             // _toolLoadLog
-            // 
-            this._toolLoadLog.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolLoadLog.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolLoadLog.Image = ToolbarIcons.Get("folder");
             this._toolLoadLog.Name = "_toolLoadLog";
             this._toolLoadLog.Size = new System.Drawing.Size(60, 22);
             this._toolLoadLog.Text = "加载报文";
             this._toolLoadLog.ToolTipText = "加载BLF/BIN/ASC文件";
             this._toolLoadLog.Click += new System.EventHandler(this._btnLoadFile_Click);
-            // 
+            //
             // _toolModeToggle
-            // 
-            this._toolModeToggle.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolModeToggle.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolModeToggle.Image = ToolbarIcons.Get("swap");
             this._toolModeToggle.Name = "_toolModeToggle";
             this._toolModeToggle.Size = new System.Drawing.Size(60, 22);
             this._toolModeToggle.Text = "实时数据";
-            this._toolModeToggle.Click += new System.EventHandler(this._btnModeToggle_Click);
-            // 
+            this._toolModeToggle.ToolTipText = "选择数据来源(实时采集/报文回放)";
+            //
             // _toolStart
-            // 
-            this._toolStart.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolStart.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolStart.Image = ToolbarIcons.Get("play");
             this._toolStart.Name = "_toolStart";
             this._toolStart.Size = new System.Drawing.Size(36, 22);
             this._toolStart.Text = "开始";
             this._toolStart.ToolTipText = "开始播放或绘制";
             this._toolStart.Click += new System.EventHandler(this._btnStart_Click);
-            // 
+            //
             // _toolStop
-            // 
-            this._toolStop.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolStop.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolStop.Image = ToolbarIcons.Get("stop");
             this._toolStop.Name = "_toolStop";
             this._toolStop.Size = new System.Drawing.Size(36, 22);
             this._toolStop.Text = "停止";
             this._toolStop.ToolTipText = "停止播放或绘制";
             this._toolStop.Click += new System.EventHandler(this._btnStop_Click);
-            // 
+            //
             // _toolSpeedComboBox
-            // 
+            //
             this._toolSpeedComboBox.AutoSize = false;
             this._toolSpeedComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             this._toolSpeedComboBox.Name = "_toolSpeedComboBox";
             this._toolSpeedComboBox.Size = new System.Drawing.Size(80, 25);
             this._toolSpeedComboBox.ToolTipText = "播放倍速";
             this._toolSpeedComboBox.SelectedIndexChanged += new System.EventHandler(this._toolSpeedComboBox_SelectedIndexChanged);
-            // 
+            //
             // _toolShowAll
-            // 
-            this._toolShowAll.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolShowAll.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolShowAll.Image = ToolbarIcons.Get("fit");
             this._toolShowAll.Name = "_toolShowAll";
             this._toolShowAll.Size = new System.Drawing.Size(60, 22);
             this._toolShowAll.Text = "全部显示";
             this._toolShowAll.ToolTipText = "显示全部时间范围";
             this._toolShowAll.Click += new System.EventHandler(this._btnShowAll_Click);
-            // 
+            //
             // _toolAutoScroll
-            // 
-            this._toolAutoScroll.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolAutoScroll.CheckOnClick = true;
+            this._toolAutoScroll.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolAutoScroll.Image = ToolbarIcons.Get("scroll");
             this._toolAutoScroll.Name = "_toolAutoScroll";
             this._toolAutoScroll.Size = new System.Drawing.Size(60, 22);
             this._toolAutoScroll.Text = "自动滑动";
-            this._toolAutoScroll.ToolTipText = "切换自动滑动";
+            this._toolAutoScroll.ToolTipText = "切换自动滑动(按下为开启)";
             this._toolAutoScroll.Click += new System.EventHandler(this._btnAutoScroll_Click);
-            // 
+            //
             // _toolClear
-            // 
-            this._toolClear.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolClear.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolClear.Image = ToolbarIcons.Get("clear");
             this._toolClear.Name = "_toolClear";
             this._toolClear.Size = new System.Drawing.Size(36, 22);
             this._toolClear.Text = "清除";
             this._toolClear.ToolTipText = "清除当前曲线数据";
             this._toolClear.Click += new System.EventHandler(this._btnClear_Click);
-            // 
+            //
             // _toolAddSignal
-            // 
-            this._toolAddSignal.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolAddSignal.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolAddSignal.Image = ToolbarIcons.Get("plus");
             this._toolAddSignal.Name = "_toolAddSignal";
             this._toolAddSignal.Size = new System.Drawing.Size(60, 22);
             this._toolAddSignal.Text = "添加信号";
             this._toolAddSignal.ToolTipText = "添加DBC信号";
             this._toolAddSignal.Click += new System.EventHandler(this._btnAddChannel_Click);
-            // 
+            //
             // _toolMore
-            // 
-            this._toolMore.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._toolMore.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._toolMore.Image = ToolbarIcons.Get("dots");
             this._toolMore.Name = "_toolMore";
             this._toolMore.Size = new System.Drawing.Size(45, 22);
             this._toolMore.Text = "更多";
             this._toolMore.ToolTipText = "更多功能入口";
-            // 
+            //
             // _txtStartTime
-            // 
+            //
             this._txtStartTime.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this._txtStartTime.Name = "_txtStartTime";
             this._txtStartTime.Size = new System.Drawing.Size(60, 25);
             this._txtStartTime.Text = "0";
             this._txtStartTime.ToolTipText = "起始时间（秒）";
-            // 
+            //
             // _txtEndTime
-            // 
+            //
             this._txtEndTime.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
             this._txtEndTime.Name = "_txtEndTime";
             this._txtEndTime.Size = new System.Drawing.Size(60, 25);
             this._txtEndTime.Text = "0";
             this._txtEndTime.ToolTipText = "结束时间（秒）";
-            // 
+            //
             // _btnShowData
-            // 
-            this._btnShowData.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._btnShowData.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._btnShowData.Image = ToolbarIcons.Get("chart");
             this._btnShowData.Name = "_btnShowData";
             this._btnShowData.Size = new System.Drawing.Size(60, 22);
             this._btnShowData.Text = "数据显示";
             this._btnShowData.ToolTipText = "显示指定时间范围内的数据";
             this._btnShowData.Click += new System.EventHandler(this._btnShowData_Click);
-            // 
+            //
             // _btnChannelFilter
-            // 
-            this._btnChannelFilter.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Text;
+            //
+            this._btnChannelFilter.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
+            this._btnChannelFilter.Image = ToolbarIcons.Get("filter");
             this._btnChannelFilter.Name = "_btnChannelFilter";
             this._btnChannelFilter.Size = new System.Drawing.Size(60, 22);
             this._btnChannelFilter.Text = "通道筛选";
             this._btnChannelFilter.ToolTipText = "选择要显示的CAN通道（默认全部）";
             this._btnChannelFilter.Click += new System.EventHandler(this._btnChannelFilter_Click);
-            // 
-            // _txtStreamingThreshold
-            // 
-            this._txtStreamingThreshold.Font = new System.Drawing.Font("Microsoft YaHei UI", 9F);
-            this._txtStreamingThreshold.Name = "_txtStreamingThreshold";
-            this._txtStreamingThreshold.Size = new System.Drawing.Size(50, 25);
-            this._txtStreamingThreshold.Text = "150";
-            this._txtStreamingThreshold.ToolTipText = "流式阈值（MB，默认150）";
             // 
             // _btnSaveBlf
             // 
@@ -1073,6 +1098,7 @@ namespace PCAN_Client
             this.AllowDrop = true;
             this.ClientSize = new System.Drawing.Size(1480, 795);
             this.Controls.Add(this.splitContainer);
+            this.Controls.Add(this._analysisToolStrip);
             this.Controls.Add(this._topToolStrip);
             this.Name = "ChartFrom";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
@@ -1086,6 +1112,8 @@ namespace PCAN_Client
             this._controlGroup.PerformLayout();
             this._topToolStrip.ResumeLayout(false);
             this._topToolStrip.PerformLayout();
+            this._analysisToolStrip.ResumeLayout(false);
+            this._analysisToolStrip.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this._channelGrid)).EndInit();
             this._channelContextMenu.ResumeLayout(false);
             this.panel.ResumeLayout(false);
@@ -1107,12 +1135,72 @@ namespace PCAN_Client
                 _toolSpeedComboBox.Items.Add(item);
             }
 
+            // 信号组下拉:加载/保存成对
+            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("加载信号组", null, _btnLoadPreset_Click));
+            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("保存信号组", null, _btnSavePreset_Click));
+
+            // 模式下拉:实时/报文单选,当前项打勾
+            var menuRealtime = new ToolStripMenuItem("实时数据", null, (s, e) => SwitchToRealTimeData());
+            var menuFileData = new ToolStripMenuItem("报文数据", null, (s, e) => SwitchToFileData());
+            menuRealtime.Name = "menuRealtime";
+            menuFileData.Name = "menuFileData";
+            _toolModeToggle.DropDownItems.Add(menuRealtime);
+            _toolModeToggle.DropDownItems.Add(menuFileData);
+
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("保存BLF", null, _btnSaveBlf_Click));
-            _toolMore.DropDownItems.Add(new ToolStripMenuItem("保存信号组", null, _btnSavePreset_Click));
+            _toolMore.DropDownItems.Add(new ToolStripMenuItem("流式阈值设置…", null, _menuStreamingThreshold_Click));
             _toolMore.DropDownItems.Add(new ToolStripSeparator());
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("删除全部", null, _btnRemoveAll_Click));
 
             SyncToolbarStateFromLegacyControls();
+        }
+
+        /// <summary>同步模式下拉的显示文本与勾选状态</summary>
+        private void UpdateModeToggleDisplay()
+        {
+            _toolModeToggle.Text = RealTimeDataSta ? "实时数据" : "报文数据";
+            foreach (ToolStripItem item in _toolModeToggle.DropDownItems)
+            {
+                var menu = item as ToolStripMenuItem;
+                if (menu == null) continue;
+                menu.Checked = RealTimeDataSta ? menu.Name == "menuRealtime" : menu.Name == "menuFileData";
+            }
+        }
+
+        /// <summary>更多→流式阈值设置:弹小对话框修改并持久化(下次加载生效)</summary>
+        private void _menuStreamingThreshold_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new Form())
+            {
+                dlg.Text = "流式阈值设置";
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+                dlg.ClientSize = new Size(280, 100);
+                var lbl = new Label { Text = "报文文件超过该大小时使用流式读取(MB, ≥50):", Left = 12, Top = 14, AutoSize = true };
+                var txt = new TextBox { Text = _streamingThresholdMB.ToString(), Left = 12, Top = 36, Width = 100 };
+                var btnOk = new Button { Text = "确定", DialogResult = DialogResult.OK, Left = 118, Top = 64, Width = 70 };
+                var btnCancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Left = 198, Top = 64, Width = 70 };
+                dlg.Controls.AddRange(new Control[] { lbl, txt, btnOk, btnCancel });
+                dlg.AcceptButton = btnOk;
+                dlg.CancelButton = btnCancel;
+                if (dlg.ShowDialog(this) != DialogResult.OK)
+                    return;
+                int val;
+                if (int.TryParse(txt.Text, out val) && val >= 50)
+                {
+                    _streamingThresholdMB = val;
+                    PCAN_Client.Properties.Settings.Default.StreamingThresholdMB = val;
+                    PCAN_Client.Properties.Settings.Default.Save();
+                    _statusLabel.Text = $"状态: 流式阈值已设置为 {val} MB (下次加载生效)";
+                    _statusLabel.ForeColor = Color.Green;
+                }
+                else
+                {
+                    MessageBox.Show("请输入 ≥50 的整数", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
         }
 
         private void SyncToolbarStateFromLegacyControls()
@@ -1128,10 +1216,13 @@ namespace PCAN_Client
             _toolShowAll.Enabled = _btnShowAll.Enabled;
             _toolLoadDbc.Enabled = _btnLoadDbc.Enabled;
             _toolLoadLog.Enabled = _btnLoadFile.Enabled;
-            _toolLoadProject.Enabled = true;
+            _toolSignalGroup.Enabled = true;
             _toolAddSignal.Enabled = _btnAddChannel.Enabled;
             _toolAutoScroll.Enabled = _btnAutoScroll.Enabled;
-            _toolAutoScroll.Text = _btnAutoScroll.Text;
+            // 自动滑动:Checked 反映实际开关状态(按钮文本固定为"自动滑动")
+            _toolAutoScroll.Checked = _chartControl != null && _chartControl.IsAutoScrollEnabled();
+            // 开始/停止的 Enabled 互斥即运行状态反馈(图标绿/红语义色辅助)
+            UpdateModeToggleDisplay();
             _speedComboBox.Enabled = _btnStart.Enabled && !_isLoadingFile;
             _toolSpeedComboBox.Enabled = _btnStart.Enabled && !_isLoadingFile;
 
@@ -1496,20 +1587,6 @@ namespace PCAN_Client
         {
             if (_radioFileData.Checked && RealTimeDataSta)
                 SwitchToFileData();
-        }
-
-        private void _btnModeToggle_Click(object sender, EventArgs e)
-        {
-            if (RealTimeDataSta)
-            {
-                SwitchToFileData();
-                _toolModeToggle.Text = "报文数据";
-            }
-            else
-            {
-                SwitchToRealTimeData();
-                _toolModeToggle.Text = "实时数据";
-            }
         }
 
         private void SwitchToRealTimeData()
@@ -2686,13 +2763,11 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 获取流式阈值的有效值（MB），无效返回默认150
+        /// 获取流式阈值的有效值（MB）
         /// </summary>
         private int GetStreamingThresholdMB()
         {
-            if (int.TryParse(_txtStreamingThreshold.Text, out int val) && val >= 50)
-                return val;
-            return 150;
+            return _streamingThresholdMB;
         }
 
         /// <summary>
@@ -2788,9 +2863,8 @@ namespace PCAN_Client
         {
             bool enabled = !_chartControl.IsAutoScrollEnabled();
             _chartControl.SetAutoScroll(enabled);
-            string text = enabled ? "停止滑动" : "自动滑动";
-            _btnAutoScroll.Text = text;
-            _toolAutoScroll.Text = text;
+            // SetAutoScroll 触发 OnAutoScrollChanged,统一在其中同步 Checked
+            _btnAutoScroll.Text = enabled ? "停止滑动" : "自动滑动";
         }
 
         private void _btnAddChannel_Click(object sender, EventArgs e)
@@ -3782,6 +3856,11 @@ namespace PCAN_Client
                 : "状态: 已停止 (实时模式)";
             _statusLabel.ForeColor = Color.Red;
             _toolModeToggle.Text = "实时数据";
+            UpdateModeToggleDisplay();
+            // 左下角模式指示器与当前模式保持一致
+            _playbackModeText = "实时数据";
+            _playbackModeColor = Color.Gray;
+            UpdateModeIndicator();
             // 切回实时数据模式，恢复VersionCheck自动重连
             Main.RestartConnectFlag = true;
 
@@ -3813,25 +3892,35 @@ namespace PCAN_Client
             }
             _playbackTimer.Stop();
 
-            // 判断是否有已加载的文件数据
-            _isFileMode = _rawMessages != null && _rawMessages.Count > 0;
+            // 判断是否有可用的文件数据:内存已加载,或已勾选报文路径(播放时走流式/边读边缓存)
+            int loadedCount = _rawMessages != null ? _rawMessages.Count : 0;
+            bool hasLogFiles = _logFilePaths != null && _logFilePaths.Count > 0;
+            _isFileMode = loadedCount > 0 || hasLogFiles;
 
-            // 清空通道显示数据
+            // 清空通道显示数据(构造函数恢复模式时 Channels 尚未创建,需判空)
             lock (_lockObj)
             {
-                foreach (var channel in Channels)
-                    channel.Clear();
+                if (Channels != null)
+                    foreach (var channel in Channels)
+                        channel.Clear();
             }
             _currentTime = 0;
 
             // 更新UI状态
             _btnStart.Enabled = true;
             _btnStop.Enabled = false;
-            _statusLabel.Text = _isFileMode
-                ? $"状态: 已停止 (报文模式 — 已加载{_rawMessages.Count}条报文，可点击开始播放)"
-                : "状态: 已停止 (报文模式 — 请加载文件)";
+            _statusLabel.Text = !_isFileMode
+                ? "状态: 已停止 (报文模式 — 请加载文件)"
+                : (loadedCount > 0
+                    ? $"状态: 已停止 (报文模式 — 已加载{loadedCount}条报文，可点击开始播放)"
+                    : $"状态: 已停止 (报文模式 — 已勾选{_logFilePaths.Count}个报文文件，可点击开始播放)");
             _statusLabel.ForeColor = Color.Red;
             _toolModeToggle.Text = "报文数据";
+            UpdateModeToggleDisplay();
+            // 左下角模式指示器与当前模式保持一致(播放时会覆盖为流式/内存)
+            _playbackModeText = "报文数据";
+            _playbackModeColor = Color.Gray;
+            UpdateModeIndicator();
             _chartControl.Invalidate();
         }
 

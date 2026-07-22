@@ -22,10 +22,7 @@ namespace PCAN_Client
         private ToolStripDropDown _pickerDropDown;          // 工况快捷选择下拉面板
         // 已打开的工况编辑器(单例管理:同一工况不重复开,避免保存互相覆盖/改名产生孤儿文件)
         private readonly List<AnalysisTypeEditor> _openEditors = new List<AnalysisTypeEditor>();
-        private ToolStripButton _btnEditAnalysisType;
-        private ToolStripButton _btnNewAnalysisType;
-        private ToolStripButton _btnDeleteAnalysisType;
-        private ToolStripButton _btnSaveAnalysisType;
+        private ToolStripDropDownButton _toolAnalysisManage;   // 工况管理下拉(编辑/新增/删除/保存)
         private ToolStripTextBox _txtReportStart;
         private ToolStripTextBox _txtReportEnd;
         private ToolStripButton _btnAddReportPage;
@@ -40,10 +37,12 @@ namespace PCAN_Client
         /// <summary>报告自动化用:暴露信号列表控件(供ReportAutoService截图)</summary>
         internal DataGridView SignalGridView { get { return _channelGrid; } }
 
-        /// <summary>初始化报告自动化工具栏:下拉+时间输入框+两按钮,加载工况分类与模板路径</summary>
+        /// <summary>初始化报告自动化工具栏(行2 _analysisToolStrip):工况组+报告时间组+报告操作组</summary>
         private void InitReportToolbar()
         {
             _btnAnalysisTypeSelector = new ToolStripButton("(未选择) ▾");
+            _btnAnalysisTypeSelector.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnAnalysisTypeSelector.Image = ToolbarIcons.Get("tag");
             _btnAnalysisTypeSelector.ToolTipText = "选择工况分类(支持分组管理)";
             _btnAnalysisTypeSelector.Click += _btnAnalysisTypeSelector_Click;
 
@@ -62,53 +61,55 @@ namespace PCAN_Client
             _txtReportEnd.TextBox.Validated += _txtReportTime_Validated;
 
             _btnUseViewRange = new ToolStripButton("取视图范围");
+            _btnUseViewRange.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnUseViewRange.Image = ToolbarIcons.Get("target");
             _btnUseViewRange.ToolTipText = "把图表当前可视时间范围填入报告起止时间(先框选缩放到目标区间再点)";
             _btnUseViewRange.Click += (s, e) => UseViewRangeForReport();
 
-            _btnEditAnalysisType = new ToolStripButton("编辑");
-            _btnEditAnalysisType.ToolTipText = "编辑当前选中的工况分类";
-            _btnEditAnalysisType.Click += _btnEditAnalysisType_Click;
-
-            _btnNewAnalysisType = new ToolStripButton("新增");
-            _btnNewAnalysisType.ToolTipText = "新增一个工况分类";
-            _btnNewAnalysisType.Click += _btnNewAnalysisType_Click;
-
-            _btnDeleteAnalysisType = new ToolStripButton("删除");
-            _btnDeleteAnalysisType.ToolTipText = "删除当前选中的工况分类";
-            _btnDeleteAnalysisType.Click += _btnDeleteAnalysisType_Click;
-
-            _btnSaveAnalysisType = new ToolStripButton("保存");
-            _btnSaveAnalysisType.ToolTipText = "直接保存当前工况分类(不打开编辑器)";
-            _btnSaveAnalysisType.Click += _btnSaveAnalysisType_Click;
+            // 工况管理收敛为一个下拉:编辑/新增/删除/保存
+            _toolAnalysisManage = new ToolStripDropDownButton("管理");
+            _toolAnalysisManage.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _toolAnalysisManage.Image = ToolbarIcons.Get("wrench");
+            _toolAnalysisManage.ToolTipText = "工况分类管理(编辑/新增/删除/保存)";
+            var menuEdit = new ToolStripMenuItem("编辑当前工况", null, _btnEditAnalysisType_Click);
+            var menuNew = new ToolStripMenuItem("新增工况", null, _btnNewAnalysisType_Click);
+            var menuDelete = new ToolStripMenuItem("删除当前工况", null, _btnDeleteAnalysisType_Click);
+            var menuSave = new ToolStripMenuItem("保存当前工况", null, _btnSaveAnalysisType_Click);
+            _toolAnalysisManage.DropDownItems.AddRange(new ToolStripItem[] { menuEdit, menuNew, menuDelete, menuSave });
 
             _btnAddReportPage = new ToolStripButton("添加到报告");
+            _btnAddReportPage.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnAddReportPage.Image = ToolbarIcons.Get("pageplus");
             _btnAddReportPage.ToolTipText = "按当前时间范围和工况分类,追加一页到报告";
             _btnAddReportPage.Click += _btnAddReportPage_Click;
 
             _btnPreviewReport = new ToolStripButton("预览报告");
+            _btnPreviewReport.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnPreviewReport.Image = ToolbarIcons.Get("eye");
             _btnPreviewReport.ToolTipText = "预览当前报告页,可拖动调整顺序/删除页";
             _btnPreviewReport.Click += _btnPreviewReport_Click;
 
             _btnSaveReport = new ToolStripButton("保存报告");
+            _btnSaveReport.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnSaveReport.Image = ToolbarIcons.Get("save");
             _btnSaveReport.ToolTipText = "保存累积的报告为PPT文件";
             _btnSaveReport.Click += _btnSaveReport_Click;
 
-            // 追加到现有工具栏末尾(不改动原AddRange数组)
-            _topToolStrip.Items.Add(new ToolStripSeparator());
-            _topToolStrip.Items.Add(new ToolStripLabel("工况:"));
-            _topToolStrip.Items.Add(_btnAnalysisTypeSelector);
-            _topToolStrip.Items.Add(_btnEditAnalysisType);
-            _topToolStrip.Items.Add(_btnNewAnalysisType);
-            _topToolStrip.Items.Add(_btnDeleteAnalysisType);
-            _topToolStrip.Items.Add(_btnSaveAnalysisType);
-            _topToolStrip.Items.Add(new ToolStripLabel("时间:"));
-            _topToolStrip.Items.Add(_txtReportStart);
-            _topToolStrip.Items.Add(new ToolStripLabel("-"));
-            _topToolStrip.Items.Add(_txtReportEnd);
-            _topToolStrip.Items.Add(_btnUseViewRange);
-            _topToolStrip.Items.Add(_btnAddReportPage);
-            _topToolStrip.Items.Add(_btnPreviewReport);
-            _topToolStrip.Items.Add(_btnSaveReport);
+            // 追加到行2工具栏(信号组之后):工况组+报告组
+            _analysisToolStrip.Items.Add(new ToolStripSeparator());
+            _analysisToolStrip.Items.Add(new ToolStripLabel("工况:"));
+            _analysisToolStrip.Items.Add(_btnAnalysisTypeSelector);
+            _analysisToolStrip.Items.Add(_toolAnalysisManage);
+            _analysisToolStrip.Items.Add(new ToolStripSeparator());
+            _analysisToolStrip.Items.Add(new ToolStripLabel("时间:"));
+            _analysisToolStrip.Items.Add(_txtReportStart);
+            _analysisToolStrip.Items.Add(new ToolStripLabel("-"));
+            _analysisToolStrip.Items.Add(_txtReportEnd);
+            _analysisToolStrip.Items.Add(_btnUseViewRange);
+            _analysisToolStrip.Items.Add(new ToolStripSeparator());
+            _analysisToolStrip.Items.Add(_btnAddReportPage);
+            _analysisToolStrip.Items.Add(_btnPreviewReport);
+            _analysisToolStrip.Items.Add(_btnSaveReport);
 
             // 加载分析项目类型JSON(含一级子目录分组)
             // 注意:此时Channels尚未初始化(ChartFrom_Load才创建),只加载列表,初始应用推迟到Load
@@ -486,7 +487,12 @@ namespace PCAN_Client
         /// </summary>
         private void EnsureReportSignalChannels(AnalysisType type, Action onComplete = null)
         {
-            if (type?.Signals == null || type.Signals.Count == 0) return;
+            // 工况未配置信号时无需补采,但仍要回调,否则调用方按钮会永久禁用
+            if (type?.Signals == null || type.Signals.Count == 0)
+            {
+                onComplete?.Invoke();
+                return;
+            }
 
             var added = new List<ChannelData>();
             var seen = new HashSet<string>();  // 同一报文+信号只建一次

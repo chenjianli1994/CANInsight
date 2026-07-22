@@ -301,6 +301,7 @@ namespace PCAN_Client.ReportAuto
             if (_rangeWarningPanel == null) return;
             _rangeWarningPanel.Visible = false;
             if (_editingType == null || string.IsNullOrEmpty(_editingType.DataRangeAtSave)) return;
+            if (_dgvPlaceholders.Rows.Count == 0) return;  // 没有占位符行,无可裁剪对象,不报警
             if (!SignalStatsCalculator.TryParseTimeRange(_editingType.DataRangeAtSave, out double s0, out double s1)) return;
 
             var (g0, g1) = GetGlobalTimeRange();

@@ -318,6 +318,7 @@
     <Compile Include="Chart\ChartFrom.ReportAuto.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Chart\ToolbarIcons.cs" />
     <Compile Include="ReportAuto\ReportTemplate.cs" />
     <Compile Include="ReportAuto\ChartCapturer.cs" />
     <Compile Include="ReportAuto\SignalStatsCalculator.cs" />
