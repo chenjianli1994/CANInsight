@@ -26,6 +26,8 @@ namespace PCAN_Client.ReportAuto
         private readonly List<CanBusChannel> _busChannels;
         // 临时抑制TextChange同步,避免程序化插入文本时清空已有绑定
         private bool _suppressTextSync = false;
+        // 语法高亮执行中标记(避免SelectionChanged误触发定位)
+        private bool _highlighting = false;
         // 暂存从文本中移除的占位符绑定(剪切-粘贴瞬态:同名占位符再次出现时自动恢复)
         private readonly Dictionary<string, DetachedBinding> _detachedBindings = new Dictionary<string, DetachedBinding>();
 
@@ -107,6 +109,7 @@ namespace PCAN_Client.ReportAuto
             _rtbText = new RichTextBox { Dock = DockStyle.Fill, Font = new Font("Microsoft YaHei UI", 10F), AcceptsTab = true };
             _rtbText.TextChanged += RtbText_TextChanged;
             _rtbText.KeyDown += RtbText_KeyDown;
+            _rtbText.SelectionChanged += RtbText_SelectionChanged;
             panelText.Controls.Add(_rtbText);  // Fill 先添加（后布局）
             // 标题行:标题居左 + 插入按钮居右(合并一行,节省纵向空间)
             var panelTextHeader = new Panel { Dock = DockStyle.Top, Height = 28 };
@@ -164,7 +167,8 @@ namespace PCAN_Client.ReportAuto
             _dgvPlaceholders = new DataGridView();
             _dgvPlaceholders.Dock = DockStyle.Fill;
             _dgvPlaceholders.AllowUserToAddRows = false;
-            _dgvPlaceholders.AllowUserToDeleteRows = true;
+            _dgvPlaceholders.AllowUserToDeleteRows = false;  // Delete键改由KeyDown统一走删除逻辑(连带清理文字)
+            _dgvPlaceholders.ShowCellToolTips = true;        // 截断文本悬停显示全名
             _dgvPlaceholders.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             _dgvPlaceholders.AllowUserToResizeColumns = true;
             _dgvPlaceholders.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
@@ -197,6 +201,18 @@ namespace PCAN_Client.ReportAuto
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
             _dgvPlaceholders.CellValueChanged += DgvPlaceholders_CellValueChanged;
             _dgvPlaceholders.CellFormatting += DgvPlaceholders_CellFormatting;
+            // Delete键删除选中行:与"删除"按钮同一逻辑(连带移除文字中的 {{KEY}},支持多选)
+            _dgvPlaceholders.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Delete)
+                {
+                    e.Handled = true;
+                    var sel = new List<DataGridViewRow>();
+                    foreach (DataGridViewRow r in _dgvPlaceholders.SelectedRows)
+                        sel.Add(r);
+                    DeletePlaceholderRows(sel);
+                }
+            };
             _dgvPlaceholders.ColumnHeadersHeight = 28;
             
             // === 数据范围变化提示条(默认隐藏):配置时范围与当前数据不一致时显示 ===
@@ -335,27 +351,10 @@ namespace PCAN_Client.ReportAuto
                 return;
             }
 
-            // 删除按钮:移除文字中的 {{KEY}}(TextChanged同步会自动删除表中行)并兜底直接删行
+            // 删除按钮:与Delete键同一逻辑
             if (colName == "DeleteBtn")
             {
-                var delRow = _dgvPlaceholders.Rows[e.RowIndex];
-                string key = delRow.Cells["Key"].Value?.ToString();
-                if (string.IsNullOrEmpty(key))
-                {
-                    _dgvPlaceholders.Rows.Remove(delRow);
-                    return;
-                }
-                if (MessageBox.Show($"确定删除占位符 {{{{{key}}}}} 吗？\n文字内容和配置表中的该占位符都会被移除。",
-                    "删除占位符", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-                    return;
-                // 主动删除:清除暂存绑定,避免再次输入同名占位符时旧绑定被恢复
-                _detachedBindings.Remove(key);
-                // 从文字模板中移除 {{KEY}},触发 RtbText_TextChanged → SyncPlaceholdersFromText 自动删行+刷新预览
-                _rtbText.Text = Regex.Replace(_rtbText.Text, @"\{\{" + Regex.Escape(key) + @"\}\}", "");
-                // 兜底:文字中不存在该占位符时(残留行),直接删行
-                if (FindRowByKey(key) != null)
-                    _dgvPlaceholders.Rows.Remove(delRow);
-                UpdatePreview();
+                DeletePlaceholderRows(new List<DataGridViewRow> { _dgvPlaceholders.Rows[e.RowIndex] });
                 return;
             }
 
@@ -403,6 +402,42 @@ namespace PCAN_Client.ReportAuto
                     UpdatePreview();
                 }
             }
+        }
+
+        /// <summary>删除指定占位符行("删除"按钮/Delete键共用,支持多选):确认后连带移除文字中的 {{KEY}},同步链路自动删行</summary>
+        private void DeletePlaceholderRows(List<DataGridViewRow> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+
+            var keys = new List<string>();
+            foreach (var r in rows)
+            {
+                string k = r.Cells["Key"].Value?.ToString();
+                if (!string.IsNullOrEmpty(k)) keys.Add(k);
+            }
+            if (keys.Count == 0)
+            {
+                foreach (var r in rows) _dgvPlaceholders.Rows.Remove(r);
+                return;
+            }
+
+            string msg = keys.Count == 1
+                ? $"确定删除占位符 {{{{{keys[0]}}}}} 吗？\n文字内容和配置表中的该占位符都会被移除。"
+                : $"确定删除选中的 {keys.Count} 个占位符吗？\n文字内容和配置表中的这些占位符都会被移除。";
+            if (MessageBox.Show(msg, "删除占位符", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            // 主动删除:清除暂存绑定,避免再次输入同名占位符时旧绑定被恢复
+            foreach (var k in keys) _detachedBindings.Remove(k);
+            // 从文字模板中移除 {{KEY}},触发 RtbText_TextChanged → SyncPlaceholdersFromText 自动删行+刷新预览
+            string text = _rtbText.Text;
+            foreach (var k in keys)
+                text = Regex.Replace(text, @"\{\{" + Regex.Escape(k) + @"\}\}", "");
+            _rtbText.Text = text;
+            // 兜底:文字中不存在的残留行,直接删行
+            foreach (var r in rows)
+                if (r.DataGridView != null) _dgvPlaceholders.Rows.Remove(r);
+            UpdatePreview();
         }
 
         /// <summary>根据信号名和计算方式自动生成占位符名</summary>
@@ -470,6 +505,7 @@ namespace PCAN_Client.ReportAuto
                 }
             }
             UpdatePreview();
+            HighlightPlaceholders();  // 初始加载后刷新占位符高亮
         }
 
         private static string MetricToDisplay(string metric)
@@ -501,6 +537,60 @@ namespace PCAN_Client.ReportAuto
             if (_suppressTextSync) return;  // 程序化插入时不同步,避免清空已有绑定
             SyncPlaceholdersFromText();
             UpdatePreview();
+            HighlightPlaceholders();
+        }
+
+        /// <summary>文字区占位符 {{KEY}} 语法高亮(蓝色加粗,其余恢复默认格式)</summary>
+        private void HighlightPlaceholders()
+        {
+            if (_rtbText == null) return;
+            _highlighting = true;
+            try
+            {
+                int selStart = _rtbText.SelectionStart;
+                int selLen = _rtbText.SelectionLength;
+                // 先全部恢复默认格式,再标占位符
+                _rtbText.SelectAll();
+                _rtbText.SelectionColor = _rtbText.ForeColor;
+                _rtbText.SelectionFont = _rtbText.Font;
+                var boldFont = new Font(_rtbText.Font, FontStyle.Bold);
+                var placeholderColor = Color.FromArgb(0, 102, 204);
+                foreach (Match m in Regex.Matches(_rtbText.Text, @"\{\{\w+\}\}"))
+                {
+                    _rtbText.Select(m.Index, m.Length);
+                    _rtbText.SelectionColor = placeholderColor;
+                    _rtbText.SelectionFont = boldFont;
+                }
+                // 恢复光标,后续输入用默认格式
+                _rtbText.SelectionStart = selStart;
+                _rtbText.SelectionLength = selLen;
+                _rtbText.SelectionColor = _rtbText.ForeColor;
+                _rtbText.SelectionFont = _rtbText.Font;
+            }
+            finally { _highlighting = false; }
+        }
+
+        /// <summary>光标进入 {{KEY}} 时,自动选中右侧配置表对应行并滚动到可见</summary>
+        private void RtbText_SelectionChanged(object sender, EventArgs e)
+        {
+            if (_suppressTextSync || _highlighting || _rtbText.SelectionLength != 0) return;
+            string text = _rtbText.Text;
+            if (string.IsNullOrEmpty(text)) return;
+            int pos = _rtbText.SelectionStart;
+            foreach (Match m in Regex.Matches(text, @"\{\{(\w+)\}\}"))
+            {
+                if (pos >= m.Index && pos <= m.Index + m.Length)
+                {
+                    var row = FindRowByKey(m.Groups[1].Value);
+                    if (row != null)
+                    {
+                        _dgvPlaceholders.ClearSelection();
+                        row.Selected = true;
+                        try { _dgvPlaceholders.FirstDisplayedScrollingRowIndex = row.Index; } catch { }
+                    }
+                    break;
+                }
+            }
         }
 
         /// <summary>Ctrl+V粘贴:若剪贴板内容是已配置的占位符名,自动包裹{{}}</summary>
@@ -824,7 +914,8 @@ namespace PCAN_Client.ReportAuto
                 }
             }
 
-            MessageBox.Show($"计算完成，共处理 {calculatedCount} 个占位符", "一键计算", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // 标题栏反馈计算结果,不打断操作(原弹窗需手动点掉)
+            Text = $"工况分类编辑器 — 已计算 {calculatedCount} 个占位符 " + DateTime.Now.ToString("HH:mm:ss");
         }
 
         /// <summary>点击保存：构建AnalysisType并触发保存事件,不关闭编辑器(可继续编辑后再次保存)</summary>

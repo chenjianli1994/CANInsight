@@ -1,5 +1,6 @@
-// 报告预览对话框:16:9页面示意图卡片列表,支持拖动调整顺序/删除单页
+// 报告预览对话框:16:9页面缩略图卡片列表,支持拖动调整顺序/Ctrl多选批量删除/删除单页
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -17,7 +18,10 @@ namespace PCAN_Client.ReportAuto
 
         private FlowLayoutPanel _flow;
         private Label _lblCount;
+        private Button _btnDeleteSelected;
         private int _insertIndex = -1;   // 拖动悬停时的插入位(-1=无)
+        // Ctrl点选的多选卡片集合(标题栏变深蓝表示选中)
+        private readonly HashSet<Panel> _selectedCards = new HashSet<Panel>();
 
         public ReportPreviewDialog()
         {
@@ -35,7 +39,7 @@ namespace PCAN_Client.ReportAuto
 
             var lblTip = new Label
             {
-                Text = "拖动卡片调整页面顺序，点击卡片右上角 × 删除页面。操作立即生效到当前报告。",
+                Text = "拖动卡片调整顺序，Ctrl+点击多选后批量删除，点卡片右上角 × 删除单页。操作立即生效。",
                 Dock = DockStyle.Top,
                 Height = 24,
                 Font = new Font("Microsoft YaHei UI", 9F),
@@ -65,6 +69,18 @@ namespace PCAN_Client.ReportAuto
                 TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Microsoft YaHei UI", 9F)
             };
+            _btnDeleteSelected = new Button
+            {
+                Text = "删除选中",
+                Dock = DockStyle.Right,
+                Width = 90,
+                Enabled = false,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(200, 90, 70),
+                ForeColor = Color.White
+            };
+            _btnDeleteSelected.FlatAppearance.BorderSize = 0;
+            _btnDeleteSelected.Click += DeleteSelectedCards_Click;
             var btnClose = new Button
             {
                 Text = "关闭",
@@ -77,7 +93,8 @@ namespace PCAN_Client.ReportAuto
             btnClose.FlatAppearance.BorderSize = 0;
             btnClose.Click += (s, e) => Close();
             bottom.Controls.Add(_lblCount);
-            bottom.Controls.Add(btnClose);
+            bottom.Controls.Add(_btnDeleteSelected);  // Right 居中
+            bottom.Controls.Add(btnClose);            // Right 最右(后添加先布局)
 
             // 添加顺序:Fill先,Bottom其次,Top最后(后添加的先布局)
             Controls.Add(_flow);
@@ -85,11 +102,13 @@ namespace PCAN_Client.ReportAuto
             Controls.Add(lblTip);
         }
 
-        /// <summary>按当前报告页列表重建全部卡片</summary>
+        /// <summary>按当前报告页列表重建全部卡片(清空多选状态)</summary>
         private void BuildCards()
         {
             _flow.SuspendLayout();
             _flow.Controls.Clear();
+            _selectedCards.Clear();
+            UpdateDeleteSelectedButton();
             var pages = ReportAutoService.Pages;
             for (int i = 0; i < pages.Count; i++)
                 _flow.Controls.Add(MakeCard(i, pages[i]));
@@ -155,11 +174,16 @@ namespace PCAN_Client.ReportAuto
             card.Controls.Add(timeLbl);
             card.Controls.Add(title);
 
-            // 卡片及其子控件(除×按钮)按下左键均可发起拖动
+            // 卡片及其子控件(除×按钮)按下左键均可发起拖动;Ctrl+左键=切换多选
             MouseEventHandler startDrag = (s, e) =>
             {
-                if (e.Button == MouseButtons.Left)
-                    card.DoDragDrop(new DataObject("ReportPageCard", (int)((Control)s).Tag), DragDropEffects.Move);
+                if (e.Button != MouseButtons.Left) return;
+                if (ModifierKeys == Keys.Control)
+                {
+                    ToggleCardSelected(card, title);
+                    return;
+                }
+                card.DoDragDrop(new DataObject("ReportPageCard", (int)((Control)s).Tag), DragDropEffects.Move);
             };
             card.MouseDown += startDrag;
             title.MouseDown += startDrag;
@@ -217,6 +241,45 @@ namespace PCAN_Client.ReportAuto
                     }
                 }
             }
+        }
+
+        /// <summary>Ctrl+点击切换卡片多选状态(标题栏深蓝=选中)</summary>
+        private void ToggleCardSelected(Panel card, Panel title)
+        {
+            if (_selectedCards.Contains(card))
+            {
+                _selectedCards.Remove(card);
+                title.BackColor = Color.FromArgb(70, 130, 200);
+            }
+            else
+            {
+                _selectedCards.Add(card);
+                title.BackColor = Color.FromArgb(0, 90, 180);
+            }
+            UpdateDeleteSelectedButton();
+        }
+
+        private void UpdateDeleteSelectedButton()
+        {
+            if (_btnDeleteSelected == null) return;
+            _btnDeleteSelected.Enabled = _selectedCards.Count > 0;
+            _btnDeleteSelected.Text = _selectedCards.Count > 0 ? $"删除选中({_selectedCards.Count})" : "删除选中";
+        }
+
+        /// <summary>批量删除选中的卡片(一次确认,按索引倒序删保证正确)</summary>
+        private void DeleteSelectedCards_Click(object sender, EventArgs e)
+        {
+            if (_selectedCards.Count == 0) return;
+            if (MessageBox.Show($"确定删除选中的 {_selectedCards.Count} 页吗？",
+                "删除页面", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+            var indexes = new List<int>();
+            foreach (var card in _selectedCards)
+                if (card.Tag is int idx) indexes.Add(idx);
+            indexes.Sort((a, b) => b.CompareTo(a));  // 倒序删除,索引不移位
+            foreach (int idx in indexes)
+                ReportAutoService.DeletePage(idx);
+            BuildCards();
         }
 
         /// <summary>删除指定页(确认后生效)</summary>
