@@ -896,6 +896,16 @@ namespace PCAN_Client
                     }
                 }
 
+                // Ctrl+左键:优先进入框选缩放(不受X轴选中状态/点击位置影响)
+                if (ModifierKeys == Keys.Control)
+                {
+                    _isZooming = true;
+                    PauseFrameTimer();
+                    _zoomStart = e.Location;
+                    _zoomRect = new Rectangle();
+                    return;
+                }
+
                 ChannelData clickedChannel = GetChannelAtPosition(e.Location);
                 if (clickedChannel != null)
                 {
@@ -919,13 +929,6 @@ namespace PCAN_Client
                     _isDragging = true;
                     PauseFrameTimer();
                     _lastMousePos = e.Location;
-                }
-                else if (ModifierKeys == Keys.Control)
-                {
-                    _isZooming = true;
-                    PauseFrameTimer();
-                    _zoomStart = e.Location;
-                    _zoomRect = new Rectangle();
                 }
                 else
                 {

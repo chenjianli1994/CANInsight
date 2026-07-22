@@ -31,6 +31,7 @@ namespace PCAN_Client
         private ToolStripButton _btnAddReportPage;
         private ToolStripButton _btnSaveReport;
         private ToolStripButton _btnPreviewReport;
+        private ToolStripButton _btnUseViewRange;   // "取视图范围"按钮(把图表可视范围填入报告起止时间)
         private string _templatesDir;   // 工况分类JSON目录路径
 
         /// <summary>报告自动化用:暴露绘图区控件(供ReportAutoService截图)</summary>
@@ -59,6 +60,10 @@ namespace PCAN_Client
             _txtReportEnd.ToolTipText = "报告结束时间(秒,输入后按回车生效)";
             _txtReportEnd.KeyDown += _txtReportTime_KeyDown;
             _txtReportEnd.TextBox.Validated += _txtReportTime_Validated;
+
+            _btnUseViewRange = new ToolStripButton("取视图范围");
+            _btnUseViewRange.ToolTipText = "把图表当前可视时间范围填入报告起止时间(先框选缩放到目标区间再点)";
+            _btnUseViewRange.Click += (s, e) => UseViewRangeForReport();
 
             _btnEditAnalysisType = new ToolStripButton("编辑");
             _btnEditAnalysisType.ToolTipText = "编辑当前选中的工况分类";
@@ -100,6 +105,7 @@ namespace PCAN_Client
             _topToolStrip.Items.Add(_txtReportStart);
             _topToolStrip.Items.Add(new ToolStripLabel("-"));
             _topToolStrip.Items.Add(_txtReportEnd);
+            _topToolStrip.Items.Add(_btnUseViewRange);
             _topToolStrip.Items.Add(_btnAddReportPage);
             _topToolStrip.Items.Add(_btnPreviewReport);
             _topToolStrip.Items.Add(_btnSaveReport);
@@ -745,6 +751,18 @@ namespace PCAN_Client
             string jsonPath = Path.Combine(dir, type.Name + ".json");
             string json = Newtonsoft.Json.JsonConvert.SerializeObject(type, Newtonsoft.Json.Formatting.Indented);
             File.WriteAllText(jsonPath, json, System.Text.Encoding.UTF8);
+        }
+
+        /// <summary>把图表当前可视时间范围填入报告起止时间并生效(先框选缩放到目标区间再点)</summary>
+        private void UseViewRangeForReport()
+        {
+            double t0 = _chartControl.GetCurrentXMin();
+            double t1 = _chartControl.GetCurrentXMax();
+            _txtReportStart.Text = t0.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            _txtReportEnd.Text = t1.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+            ApplyReportTimeRange();
+            _statusLabel.Text = $"状态: 已按视图范围设置报告时间 {t0:0.##}s ~ {t1:0.##}s";
+            _statusLabel.ForeColor = Color.Green;
         }
 
         /// <summary>时间输入框按回车时立即缩放到时间范围</summary>

@@ -319,7 +319,6 @@ namespace PCAN_Client
         private void BtnOk_Click(object sender, EventArgs e)
         {
             AllEntries.Clear();
-            int enabledCount = 0;
 
             foreach (DataGridViewRow row in _dgvFiles.Rows)
             {
@@ -328,18 +327,10 @@ namespace PCAN_Client
                 if (!string.IsNullOrEmpty(filePath))
                 {
                     AllEntries.Add(new LogFileEntry { Path = filePath, Enabled = isEnabled });
-                    if (isEnabled)
-                        enabledCount++;
                 }
             }
 
-            if (enabledCount == 0)
-            {
-                MessageBox.Show("请至少勾选一个报文文件", "提示", 
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
+            // 允许0个勾选/空列表确定:表示清空报文路径,由调用方处理(不加载)
             this.DialogResult = DialogResult.OK;
             this.Close();
         }

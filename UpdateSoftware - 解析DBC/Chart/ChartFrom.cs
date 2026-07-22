@@ -218,6 +218,16 @@ namespace PCAN_Client
             this._chartControl.Name = "_chartControl";
             this._chartControl.TabIndex = 0;
             this.splitContainer.Panel2.Controls.Add(this._chartControl);
+            // 拖拽加载补全:图表区/分隔面板也接受文件拖入(窗体级AllowDrop被子控件遮挡,拖上去不触发)
+            _chartControl.AllowDrop = true;
+            _chartControl.DragEnter += ChartFrom_DragEnter;
+            _chartControl.DragDrop += ChartFrom_DragDrop;
+            splitContainer.Panel1.AllowDrop = true;
+            splitContainer.Panel1.DragEnter += ChartFrom_DragEnter;
+            splitContainer.Panel1.DragDrop += ChartFrom_DragDrop;
+            splitContainer.Panel2.AllowDrop = true;
+            splitContainer.Panel2.DragEnter += ChartFrom_DragEnter;
+            splitContainer.Panel2.DragDrop += ChartFrom_DragDrop;
             InitializeToolbarBindings();
             InitReportToolbar();
             InitializeChannelGrid();
@@ -3884,10 +3894,16 @@ namespace PCAN_Client
                     _logFileEntries = dialog.AllEntries;
                     _logFilePaths = _logFileEntries.Where(entry => entry.Enabled).Select(entry => entry.Path).ToList();
                     SaveLogFilePaths();
-                    
+
                     if (_logFilePaths.Count > 0)
                     {
                         LoadAndPlotFiles(_logFilePaths);
+                    }
+                    else
+                    {
+                        // 0勾选/空列表确定:已清空报文路径,仅提示不加载
+                        _statusLabel.Text = "状态: 已清空报文路径(未加载文件)";
+                        _statusLabel.ForeColor = Color.Gray;
                     }
                 }
             }
@@ -4107,6 +4123,17 @@ namespace PCAN_Client
                 ? $"状态: 文件已加载(流式模式,{totalSizeMB}MB) — 点击开始播放"
                 : $"状态: 文件已加载(内存模式,{totalSizeMB}MB) — 点击开始播放";
             _statusLabel.ForeColor = Color.Green;
+            // 同步文件列表对话框数据:本次加载的文件勾选,其余不勾选(已在列表中的去重)
+            foreach (var entry in _logFileEntries)
+                entry.Enabled = false;
+            foreach (var p in filePaths)
+            {
+                var existing = _logFileEntries.FirstOrDefault(
+                    en => string.Equals(en.Path, p, StringComparison.OrdinalIgnoreCase));
+                if (existing != null) existing.Enabled = true;
+                else _logFileEntries.Add(new LogFileEntry { Path = p, Enabled = true });
+            }
+            SaveLogFilePaths();
             _txtEndTime.Text = "";
             SyncToolbarStateFromLegacyControls();
             // 清理图表
