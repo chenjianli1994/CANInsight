@@ -593,9 +593,33 @@ namespace PCAN_Client.ReportAuto
             }
         }
 
-        /// <summary>Ctrl+V粘贴:若剪贴板内容是已配置的占位符名,自动包裹{{}}</summary>
+        /// <summary>Ctrl+V粘贴:若剪贴板内容是已配置的占位符名,自动包裹{{}};
+        /// Delete/Backspace:光标在占位符内(或紧贴边缘)时,一键删除整个 {{KEY}}</summary>
         private void RtbText_KeyDown(object sender, KeyEventArgs e)
         {
+            // Delete/Backspace 一键删除整个占位符(无需完全选中)
+            if ((e.KeyCode == Keys.Delete || e.KeyCode == Keys.Back) && _rtbText.SelectionLength == 0)
+            {
+                int pos = _rtbText.SelectionStart;
+                foreach (Match m in Regex.Matches(_rtbText.Text, @"\{\{\w+\}\}"))
+                {
+                    // Delete:光标在占位符内或紧贴开头; Backspace:在占位符内或紧贴结尾
+                    bool hit = e.KeyCode == Keys.Delete
+                        ? (pos >= m.Index && pos < m.Index + m.Length)
+                        : (pos > m.Index && pos <= m.Index + m.Length);
+                    if (hit)
+                    {
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        // 删除整个占位符,TextChanged同步会自动移除配置表中对应行
+                        _rtbText.Text = _rtbText.Text.Remove(m.Index, m.Length);
+                        _rtbText.SelectionStart = m.Index;
+                        return;
+                    }
+                }
+                return;  // 不在占位符上,走默认逐字删除
+            }
+
             if (e.Control && e.KeyCode == Keys.V)
             {
                 string clip = "";
