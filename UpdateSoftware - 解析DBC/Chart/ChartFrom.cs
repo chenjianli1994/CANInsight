@@ -1801,6 +1801,8 @@ namespace PCAN_Client
                                 SetReportEndTime(GetMaxChannelTime());
                                 // 缓存模式：切回内存模式
                                 FinalizeCachePlayback(totalMsgCount);
+                                // 首次跑数据绘图完成:重置占位符固定时间范围为跟随当前数据(每次启动仅一次)
+                                AutoResetPlaceholderRangesOnce();
                             }));
 
                             // 流式模式：播放完毕后将记录的5w帧显示到Main.cs界面
@@ -3417,6 +3419,7 @@ namespace PCAN_Client
             }
             return -1;
         }
+        private int _lastGridValueUpdateTick = 0;  // 上次信号列表数值刷新时间(TickCount),用于实时刷新节流
         public void AddPoint(uint msgId, int signalIndex, double rawValue, uint cycleTime)
         {
             // 文件模式下不接收实时数据
@@ -3432,9 +3435,16 @@ namespace PCAN_Client
 
                 ChannelData channel = Main.chartFromShow.Channels[channelIndex];
                 channel.AddPoint(_currentTime, rawValue, false);
-                // 无线测量线时实时更新当前值
+                // 无线测量线时实时更新当前值(节流:最多每100ms刷新一次,避免高帧率下CPU空耗)
                 if (!_chartControl.MeasureLineX1.HasValue)
-                    UpdateChannelGridValues();
+                {
+                    int tick = Environment.TickCount;
+                    if (tick - _lastGridValueUpdateTick >= 100)
+                    {
+                        _lastGridValueUpdateTick = tick;
+                        UpdateChannelGridValues();
+                    }
+                }
             }
         }
         public class MultiMessageCANScheduler : IDisposable

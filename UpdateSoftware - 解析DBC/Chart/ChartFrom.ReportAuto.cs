@@ -20,6 +20,8 @@ namespace PCAN_Client
         private ToolStripButton _btnAnalysisTypeSelector;   // 工况选择按钮(弹出分组树面板)
         private AnalysisType _currentAnalysisType;          // 当前选中的工况分类
         private ToolStripDropDown _pickerDropDown;          // 工况快捷选择下拉面板
+        // 已打开的工况编辑器(单例管理:同一工况不重复开,避免保存互相覆盖/改名产生孤儿文件)
+        private readonly List<AnalysisTypeEditor> _openEditors = new List<AnalysisTypeEditor>();
         private ToolStripButton _btnEditAnalysisType;
         private ToolStripButton _btnNewAnalysisType;
         private ToolStripButton _btnDeleteAnalysisType;
@@ -139,6 +141,38 @@ namespace PCAN_Client
 
         /// <summary>模板目录(供工况管理对话框使用)</summary>
         internal string TemplatesDir => _templatesDir;
+
+        // 首次加载数据后是否已自动重置占位符时间范围(每次启动软件只重置一次)
+        private bool _placeholderRangeAutoResetDone = false;
+
+        /// <summary>
+        /// 首次跑数据绘图完成后,把当前工况占位符的固定时间范围清空(回到"跟随当前数据范围")。
+        /// 避免上次数据(如0,1000)的固定范围与本次数据(如0,800)不匹配导致算不出。
+        /// 每次启动只自动重置一次,之后用户手动调整的范围不再动。
+        /// </summary>
+        private void AutoResetPlaceholderRangesOnce()
+        {
+            if (_placeholderRangeAutoResetDone) return;
+            _placeholderRangeAutoResetDone = true;
+
+            var type = _currentAnalysisType;
+            if (type?.Signals == null) return;
+
+            int cleared = 0;
+            foreach (var stat in type.Signals)
+            {
+                if (stat?.TimeRangeMap != null && stat.TimeRangeMap.Count > 0)
+                {
+                    stat.TimeRangeMap = null;  // 清空=跟随当前数据全范围
+                    cleared++;
+                }
+            }
+            if (cleared > 0)
+            {
+                _statusLabel.Text = $"状态: 播放完成,已将 {cleared} 个信号的占位符时间范围重置为当前数据范围";
+                _statusLabel.ForeColor = Color.Blue;
+            }
+        }
 
         /// <summary>当前选中的工况分类(供工况管理对话框使用)</summary>
         internal AnalysisType CurrentAnalysisType => _currentAnalysisType;
@@ -541,7 +575,26 @@ namespace PCAN_Client
         /// </summary>
         internal void OpenAnalysisTypeEditor(AnalysisType type, string groupForNew)
         {
+            // 同一工况(或同为新建未保存)的编辑器已打开:激活置前,不重复打开
+            for (int i = _openEditors.Count - 1; i >= 0; i--)
+            {
+                var ed = _openEditors[i];
+                if (ed.IsDisposed) { _openEditors.RemoveAt(i); continue; }
+                bool same = type != null
+                    ? ed.EditingTypeName == type.Name
+                    : ed.EditingTypeName == null;
+                if (same)
+                {
+                    if (ed.WindowState == FormWindowState.Minimized)
+                        ed.WindowState = FormWindowState.Normal;
+                    ed.Activate();
+                    return;
+                }
+            }
+
             var editor = new AnalysisTypeEditor(type, Channels, _busChannels);
+            _openEditors.Add(editor);
+            editor.FormClosed += (s3, e3) => _openEditors.Remove(editor);
             string oldName = type?.Name;          // null=新建
             string oldGroup = type?.Group ?? "";  // 编辑时保留原分组
             // 一键计算前:补建缺失通道并后台补采,完成后回调编辑器继续计算
@@ -593,6 +646,22 @@ namespace PCAN_Client
                     Visible = ch.Visible,
                     BusChannelIndex = ch.BusChannelIndex
                 });
+            }
+
+            // 记录保存时的数据范围(供编辑器校验数据变化,不含隐藏通道)
+            double dMin = double.MaxValue, dMax = double.MinValue;
+            foreach (var ch in Channels)
+            {
+                if (ch.IsReportOnly) continue;
+                var xr = ch.GetXRange();
+                if (xr.Min < dMin) dMin = xr.Min;
+                if (xr.Max > dMax) dMax = xr.Max;
+            }
+            if (dMin < dMax)
+            {
+                currentType.DataRangeAtSave =
+                    dMin.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + dMax.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             }
 
             SaveAnalysisTypeJson(currentType, null);  // 名称/分组未变,无需删旧文件

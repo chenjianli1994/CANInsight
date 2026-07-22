@@ -170,11 +170,21 @@ namespace PCAN_Client.ReportAuto
             return card;
         }
 
-        /// <summary>绘制页面内容示意:左侧文本线+右侧图表框折线(固定种子,形状稳定)</summary>
+        /// <summary>绘制页面内容:有真截图缩略图直接显示,否则画文本线+图表示意线框</summary>
         private void PaintPageMock(object sender, PaintEventArgs e)
         {
-            var g = e.Graphics;
             var p = (Panel)sender;
+            // 真截图缩略图(添加页时抓取),有则直接铺满显示
+            int idx = p.Tag is int ti ? ti : -1;
+            var pages = ReportAutoService.Pages;
+            Bitmap thumb = (idx >= 0 && idx < pages.Count) ? pages[idx].Thumbnail : null;
+            if (thumb != null)
+            {
+                e.Graphics.DrawImage(thumb, p.ClientRectangle);
+                return;
+            }
+
+            var g = e.Graphics;
             int w = p.Width, h = p.Height;
 
             // 左侧文本示意线

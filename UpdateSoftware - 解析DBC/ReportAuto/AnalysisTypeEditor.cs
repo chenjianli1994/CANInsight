@@ -18,6 +18,8 @@ namespace PCAN_Client.ReportAuto
     {
         // 当前编辑的工况分类（可为null表示新建）
         private readonly AnalysisType _editingType;
+        // 上次保存的工况名(初始=编辑中的工况名,新建=null;改名保存后跟踪新名,用于编辑器单例判定)
+        private string _lastSavedName;
         // 当前绘图区已有的信号通道（供下拉选择）
         private readonly List<ChannelData> _channels;
         // CAN总线通道列表(供信号选择器显示多路CAN通道DBC)
@@ -45,9 +47,14 @@ namespace PCAN_Client.ReportAuto
         private Button _btnCalculate;      // 一键计算按钮
         private Button _btnSave;
         private Button _btnCancel;
+        private Panel _rangeWarningPanel;    // 数据范围变化提示条(默认隐藏)
+        private Label _rangeWarningLabel;
 
         // 结果
         public AnalysisType Result { get; private set; }
+
+        /// <summary>编辑器当前对应的工况名(新建且未保存过=null;改名保存后为新名)</summary>
+        public string EditingTypeName => _lastSavedName;
 
         /// <summary>编辑器保存工况分类时触发的事件，传递新保存的AnalysisType</summary>
         public event EventHandler<AnalysisType> Saved;
@@ -61,10 +68,12 @@ namespace PCAN_Client.ReportAuto
         public AnalysisTypeEditor(AnalysisType editingType, List<ChannelData> channels, List<CanBusChannel> busChannels)
         {
             _editingType = editingType;
+            _lastSavedName = editingType?.Name;
             _channels = channels ?? new List<ChannelData>();
             _busChannels = busChannels ?? new List<CanBusChannel>();
             InitUI();
             LoadFromType();
+            CheckDataRangeMismatch();  // 打开时校验:配置时数据范围与当前是否一致
         }
 
         private void InitUI()
@@ -186,13 +195,40 @@ namespace PCAN_Client.ReportAuto
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "CopyBtn", HeaderText = "复制", Text = "复制", UseColumnTextForButtonValue = true, FillWeight = 7 });
             _dgvPlaceholders.Columns.Add(new DataGridViewButtonColumn { Name = "DeleteBtn", HeaderText = "删除", Text = "删除", UseColumnTextForButtonValue = true, FillWeight = 7 });
             _dgvPlaceholders.CellClick += DgvPlaceholders_CellClick;
-            _dgvPlaceholders.CellValueChanged += (s, e) => UpdatePreview();
+            _dgvPlaceholders.CellValueChanged += DgvPlaceholders_CellValueChanged;
             _dgvPlaceholders.CellFormatting += DgvPlaceholders_CellFormatting;
             _dgvPlaceholders.ColumnHeadersHeight = 28;
             
+            // === 数据范围变化提示条(默认隐藏):配置时范围与当前数据不一致时显示 ===
+            _rangeWarningPanel = new Panel { Dock = DockStyle.Top, Height = 30, Visible = false, BackColor = Color.FromArgb(255, 244, 229) };
+            _rangeWarningLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Microsoft YaHei UI", 8.5F),
+                ForeColor = Color.FromArgb(180, 100, 0),
+                Padding = new Padding(6, 0, 0, 0)
+            };
+            var btnClampAll = new Button
+            {
+                Text = "全部裁剪", Dock = DockStyle.Right, Width = 68,
+                FlatStyle = FlatStyle.Flat, Font = new Font("Microsoft YaHei UI", 8.5F)
+            };
+            btnClampAll.Click += (s, e) => ClampAllRangesToData();
+            var btnKeep = new Button
+            {
+                Text = "保留原样", Dock = DockStyle.Right, Width = 68,
+                FlatStyle = FlatStyle.Flat, Font = new Font("Microsoft YaHei UI", 8.5F)
+            };
+            btnKeep.Click += (s, e) => _rangeWarningPanel.Visible = false;
+            _rangeWarningPanel.Controls.Add(_rangeWarningLabel);  // Fill 先添加
+            _rangeWarningPanel.Controls.Add(btnClampAll);          // Right 居中
+            _rangeWarningPanel.Controls.Add(btnKeep);              // Right 最右
+
             // 右栏添加顺序(后添加的先布局,Fill最后填充剩余空间):
-            // DGV(Fill) → 标题行(Top,最上方)
+            // DGV(Fill) → 范围提示条(Top,标题行之下) → 标题行(Top,最上方)
             splitMain.Panel2.Controls.Add(_dgvPlaceholders);
+            splitMain.Panel2.Controls.Add(_rangeWarningPanel);
             splitMain.Panel2.Controls.Add(panelConfigHeader);
 
             // === 底部:保存/取消按钮 ===
@@ -224,6 +260,59 @@ namespace PCAN_Client.ReportAuto
 
             AcceptButton = _btnSave;
             CancelButton = _btnCancel;
+            KeyPreview = true;  // Ctrl+S 快捷键优先于子控件处理
+            KeyDown += (s, e) =>
+            {
+                if (e.Control && e.KeyCode == Keys.S)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    BtnSave_Click(s, e);
+                }
+            };
+            Activated += (s, e) => CheckDataRangeMismatch();  // 编辑器非模态,数据可能后加载,激活时复验
+        }
+
+        /// <summary>不变文化数字格式化(最多3位小数),时间范围写入/显示统一用</summary>
+        private static string FNum(double v)
+        {
+            return v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>校验"配置时数据范围"与当前数据范围是否一致,不一致时显示提示条</summary>
+        private void CheckDataRangeMismatch()
+        {
+            if (_rangeWarningPanel == null) return;
+            _rangeWarningPanel.Visible = false;
+            if (_editingType == null || string.IsNullOrEmpty(_editingType.DataRangeAtSave)) return;
+            if (!SignalStatsCalculator.TryParseTimeRange(_editingType.DataRangeAtSave, out double s0, out double s1)) return;
+
+            var (g0, g1) = GetGlobalTimeRange();
+            if (Math.Abs(s1 - g1) > 1.0 || Math.Abs(s0 - g0) > 1.0)
+            {
+                _rangeWarningLabel.Text = $"当前数据范围({FNum(g0)},{FNum(g1)})与配置时({FNum(s0)},{FNum(s1)})不一致:";
+                _rangeWarningPanel.Visible = true;
+            }
+        }
+
+        /// <summary>提示条"全部裁剪":把所有行的时间范围钳到当前数据范围;完全错开的行清空(跟随默认范围)</summary>
+        private void ClampAllRangesToData()
+        {
+            var (g0, g1) = GetGlobalTimeRange();
+            foreach (DataGridViewRow row in _dgvPlaceholders.Rows)
+            {
+                string text = row.Cells["TimeRange"].Value?.ToString();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (!SignalStatsCalculator.TryParseTimeRange(text, out double t0, out double t1)) continue;  // 格式错误的留给用户改
+
+                var state = SignalStatsCalculator.ClampTimeRange(t0, t1, g0, g1, out double c0, out double c1);
+                if (state == SignalStatsCalculator.TimeRangeClampState.NoIntersection)
+                    row.Cells["TimeRange"].Value = "";  // 完全错开→清空,回到跟随默认范围
+                else if (state == SignalStatsCalculator.TimeRangeClampState.Clamped)
+                    row.Cells["TimeRange"].Value = FNum(c0) + "," + FNum(c1);
+            }
+            _rangeWarningPanel.Visible = false;
+            UpdatePreview();
         }
 
         private void AddLabel(string text, int x, int y)
@@ -605,15 +694,43 @@ namespace PCAN_Client.ReportAuto
             return (min, max);
         }
 
-        /// <summary>时间范围列:留空时灰色显示默认时间范围(仅显示不写入,保留"留空=自动使用默认范围"的语义)</summary>
+        /// <summary>配置变更(SignalName/Calc/TimeRange)时清空该行旧计算结果,避免残留误导;并刷新预览</summary>
+        private void DgvPlaceholders_CellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
+            {
+                string col = _dgvPlaceholders.Columns[e.ColumnIndex].Name;
+                if (col == "SignalName" || col == "Calc" || col == "TimeRange")
+                    _dgvPlaceholders.Rows[e.RowIndex].Cells["Result"].Value = "";  // 配置变了,旧结果作废
+            }
+            UpdatePreview();
+        }
+
+        /// <summary>时间范围列:留空时灰色显示默认时间范围(仅显示不写入,保留"留空=自动使用默认范围"的语义);格式错误标红提示</summary>
         private void DgvPlaceholders_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             if (_dgvPlaceholders.Columns[e.ColumnIndex].Name != "TimeRange") return;
-            if (!string.IsNullOrWhiteSpace(e.Value?.ToString())) return;  // 手动配置过,按原值正常显示
+
+            string raw = e.Value?.ToString();
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                if (!SignalStatsCalculator.TryParseTimeRange(raw, out double p0, out double p1))
+                {
+                    e.CellStyle.ForeColor = Color.Red;  // 格式非法(兼容中文逗号/分号后仍解析失败)
+                    return;
+                }
+                // 超出当前数据范围:橙色警示(计算时按交集裁剪,完全错开则[时间窗无数据])
+                var (g0, g1) = GetGlobalTimeRange();
+                if (SignalStatsCalculator.ClampTimeRange(p0, p1, g0, g1, out _, out _)
+                    != SignalStatsCalculator.TimeRangeClampState.Contained)
+                    e.CellStyle.ForeColor = Color.DarkOrange;
+                return;
+            }
 
             var (t0, t1) = GetGlobalTimeRange();
-            e.Value = t0.ToString("0.###") + "," + t1.ToString("0.###");
+            e.Value = t0.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + ","
+                    + t1.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
             e.CellStyle.ForeColor = Color.Gray;  // 灰色表示这是默认值而非手动输入
             e.FormattingApplied = true;
         }
@@ -640,9 +757,13 @@ namespace PCAN_Client.ReportAuto
             {
                 string signalName = row.Cells["SignalName"].Value?.ToString();
                 string calcDisplay = row.Cells["Calc"].Value?.ToString();
+                var resultCell = row.Cells["Result"];
+                // 每轮重置标记色/提示(上轮裁剪标记可能已过期)
+                resultCell.Style.ForeColor = SystemColors.ControlText;
+                resultCell.ToolTipText = "";
                 if (string.IsNullOrEmpty(signalName))
                 {
-                    row.Cells["Result"].Value = "";
+                    resultCell.Value = "";
                     continue;
                 }
 
@@ -651,20 +772,31 @@ namespace PCAN_Client.ReportAuto
                       ?? _channels.FirstOrDefault(c => string.Equals(c.DbcSignalName, signalName, StringComparison.OrdinalIgnoreCase));
                 if (ch == null)
                 {
-                    row.Cells["Result"].Value = "[未找到信号]";
+                    resultCell.Value = "[未找到信号]";
                     continue;
                 }
 
-                // 解析时间范围
+                // 解析时间范围(兼容中文逗号/分号;非法格式静默回退全局范围,单元格已标红提示)
                 string timeRange = row.Cells["TimeRange"].Value?.ToString() ?? "";
                 double t0 = globalT0, t1 = globalT1;
-                if (!string.IsNullOrWhiteSpace(timeRange))
+                if (SignalStatsCalculator.TryParseTimeRange(timeRange, out double parsedT0, out double parsedT1))
                 {
-                    var parts = timeRange.Split(',');
-                    if (parts.Length == 2 && double.TryParse(parts[0].Trim(), out double parsedT0) && double.TryParse(parts[1].Trim(), out double parsedT1))
+                    t0 = parsedT0;
+                    t1 = parsedT1;
+                    // 钳制到该通道数据范围:部分重叠按交集算并标记,完全错开报[时间窗无数据]
+                    var xr = ch.GetXRange();
+                    var clampState = SignalStatsCalculator.ClampTimeRange(t0, t1, xr.Min, xr.Max, out double cT0, out double cT1);
+                    if (clampState == SignalStatsCalculator.TimeRangeClampState.NoIntersection)
                     {
-                        t0 = parsedT0;
-                        t1 = parsedT1;
+                        resultCell.Value = "[时间窗无数据]";
+                        continue;
+                    }
+                    if (clampState == SignalStatsCalculator.TimeRangeClampState.Clamped)
+                    {
+                        t0 = cT0;
+                        t1 = cT1;
+                        resultCell.Style.ForeColor = Color.DarkOrange;
+                        resultCell.ToolTipText = $"已按当前数据裁剪为 {FNum(t0)},{FNum(t1)} 计算";
                     }
                 }
 
@@ -683,12 +815,12 @@ namespace PCAN_Client.ReportAuto
                 var pv = SignalStatsCalculator.Calc(ch, t0, t1, tempStat);
                 if (pv != null && pv.Count > 0)
                 {
-                    row.Cells["Result"].Value = pv.Values.First();
+                    resultCell.Value = pv.Values.First();
                     calculatedCount++;
                 }
                 else
                 {
-                    row.Cells["Result"].Value = "[无数据]";
+                    resultCell.Value = "[无数据]";
                 }
             }
 
@@ -709,6 +841,7 @@ namespace PCAN_Client.ReportAuto
             var type = BuildAnalysisType();
 
             Result = type;
+            _lastSavedName = type.Name;  // 跟踪保存名(改名后编辑器身份跟随新名,防止单例判定失效)
 
             // 触发保存事件，通知主窗口刷新下拉
             Saved?.Invoke(this, type);
@@ -723,6 +856,9 @@ namespace PCAN_Client.ReportAuto
             var type = new AnalysisType();
             type.Name = _txtName.Text.Trim();
             type.TextTemplate = _rtbText.Text;
+            // 记录保存时的数据范围(供下次打开编辑器校验数据是否变化)
+            var (g0, g1) = GetGlobalTimeRange();
+            type.DataRangeAtSave = FNum(g0) + "," + FNum(g1);
             // 文本框/图片框定位固定为模板内标识符,编辑器不再暴露选择
             type.TextShapeName = TemplateShapeIds.TextDesc;
             type.ImageShapes = new List<ImageShapeItem>

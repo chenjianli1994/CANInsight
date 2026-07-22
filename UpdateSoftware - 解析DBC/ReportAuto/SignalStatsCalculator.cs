@@ -13,6 +13,45 @@ namespace PCAN_Client.ReportAuto
     /// </summary>
     public static class SignalStatsCalculator
     {
+        /// <summary>时间范围钳制结果状态</summary>
+        internal enum TimeRangeClampState
+        {
+            Contained,       // 配置范围完全在数据范围内
+            Clamped,         // 部分重叠,已按交集裁剪
+            NoIntersection   // 与数据完全错开
+        }
+
+        /// <summary>
+        /// 把配置的时间范围钳制到数据范围内(取交集)。
+        /// 部分重叠返回裁剪后的交集;完全错开返回NoIntersection。
+        /// </summary>
+        internal static TimeRangeClampState ClampTimeRange(double t0, double t1, double dMin, double dMax,
+            out double c0, out double c1)
+        {
+            c0 = Math.Max(t0, dMin);
+            c1 = Math.Min(t1, dMax);
+            if (c0 >= c1) return TimeRangeClampState.NoIntersection;
+            if (c0 == t0 && c1 == t1) return TimeRangeClampState.Contained;
+            return TimeRangeClampState.Clamped;
+        }
+
+
+        /// <summary>
+        /// 解析时间范围文本(如 "0,10")为起止秒。兼容中文逗号(，)/分号(;；)/多余空格,
+        /// 数字按不变文化解析。格式非法返回false。
+        /// </summary>
+        internal static bool TryParseTimeRange(string text, out double t0, out double t1)
+        {
+            t0 = 0; t1 = 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            var parts = text.Replace('，', ',').Replace('；', ',').Replace(';', ',').Split(',');
+            if (parts.Length != 2) return false;
+            return double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Any,
+                       System.Globalization.CultureInfo.InvariantCulture, out t0)
+                && double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Any,
+                       System.Globalization.CultureInfo.InvariantCulture, out t1);
+        }
+
         /// <summary>
         /// 对指定信号在 [t0, t1] 时间窗内计算指标，返回 PPT占位符KEY → 格式化值字符串。
         /// metrics 支持: "avg"(平均值) "min"(实测最小) "max"(实测最大) "range"(最大-最小)。

@@ -17,6 +17,7 @@ namespace PCAN_Client.ReportAuto
         public string Name;        // 工况名
         public double TimeStart;   // 报告时间范围起点(秒)
         public double TimeEnd;     // 报告时间范围终点(秒)
+        public Bitmap Thumbnail;   // 添加页时的图表截图缩略图(可空,预览卡片显示真图用)
     }
 
     /// <summary>
@@ -156,7 +157,24 @@ namespace PCAN_Client.ReportAuto
         {
             if (_builder != null) { _builder.Dispose(); _builder = null; }
             _started = false;
+            foreach (var p in _pages) p.Thumbnail?.Dispose();
             _pages.Clear();
+        }
+
+        /// <summary>把图表截图等比缩小为缩略图(letterbox居中,白底)</summary>
+        private static Bitmap MakeThumbnail(Bitmap src, int w, int h)
+        {
+            var bmp = new Bitmap(w, h);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.White);
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                float scale = Math.Min((float)w / src.Width, (float)h / src.Height);
+                int dw = Math.Max(1, (int)(src.Width * scale));
+                int dh = Math.Max(1, (int)(src.Height * scale));
+                g.DrawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
+            }
+            return bmp;
         }
 
         /// <summary>
@@ -231,15 +249,23 @@ namespace PCAN_Client.ReportAuto
                             continue;
                         string placeholderKey = stat.PlaceholderMap[metric];
                         
-                        // 检查该占位符是否有独立时间范围
+                        // 检查该占位符是否有独立时间范围(兼容中文逗号/分号)
                         double calcT0 = t0, calcT1 = t1;
-                        if (stat.TimeRangeMap != null && stat.TimeRangeMap.TryGetValue(placeholderKey, out var tr) && !string.IsNullOrWhiteSpace(tr))
+                        bool customRange = false;
+                        double parsedT0 = 0, parsedT1 = 0;
+                        if (stat.TimeRangeMap != null && stat.TimeRangeMap.TryGetValue(placeholderKey, out var tr))
+                            customRange = SignalStatsCalculator.TryParseTimeRange(tr, out parsedT0, out parsedT1);
+                        if (customRange)
                         {
-                            var parts = tr.Split(',');
-                            if (parts.Length == 2 && double.TryParse(parts[0].Trim(), out double parsedT0) && double.TryParse(parts[1].Trim(), out double parsedT1))
+                            calcT0 = parsedT0;
+                            calcT1 = parsedT1;
+                            // 钳制到该通道数据范围:部分重叠按交集算,完全错开填"-"
+                            var xr = ch.GetXRange();
+                            var clampState = SignalStatsCalculator.ClampTimeRange(calcT0, calcT1, xr.Min, xr.Max, out calcT0, out calcT1);
+                            if (clampState == SignalStatsCalculator.TimeRangeClampState.NoIntersection)
                             {
-                                calcT0 = parsedT0;
-                                calcT1 = parsedT1;
+                                values[placeholderKey] = "-";
+                                continue;
                             }
                         }
                         
@@ -303,7 +329,13 @@ namespace PCAN_Client.ReportAuto
 
             // 6) 追加并填充该页
             _builder.AppendPage(type, images, values);
-            _pages.Add(new ReportPageInfo { Name = type.Name ?? "", TimeStart = t0, TimeEnd = t1 });
+            Bitmap thumb = null;
+            if (images != null && images.TryGetValue("chart", out var chartImg) && chartImg != null)
+            {
+                try { thumb = MakeThumbnail(chartImg, 480, 270); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[ReportAuto] 生成缩略图失败: " + ex.Message); }
+            }
+            _pages.Add(new ReportPageInfo { Name = type.Name ?? "", TimeStart = t0, TimeEnd = t1, Thumbnail = thumb });
             return _builder.PageCount;
         }
 
@@ -315,6 +347,7 @@ namespace PCAN_Client.ReportAuto
             if (index < 0 || index >= _pages.Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
             _builder.DeletePage(index);
+            _pages[index].Thumbnail?.Dispose();
             _pages.RemoveAt(index);
         }
 

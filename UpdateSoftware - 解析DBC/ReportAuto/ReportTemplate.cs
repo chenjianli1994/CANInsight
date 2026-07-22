@@ -23,6 +23,8 @@ namespace PCAN_Client.ReportAuto
         /// <summary>所属分组名(templates下的一级子文件夹名;""=未分组)。由文件位置决定,不入JSON</summary>
         [JsonIgnore]
         public string Group { get; set; } = "";
+        /// <summary>保存配置时的数据范围("t0,t1",秒),用于下次打开编辑器时校验数据是否变化;旧配置无此字段</summary>
+        public string DataRangeAtSave;
 
         public override string ToString() { return Name ?? "(未命名)"; }
     }
