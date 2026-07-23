@@ -45,7 +45,13 @@ namespace PCAN_Client
             }
             else
             {
-                Application.Run(new Main());
+                // 主窗口以最小化+不显示任务栏按钮的方式启动:窗口全程不可见,
+                // 避免"先显示Main→Load中打开绘图窗口→再Hide"造成的启动闪窗。
+                // Load事件照常触发(绘图窗口正常打开);"报文列表"按钮唤出时恢复Normal即可。
+                var mainForm = new Main();
+                mainForm.WindowState = FormWindowState.Minimized;
+                mainForm.ShowInTaskbar = false;
+                Application.Run(mainForm);
             }
         }
         public static void ExtractEmbeddedDLL()

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
@@ -28,6 +29,17 @@ namespace PCAN_Client.ReportAuto
         private bool _suppressTextSync = false;
         // 语法高亮执行中标记(避免SelectionChanged误触发定位)
         private bool _highlighting = false;
+
+        // RichTextBox重绘控制(语法高亮/预览刷新防闪屏):挂起重绘期间批量改选区格式,完成后一次性重绘
+        private const int WM_SETREDRAW = 0x0B;
+        private const int EM_GETSCROLLPOS = 0x04DD;
+        private const int EM_SETSCROLLPOS = 0x04DE;
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ScrollPoint { public int X; public int Y; }
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref ScrollPoint lParam);
         // 暂存从文本中移除的占位符绑定(剪切-粘贴瞬态:同名占位符再次出现时自动恢复)
         private readonly Dictionary<string, DetachedBinding> _detachedBindings = new Dictionary<string, DetachedBinding>();
 
@@ -236,7 +248,11 @@ namespace PCAN_Client.ReportAuto
                 Text = "保留原样", Dock = DockStyle.Right, Width = 68,
                 FlatStyle = FlatStyle.Flat, Font = new Font("Microsoft YaHei UI", 8.5F)
             };
-            btnKeep.Click += (s, e) => _rangeWarningPanel.Visible = false;
+            btnKeep.Click += (s, e) =>
+            {
+                AcceptCurrentDataRange();  // 用户确认接受当前数据范围,本次会话不再复弹(持久化需保存工况)
+                _rangeWarningPanel.Visible = false;
+            };
             _rangeWarningPanel.Controls.Add(_rangeWarningLabel);  // Fill 先添加
             _rangeWarningPanel.Controls.Add(btnClampAll);          // Right 居中
             _rangeWarningPanel.Controls.Add(btnKeep);              // Right 最右
@@ -328,8 +344,17 @@ namespace PCAN_Client.ReportAuto
                 else if (state == SignalStatsCalculator.TimeRangeClampState.Clamped)
                     row.Cells["TimeRange"].Value = FNum(c0) + "," + FNum(c1);
             }
+            AcceptCurrentDataRange();  // 裁剪即确认接受当前数据范围,本次会话不再复弹(持久化需保存工况)
             _rangeWarningPanel.Visible = false;
             UpdatePreview();
+        }
+
+        /// <summary>把"配置时数据范围"更新为当前数据范围(仅改内存;窗口激活复验不再误报,保存工况后持久化)</summary>
+        private void AcceptCurrentDataRange()
+        {
+            if (_editingType == null) return;
+            var (g0, g1) = GetGlobalTimeRange();
+            _editingType.DataRangeAtSave = FNum(g0) + "," + FNum(g1);
         }
 
         private void AddLabel(string text, int x, int y)
@@ -546,6 +571,10 @@ namespace PCAN_Client.ReportAuto
         {
             if (_rtbText == null) return;
             _highlighting = true;
+            // 挂起重绘+保存滚动位置:每次按键全量重排格式时不再逐次重绘,消除整框闪屏与滚动跳动
+            var scrollPos = new ScrollPoint();
+            SendMessage(_rtbText.Handle, EM_GETSCROLLPOS, IntPtr.Zero, ref scrollPos);
+            SendMessage(_rtbText.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
             try
             {
                 int selStart = _rtbText.SelectionStart;
@@ -562,13 +591,19 @@ namespace PCAN_Client.ReportAuto
                     _rtbText.SelectionColor = placeholderColor;
                     _rtbText.SelectionFont = boldFont;
                 }
-                // 恢复光标,后续输入用默认格式
+                // 恢复光标与滚动位置,后续输入用默认格式
                 _rtbText.SelectionStart = selStart;
                 _rtbText.SelectionLength = selLen;
                 _rtbText.SelectionColor = _rtbText.ForeColor;
                 _rtbText.SelectionFont = _rtbText.Font;
+                SendMessage(_rtbText.Handle, EM_SETSCROLLPOS, IntPtr.Zero, ref scrollPos);
             }
-            finally { _highlighting = false; }
+            finally
+            {
+                SendMessage(_rtbText.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                _rtbText.Invalidate();
+                _highlighting = false;
+            }
         }
 
         /// <summary>光标进入 {{KEY}} 时,自动选中右侧配置表对应行并滚动到可见</summary>
@@ -713,9 +748,11 @@ namespace PCAN_Client.ReportAuto
                 try
                 {
                     // 1) 把勾选的 {{占位符}} 插入到 RichTextBox 光标处
+                    // 用SelectedText插入:.Text往返会清空全文档RTF格式(既有占位符高亮全丢)
                     string insertText = string.Join(" ", dlg.Result.Select(r => "{{" + r.Key + "}}"));
                     int selStart = _rtbText.SelectionStart;
-                    _rtbText.Text = _rtbText.Text.Insert(selStart, insertText);
+                    _rtbText.Select(selStart, 0);
+                    _rtbText.SelectedText = insertText;
                     _rtbText.SelectionStart = selStart + insertText.Length;
                     _rtbText.Focus();
                 }
@@ -726,6 +763,7 @@ namespace PCAN_Client.ReportAuto
                 // 2) 按 Key 把信号名/计算方式/单位填进对应行
                 ApplyBindings(dlg.Result);
                 UpdatePreview();
+                HighlightPlaceholders();  // suppress期间TextChanged被抑制,此处补刷新占位符高亮
             }
         }
 
@@ -775,24 +813,36 @@ namespace PCAN_Client.ReportAuto
         {
             if (_txtPreview == null || _rtbText == null) return;
             string text = _rtbText.Text;
-            if (string.IsNullOrEmpty(text))
+            // 挂起重绘+保存滚动位置:整文本替换时预览区不闪动、滚动位置不重置
+            var scrollPos = new ScrollPoint();
+            SendMessage(_txtPreview.Handle, EM_GETSCROLLPOS, IntPtr.Zero, ref scrollPos);
+            SendMessage(_txtPreview.Handle, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+            try
             {
-                _txtPreview.Text = "";
-                return;
+                if (string.IsNullOrEmpty(text))
+                {
+                    _txtPreview.Text = "";
+                    return;
+                }
+                _txtPreview.Text = Regex.Replace(text, @"\{\{(\w+)\}\}", m =>
+                {
+                    DataGridViewRow row = FindRowByKey(m.Groups[1].Value);
+                    if (row == null) return m.Value;  // 占位符未入表,保留原文
+                    // 一键计算后结果列有值,直接填入计算结果(含[未找到信号]/[无数据]等异常提示)
+                    string result = row.Cells["Result"].Value?.ToString() ?? "";
+                    if (!string.IsNullOrEmpty(result)) return result;
+                    string sig = row.Cells["SignalName"].Value?.ToString() ?? "";
+                    string calc = row.Cells["Calc"].Value?.ToString() ?? "";
+                    if (string.IsNullOrEmpty(sig)) return m.Value;  // 未绑信号,保留原文
+                    return "[" + sig + "·" + calc + "]";
+                });
             }
-            _txtPreview.Text = Regex.Replace(text, @"\{\{(\w+)\}\}", m =>
+            finally
             {
-                DataGridViewRow row = FindRowByKey(m.Groups[1].Value);
-                if (row == null) return m.Value;  // 占位符未入表,保留原文
-                // 一键计算后结果列有值,直接填入计算结果(含[未找到信号]/[无数据]等异常提示)
-                string result = row.Cells["Result"].Value?.ToString() ?? "";
-                if (!string.IsNullOrEmpty(result)) return result;
-                string sig = row.Cells["SignalName"].Value?.ToString() ?? "";
-                string calc = row.Cells["Calc"].Value?.ToString() ?? "";
-                if (string.IsNullOrEmpty(sig)) return m.Value;  // 未绑信号,保留原文
-                return "[" + sig + "·" + calc + "]";
-            });
-            _txtPreview.Refresh();  // 强制重绘,避免Dock布局时序导致不渲染
+                SendMessage(_txtPreview.Handle, EM_SETSCROLLPOS, IntPtr.Zero, ref scrollPos);
+                SendMessage(_txtPreview.Handle, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                _txtPreview.Invalidate();  // 恢复重绘后一次性渲染
+            }
         }
 
         /// <summary>获取所有通道数据的全局时间范围</summary>
