@@ -2330,6 +2330,10 @@ namespace PCAN_Client
                     _busChannels = dlg.Channels;
                     _btnBusConfig.Text = _busChannels.Count > 0 ? $"通道配置({_busChannels.Count})" : "通道配置";
 
+                    // 通道配置变更立即回写当前工况JSON:否则下次应用工况时会被工况里保存的旧路径覆盖(跨机器使用时表现为"路径每次被重置")
+                    if (_currentAnalysisType != null)
+                        SaveAnalysisTypeJson(_currentAnalysisType, _currentAnalysisType.Name);
+
                     // 多通道模式下：重映射现有信号的 BusChannelIndex
                     if (_busChannels.Count > 0 && Channels.Count > 0)
                     {

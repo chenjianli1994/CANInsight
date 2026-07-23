@@ -355,30 +355,52 @@ namespace PCAN_Client
             _statusLabel.ForeColor = Color.Green;
         }
 
+        /// <summary>解析工况中保存的DBC路径(便携容错):原路径存在直接用;否则在exe目录/工况模板目录找同名文件;都找不到返回空串</summary>
+        private string ResolvePortableDbcPath(string savedPath, string group)
+        {
+            if (string.IsNullOrWhiteSpace(savedPath)) return savedPath;
+            if (File.Exists(savedPath)) return savedPath;
+            string fileName = Path.GetFileName(savedPath);
+            if (string.IsNullOrEmpty(fileName)) return "";
+            string exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+            var candidates = new List<string> { Path.Combine(exeDir, fileName) };
+            if (!string.IsNullOrEmpty(_templatesDir))
+            {
+                candidates.Add(Path.Combine(_templatesDir, fileName));
+                if (!string.IsNullOrEmpty(group))
+                    candidates.Add(Path.Combine(_templatesDir, group, fileName));
+            }
+            foreach (var c in candidates)
+                if (File.Exists(c)) return c;
+            return "";
+        }
+
         /// <summary>应用选中的工况分类:恢复CAN通道配置+信号列表(信号列表相同则跳过重载)</summary>
         internal void ApplyAnalysisType(AnalysisType type)
         {
             if (type == null) return;
-
             // 恢复CAN通道配置
             if (type.BusChannels != null && type.BusChannels.Count > 0)
             {
                 _busChannels.Clear();
                 foreach (var bcConfig in type.BusChannels)
                 {
-                    var bc = new CanBusChannel(bcConfig.Name, bcConfig.BlfChannelId, bcConfig.DbcFilePath);
+                    // DBC路径跨机器容错:工况模板随包分发到其他电脑时,保存的绝对路径在本机未必存在。
+                    // 原路径不存在则尝试exe目录/工况模板目录下的同名文件;都找不到置空(通道标记未配置,不残留他机路径)
+                    string dbcPath = ResolvePortableDbcPath(bcConfig.DbcFilePath, type.Group);
+                    var bc = new CanBusChannel(bcConfig.Name, bcConfig.BlfChannelId, dbcPath);
                     // 尝试加载DBC文件
-                    if (!string.IsNullOrEmpty(bcConfig.DbcFilePath) && File.Exists(bcConfig.DbcFilePath))
+                    if (!string.IsNullOrEmpty(dbcPath))
                     {
                         try
                         {
                             bc.DbcHelper = new CAN_Data.DbcHelper();
-                            bc.DbcHelper.Parse(bcConfig.DbcFilePath);
+                            bc.DbcHelper.Parse(dbcPath);
                         }
                         catch (Exception ex)
                         {
                             // DBC加载失败，继续保留通道配置但标记为未配置
-                            Debug.WriteLine($"加载DBC失败: {bcConfig.DbcFilePath} - {ex.Message}");
+                            Debug.WriteLine($"加载DBC失败: {dbcPath} - {ex.Message}");
                         }
                     }
                     _busChannels.Add(bc);
