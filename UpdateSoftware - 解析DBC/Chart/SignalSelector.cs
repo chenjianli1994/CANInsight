@@ -108,13 +108,13 @@ namespace PCAN_Client
                         sources.Add((bc.DbcHelper, bc.Name ?? ("CAN" + i), i));
                 }
             }
-            // 仅当没有已配置通道时,才用全局DBC(多通道模式下全局DBC不相关)
+            // 单通道构造(调用方明确传入通道DBC)时优先用传入实例;全局DBC仅作无指定时的回退
             if (sources.Count == 0)
             {
-                if (BaseParamter.dbcHelper?.dbcFile != null)
-                    sources.Add((BaseParamter.dbcHelper, "全局", -1));
-                else if (_customDbcHelper?.dbcFile != null)
+                if (_customDbcHelper?.dbcFile != null)
                     sources.Add((_customDbcHelper, "DBC", _busChannelIndex));
+                else if (BaseParamter.dbcHelper?.dbcFile != null)
+                    sources.Add((BaseParamter.dbcHelper, "全局", -1));
             }
 
             if (sources.Count == 0)
@@ -331,12 +331,13 @@ namespace PCAN_Client
                         sources.Add((bc.DbcHelper, i, bc.Name ?? ("CAN" + i)));
                 }
             }
+            // 回退顺序与LoadMessages一致:单通道构造优先用传入的通道DBC
             if (sources.Count == 0)
             {
-                if (BaseParamter.dbcHelper?.dbcFile != null)
-                    sources.Add((BaseParamter.dbcHelper, -1, "全局"));
-                else if (_customDbcHelper?.dbcFile != null)
+                if (_customDbcHelper?.dbcFile != null)
                     sources.Add((_customDbcHelper, _busChannelIndex, "DBC"));
+                else if (BaseParamter.dbcHelper?.dbcFile != null)
+                    sources.Add((BaseParamter.dbcHelper, -1, "全局"));
             }
 
             bool multi = sources.Count > 1;
