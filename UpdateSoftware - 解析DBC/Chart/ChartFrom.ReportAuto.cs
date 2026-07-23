@@ -413,7 +413,8 @@ namespace PCAN_Client
             if (Channels == null) return;
             if (type.SignalList != null && type.SignalList.Count > 0)
             {
-                var currentSignalNames = Channels?.Select(c => c.DbcSignalName).OrderBy(n => n).ToList() ?? new List<string>();
+                // 比较口径与保存快照一致:排除IsReportOnly报告专用通道(快照不入,由Ensure按需重建),否则存在报告通道时永远误判为"不同"而清空曲线
+                var currentSignalNames = Channels?.Where(c => !c.IsReportOnly).Select(c => c.DbcSignalName).OrderBy(n => n).ToList() ?? new List<string>();
                 var savedSignalNames = type.SignalList.Select(s => s.SignalName).OrderBy(n => n).ToList();
                 if (currentSignalNames.SequenceEqual(savedSignalNames))
                 {
