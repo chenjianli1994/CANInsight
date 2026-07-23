@@ -1605,6 +1605,16 @@ namespace PCAN_Client
             _cancelPlayback = false;
             if (_isLoadingFile) return;
 
+            // 实时模式且未连接硬件(PCAN/CANoe)时:弹警告并中断,避免空跑(放在任何状态变更之前)
+            if (!_isFileMode && !Main.pcanOpenFlag && !Main.canoeOpenFlag)
+            {
+                MessageBox.Show("实时模式需要连接CAN硬件:请在「报文列表」窗口连接 PCAN 或 CANoe 后再开始", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _statusLabel.Text = "状态: 已停止 (实时模式 — 未连接硬件)";
+                _statusLabel.ForeColor = Color.Red;
+                return;
+            }
+
             _btnStart.Enabled = false;
             _btnStop.Enabled = true;
             _speedComboBox.Enabled = false;
