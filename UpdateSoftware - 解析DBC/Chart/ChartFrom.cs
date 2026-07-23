@@ -1773,7 +1773,11 @@ namespace PCAN_Client
                             foreach (var rawMsg in EnumerateRawMessages())
                             {
                                 msgCount++;
-                                // 根据BLF通道号查找对应的BusChannelIndex
+                                // 流式模式：记录最新的5w帧原始报文(原始帧记录不依赖DBC解码,放在通道匹配之前,未配置通道的报文也要保留到报文列表)
+                                if (isStreaming)
+                                    RecordStreamingFrame(rawMsg);
+
+                                // 根据BLF通道号查找对应的BusChannelIndex(仅用于信号解码;无匹配通道的报文不解码但已记录)
                                 int busIdx = GetBusChannelIndex(rawMsg.Channel);
                                 if (busIdx == -2)
                                 {
@@ -1823,10 +1827,6 @@ namespace PCAN_Client
 
                                 if (rawMsg.TimeStampSeconds > maxTime)
                                     maxTime = rawMsg.TimeStampSeconds;
-
-                                // 流式模式：记录最新的5w帧原始报文
-                                if (isStreaming)
-                                    RecordStreamingFrame(rawMsg);
 
                                 // 定期更新图表（每5000条或每100ms），实现实时绘制
                                 if (msgCount - lastUpdateMsgCount >= 5000 && updateStopwatch.ElapsedMilliseconds >= 100)
@@ -2127,7 +2127,7 @@ namespace PCAN_Client
 
                 lastProcessedTime = rawMsg.TimeStampSeconds;
 
-                // 通道筛选：跳过不在选中通道的报文
+                // 通道筛选：跳过不在选中通道的报文(用户显式设置的过滤器,对记录和解码都生效)
                 if (!IsChannelMatched(rawMsg))
                 {
                     _playbackRawIndex++;
@@ -2135,7 +2135,19 @@ namespace PCAN_Client
                     continue;
                 }
 
-                // 根据BLF通道号查找对应的BusChannelIndex
+                // 同步显示到Main界面 + 流式记录(原始帧不依赖DBC解码,放在通道配置匹配之前,未配置通道的报文也要保留到报文列表)
+                TPCANMsg tMsg = new TPCANMsg();
+                tMsg.ID = rawMsg.CanId;
+                tMsg.LEN = (byte)rawMsg.Data.Length;
+                tMsg.DATA = rawMsg.Data;
+                ulong tUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
+                Main.main.RecordCanMessage(tMsg, tUs, false);
+
+                // 流式模式：记录最新的5w帧原始报文
+                if (_streamingMode)
+                    RecordStreamingFrame(rawMsg);
+
+                // 根据BLF通道号查找对应的BusChannelIndex(仅用于信号解码;无匹配通道的报文不解码但已记录)
                 int busIdx = GetBusChannelIndex(rawMsg.Channel);
                 if (busIdx == -2)
                 {
@@ -2184,18 +2196,6 @@ namespace PCAN_Client
                         }
                     }
                 }
-
-                // 同步显示到Main界面
-                TPCANMsg tMsg = new TPCANMsg();
-                tMsg.ID = rawMsg.CanId;
-                tMsg.LEN = (byte)rawMsg.Data.Length;
-                tMsg.DATA = rawMsg.Data;
-                ulong tUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
-                Main.main.RecordCanMessage(tMsg, tUs, false);
-
-                // 流式模式：记录最新的5w帧原始报文
-                if (_streamingMode)
-                    RecordStreamingFrame(rawMsg);
 
                 _playbackRawIndex++;
                 messagesThisTick++;
