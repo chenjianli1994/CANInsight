@@ -58,7 +58,7 @@ namespace PCAN_Client
         private ToolStrip _topToolStrip;
         private ToolStrip _analysisToolStrip;   // 第二行工具栏(信号与报告)
         private ToolStripButton _btnShowMainForm;   // 唤出报文列表窗口(Main)
-        private ToolStripButton _toolLoadDbc, _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear, _toolAddSignal;
+        private ToolStripButton _toolLoadDbc, _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear;
         private ToolStripDropDownButton _toolSignalGroup;   // 信号组(加载/保存)下拉
         private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
@@ -430,7 +430,6 @@ namespace PCAN_Client
             this._toolShowAll = new System.Windows.Forms.ToolStripButton();
             this._toolAutoScroll = new System.Windows.Forms.ToolStripButton();
             this._toolClear = new System.Windows.Forms.ToolStripButton();
-            this._toolAddSignal = new System.Windows.Forms.ToolStripButton();
             this._toolMore = new System.Windows.Forms.ToolStripDropDownButton();
             this._txtStartTime = new System.Windows.Forms.ToolStripTextBox();
             this._txtEndTime = new System.Windows.Forms.ToolStripTextBox();
@@ -677,7 +676,6 @@ namespace PCAN_Client
             this._analysisToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this._analysisToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
             this._analysisToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this._toolAddSignal,
             this._btnChannelFilter,
             new System.Windows.Forms.ToolStripSeparator(),
             new System.Windows.Forms.ToolStripLabel("区间:"),
@@ -799,16 +797,6 @@ namespace PCAN_Client
             this._toolClear.Text = "清除";
             this._toolClear.ToolTipText = "清除当前曲线数据";
             this._toolClear.Click += new System.EventHandler(this._btnClear_Click);
-            //
-            // _toolAddSignal
-            //
-            this._toolAddSignal.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
-            this._toolAddSignal.Image = ToolbarIcons.Get("plus");
-            this._toolAddSignal.Name = "_toolAddSignal";
-            this._toolAddSignal.Size = new System.Drawing.Size(60, 22);
-            this._toolAddSignal.Text = "添加信号";
-            this._toolAddSignal.ToolTipText = "添加DBC信号";
-            this._toolAddSignal.Click += new System.EventHandler(this._btnAddChannel_Click);
             //
             // _toolMore
             //
@@ -1217,7 +1205,6 @@ namespace PCAN_Client
             _toolLoadDbc.Enabled = _btnLoadDbc.Enabled;
             _toolLoadLog.Enabled = _btnLoadFile.Enabled;
             _toolSignalGroup.Enabled = true;
-            _toolAddSignal.Enabled = _btnAddChannel.Enabled;
             _toolAutoScroll.Enabled = _btnAutoScroll.Enabled;
             // 自动滑动:Checked 反映实际开关状态(按钮文本固定为"自动滑动")
             _toolAutoScroll.Checked = _chartControl != null && _chartControl.IsAutoScrollEnabled();
