@@ -316,20 +316,7 @@ namespace PCAN_Client.PCAN_API
                 }
                 else
                 {
-                    if (Main.updateingFlag)
-                    {
-                        //timeBeginPeriod(1);
-                        //Thread.Sleep(1);
-                        //timeEndPeriod(1);
-                        Thread.Sleep(1);
-                    }
-                    else
-                    {
-                        Thread.Sleep(20);
-                        //timeBeginPeriod(20);
-                        //Thread.Sleep(20);
-                        //timeEndPeriod(20);
-                    }
+                    Thread.Sleep(20);
                 }
             }
         }

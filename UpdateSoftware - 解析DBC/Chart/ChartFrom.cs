@@ -1434,8 +1434,6 @@ namespace PCAN_Client
         private void ChartFrom_FormClosed(object sender, FormClosedEventArgs e)
         {
             Main.ChartShowOpenFlag = false;
-            // 关闭ChartFrom后恢复VersionCheck自动重连
-            Main.RestartConnectFlag = true;
 
             // 主动触发GC回收大块内存（gen2）
             GC.Collect();
@@ -1600,8 +1598,6 @@ namespace PCAN_Client
                 // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
                 Main.main.DisconnectPCAN();
                 Main.main.DisconnectCANoe();
-                // 报文数据模式下禁用VersionCheck自动重连
-                Main.RestartConnectFlag = false;
 
                 // 清空Main界面数据并切换到Scroll模式
                 Main.main.ClearForPlayback();
@@ -3714,8 +3710,6 @@ namespace PCAN_Client
             _playbackModeText = "实时数据";
             _playbackModeColor = Color.Gray;
             UpdateModeIndicator();
-            // 切回实时数据模式，恢复VersionCheck自动重连
-            Main.RestartConnectFlag = true;
 
             _chartControl.Invalidate();
         }
@@ -3952,8 +3946,6 @@ namespace PCAN_Client
             // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
             Main.main.DisconnectPCAN();
             Main.main.DisconnectCANoe();
-            // 报文数据模式下禁用VersionCheck自动重连
-            Main.RestartConnectFlag = false;
 
             // 切换到报文数据模式
             SwitchToFileModeInternal();

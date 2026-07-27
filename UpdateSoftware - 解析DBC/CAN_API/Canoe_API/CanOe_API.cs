@@ -376,18 +376,7 @@ namespace PCAN_Client.Canoe_API
                             }
                             else
                             {
-                                if (Main.updateingFlag)
-                                {
-                                    //timeBeginPeriod(1);
-                                    Thread.Sleep(1);
-                                    //timeEndPeriod(1);
-                                }
-                                else
-                                {
-                                    //timeBeginPeriod(5);
-                                    Thread.Sleep(5);
-                                    //timeEndPeriod(5);
-                                }
+                                Thread.Sleep(5);
                             }
                         }
                         else
@@ -424,18 +413,7 @@ namespace PCAN_Client.Canoe_API
                             }
                             else
                             {
-                                if (Main.updateingFlag)
-                                {
-                                    //timeBeginPeriod(1);
-                                    Thread.Sleep(1);
-                                    //timeEndPeriod(1);
-                                }
-                                else
-                                {
-                                    //timeBeginPeriod(5);
-                                    Thread.Sleep(5);
-                                    //timeEndPeriod(5);
-                                }
+                                Thread.Sleep(5);
                             }
                         }
                     }

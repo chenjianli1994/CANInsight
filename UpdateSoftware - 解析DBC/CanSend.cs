@@ -3,7 +3,6 @@ using CSScriptLibrary;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using PCAN_Client.CAN_Data;
-using PCAN_Client.UDS;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
 using System.Collections.Generic;
@@ -976,90 +975,6 @@ namespace PCAN_Client
             }
         }
 
-        private void button1_Click(object sender, EventArgs e)
-        {
-            if (1 > BaseParamter.dbcHelper.dbcFile.messages.Count)
-            {
-                MessageBox.Show("请先导入DBC文件");
-            }
-            else
-            {
-                Main.ComTest = null;
-                Main.ComTest = new ComTest();
-                Main.ComTestOpenFlag = true;
-                Main.ComTest.Show();
-                AddTestRxMessage();
-            }
-        }
-
-        private void AddTestRxMessage()
-        {
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-            {
-                if (message.messageName.Contains("Test_RxMessage"))
-                {
-                    if(!message.sendFalg)
-                    {
-                        message.sendFalg = true;
-                        message.enableFlag = true;
-                        message.NextSendTime = 0;
-                        multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
-                        treeView1.Nodes[1].Nodes[SelectMessageIndex].Text = message.messageName + "(发送)";
-                    }
-                    else if(!message.enableFlag)
-                    {
-                        message.enableFlag = true;
-                    }
-                    else
-                    {
-                        /* empty */
-                    }
-                }
-                else
-                {
-                    /* empty */
-                }
-            }
-
-            messagesTable.Rows.Clear();
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-            {
-                DataRow newRow;
-                int i;
-                if (message.sendFalg)
-                {
-                    newRow = messagesTable.NewRow();
-                    newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                    newRow["MessageName"] = message.messageName;
-                    newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                    newRow["SendCnt"] = message.sendCnt.ToString();
-                    newRow["Enable"] = message.enableFlag.ToString();
-                    messagesTable.Rows.Add(newRow);
-                }
-            }
-            dataGridView2.DataSource = messagesTable;
-            dataGridView2.Columns[0].Width = 100;
-            dataGridView2.Columns[0].Width = 150;
-            dataGridView2.Columns[1].Width = 150;
-            dataGridView2.Columns[2].Width = 125;
-            dataGridView2.Columns[3].Width = 75;
-            dataGridView2.Refresh();
-        }
-
-        private void button2_Click(object sender, EventArgs e)
-        {
-            if (1 > BaseParamter.dbcHelper.dbcFile.messages.Count)
-            {
-                MessageBox.Show("请先导入DBC文件");
-            }
-            else
-            {
-                Main.dataShow = null;
-                Main.dataShow = new DataShow();
-                Main.DataShowOpenFlag = true;
-                Main.dataShow.Show();
-            }
-        }
         int timeout = 0;
         private void timer1_Tick(object sender, EventArgs e)
         {

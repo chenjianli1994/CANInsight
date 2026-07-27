@@ -238,10 +238,6 @@ namespace PCAN_Client.CAN_Data
                     }
                 }
 
-                if (Main.DataShowOpenFlag)
-                {
-                    Main.dataShow.DataShowInit();
-                }
             }
             catch { }
 

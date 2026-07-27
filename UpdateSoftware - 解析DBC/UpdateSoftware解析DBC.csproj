@@ -347,14 +347,6 @@
     <Compile Include="DataLog\LogFileToCSV.Designer.cs">
       <DependentUpon>LogFileToCSV.cs</DependentUpon>
     </Compile>
-    <Compile Include="UDS\VehCfg.cs" />
-    <Compile Include="UDS\ComTest.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="UDS\ComTest.Designer.cs">
-      <DependentUpon>ComTest.cs</DependentUpon>
-    </Compile>
-    <Compile Include="UDS\ConversationalMode.cs" />
     <Compile Include="DataLog\Log.cs" />
     <Compile Include="DataLog\Logging.cs">
       <SubType>Form</SubType>
@@ -368,13 +360,6 @@
     <Compile Include="DataLog\LoggingSet.Designer.cs">
       <DependentUpon>LoggingSet.cs</DependentUpon>
     </Compile>
-    <Compile Include="UDS\DataShow.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="UDS\DataShow.Designer.cs">
-      <DependentUpon>DataShow.cs</DependentUpon>
-    </Compile>
-    <Compile Include="UDS\Decipherment.cs" />
     <Compile Include="Main.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -385,47 +370,10 @@
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ResistanceSleep.cs" />
-    <Compile Include="UDS\NRC.cs" />
-    <Compile Include="UDS\Service_19.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="UDS\Service_19.Designer.cs">
-      <DependentUpon>Service_19.cs</DependentUpon>
-    </Compile>
-    <Compile Include="UDS\Service_2F.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="UDS\Service_2F.Designer.cs">
-      <DependentUpon>Service_2F.cs</DependentUpon>
-    </Compile>
-    <Compile Include="UDS\UDS_Service.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="UDS\UDS_Service.Designer.cs">
-      <DependentUpon>UDS_Service.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Update\Custom_Add.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Update\Custom_Add.Designer.cs">
-      <DependentUpon>Custom_Add.cs</DependentUpon>
-    </Compile>
-    <Compile Include="Update\Download.cs" />
-    <Compile Include="Update\sign.cs" />
-    <Compile Include="Update\update.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Update\update.Designer.cs">
-      <DependentUpon>update.cs</DependentUpon>
-    </Compile>
-    <Compile Include="util\CRC32.cs" />
     <Compile Include="util\Delay.cs" />
     <Compile Include="util\FrameCrcCal.cs" />
-    <Compile Include="util\S19DataRead.cs" />
     <Compile Include="util\SelfUpdater.cs" />
-    <Compile Include="util\tmpFileRead.cs" />
     <Compile Include="util\USBEventWatch.cs" />
-    <Compile Include="util\xmlFileRead.cs" />
     <EmbeddedResource Include="CanSend.resx">
       <DependentUpon>CanSend.cs</DependentUpon>
     </EmbeddedResource>
@@ -454,27 +402,6 @@
       <DependentUpon>Resources.resx</DependentUpon>
       <DesignTime>True</DesignTime>
     </Compile>
-    <EmbeddedResource Include="UDS\ComTest.resx">
-      <DependentUpon>ComTest.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="UDS\DataShow.resx">
-      <DependentUpon>DataShow.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="UDS\Service_19.resx">
-      <DependentUpon>Service_19.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="UDS\Service_2F.resx">
-      <DependentUpon>Service_2F.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="UDS\UDS_Service.resx">
-      <DependentUpon>UDS_Service.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Update\Custom_Add.resx">
-      <DependentUpon>Custom_Add.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="Update\update.resx">
-      <DependentUpon>update.cs</DependentUpon>
-    </EmbeddedResource>
     <None Include="packages.config" />
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
@@ -485,11 +412,6 @@
       <DependentUpon>Settings.settings</DependentUpon>
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
-    <EmbeddedResource Include="Resources\Flashdriver_NEW.s19" />
-    <EmbeddedResource Include="Resources\V50_FLASHDriver.s19" />
-    <EmbeddedResource Include="Resources\V11download.json" />
-    <EmbeddedResource Include="Resources\V50download.json" />
-    <EmbeddedResource Include="Resources\VQ_ASdownload.json" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

@@ -1,8 +1,6 @@
 using PCAN_Client.CAN_Data;
 using PCAN_Client.CAN_Data.blf;
 using PCAN_Client.DataLog;
-using PCAN_Client.UDS;
-using PCAN_Client.Update;
 using PCAN_Client.util;
 using Peak.Can.Basic;
 using Peak.Can.Basic.BackwardCompatibility;
@@ -32,23 +30,10 @@ namespace PCAN_Client
     {
         internal PCAN_API.PCAN_API pCAN_API = null;
         internal Canoe_API.CanOe_API canoe_API = null;
-        internal static UDS_Service uDS = null;
         internal static CanSend canSend = null;
-        internal static Service_2F service_2F = null;
-        internal static Service_19 service_19 = null;
-        internal static ComTest ComTest = null;
-        internal static DataShow dataShow = null;
-        internal static Update.update update = null;
         internal static ChartFrom chartFromShow = null;
         internal static LogFileToCSV LogFileToCSV = null;
-        internal static Boolean udsOpenFlag = false;
         internal static Boolean canSendOpenFlag = false;
-        internal static Boolean Service2FOpenFlag = false;
-        internal static Boolean Service19OpenFlag = false;
-        internal static Boolean ComTestOpenFlag = false;
-        internal static Boolean DataShowOpenFlag = false;
-        internal static Boolean updateOpenFlag = false;
-        internal static Boolean updateingFlag = false;
         internal static Boolean ChartShowOpenFlag = false;
 
         internal static Main main = new Main();
@@ -65,10 +50,7 @@ namespace PCAN_Client
 
         public MultiMessageCANScheduler multiMessageCANScheduler = null;
 
-        internal static int liveCount = 0;
-        internal static bool liveFlag = false;
         internal static string CANDevice = "";
-        internal static bool RestartConnectFlag = false;
         internal static bool updeteDbcSuccess = true;
 
         // ========== 报文显示相关 (VirtualMode高性能) ==========
@@ -2086,15 +2068,11 @@ namespace PCAN_Client
                 {
                     GetPCAN_ComRefresh();
                     GetCanoe_ComRefresh();
-                    if (!BaseParamter.Pre_b_OnlyUpdateFlag)
-                    {
-                        util.USBEventWatch.StartWMIWatcher(GetPCAN_ComRefresh);
-                    }
+                    util.USBEventWatch.StartWMIWatcher(GetPCAN_ComRefresh);
                 });
                 task.Start();
             }
             catch { }
-            BaseParamter.MngBaseParamterInit();
             CAN_API.CAN_API.stopwatch.Restart();
 
             // 创建多消息调度器
@@ -2105,21 +2083,8 @@ namespace PCAN_Client
             // 启动调度器
             multiMessageCANScheduler.Start();
 
-            if(!Properties.Settings.Default.SetSwVer.Equals("NULL"))
-            {
-               textBox_InputSwVer.Text = Properties.Settings.Default.SetSwVer;
-            }
-            if(!Properties.Settings.Default.SetHwVer.Equals("NULL"))
-            {
-                textBox_InputHwVer.Text = Properties.Settings.Default.SetHwVer;
-            }
-            if (!Properties.Settings.Default.SetPartVer.Equals("NULL"))
-            {
-                textBox_InputPartVer.Text = Properties.Settings.Default.SetPartVer;
-            }
-            // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送/版本校验使用
+            // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送使用
             BaseParamter.LoadBusChannelsConfig();
-            projectCheckDeal();
 
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
             this.FormClosing += Main_FormClosingEx;
@@ -2159,7 +2124,6 @@ namespace PCAN_Client
                         button1.Text = "连接";
                         pcanOpenFlag = false;
                         GetPCAN_ComRefresh();
-                        RestartConnectFlag = false;
                     }
                     else
                     {
@@ -2180,7 +2144,6 @@ namespace PCAN_Client
                             pCAN_API.SetPcanChannel(channel - 1);
                             if (true == pCAN_API.Connect(CanFDFlag))
                             {
-                                RestartConnectFlag = true;
                                 button1.Text = "已连接";
                                 pcanOpenFlag = true;
                                 comboBox1.Items[comboBox1.SelectedIndex] = "USB_" + (comboBox1.SelectedIndex + 1) + "(已连接)";
@@ -2363,33 +2326,6 @@ namespace PCAN_Client
             GetPCAN_ComRefresh();
         }
 
-        private void button2_Click(object sender, EventArgs e)
-        {
-            if (false == udsOpenFlag)
-            {
-                uDS = new UDS_Service();
-            }
-            else
-            {
-                /* empty */
-            }
-            uDS.Show();
-        }
-
-        private void button4_Click(object sender, EventArgs e)
-        {
-            if (false == updateOpenFlag)
-            {
-                update = new Update.update();
-            }
-            else
-            {
-                /* empty */
-            }
-            update.Show();
-            main.Hide();
-        }
-
         private void comboBox_CanoeChannel_Click(object sender, EventArgs e)
         {
             button5.Text = "连接";
@@ -2419,7 +2355,6 @@ namespace PCAN_Client
                         canoe_API.CANOE_Close();
                         button5.Text = "连接";
                         canoeOpenFlag = false;
-                        RestartConnectFlag = false;
                     }
                     else
                     {
@@ -2439,7 +2374,6 @@ namespace PCAN_Client
                                 {
                                     button5.Text = "已连接";
                                     canoeOpenFlag = true;
-                                    RestartConnectFlag = true;
                                 }
                                 else
                                 {
@@ -2701,7 +2635,6 @@ namespace PCAN_Client
         private void timer1_Tick(object sender, EventArgs e)
         {
             UpdateDbcListviewTimer(SelectMessageIndex);
-            VersionCheck();
 
             // Scroll 模式下至少每 500ms 强制刷新一次（即使无新数据也要更新画面）
             if (_scrollMode && !_pauseUpdate)
@@ -3215,322 +3148,6 @@ namespace PCAN_Client
                 Stop();
                 ClearAllActions();
                 _timer?.Dispose();
-            }
-        }
-
-        private void radioButtonLP_Click(object sender, EventArgs e)
-        {
-            BaseParamter.SelectProjectType = (int)BaseParamter.SelectProjectTypeEnum.LingPao;
-            Properties.Settings.Default.ProjectSelectIndex = BaseParamter.SelectProjectType;
-            Properties.Settings.Default.Save();
-            BaseParamter.FlashDriverSelectIndex = (ushort)BaseParamter.SelectProjectType;
-            Properties.Settings.Default.UDS_TX_ID = 0x7B0;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_TX_ID = (ushort)Properties.Settings.Default.UDS_TX_ID;
-
-            Properties.Settings.Default.UDS_RX_ID = 0x7B8;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_RX_ID = (ushort)Properties.Settings.Default.UDS_RX_ID;
-
-            textBox_InputPartVer.ReadOnly = true;
-            PartResult.BackColor = Color.Green;
-            SwResult.BackColor = Color.White;
-            HwResult.BackColor = Color.White;
-            projectCheckDeal();
-        }
-
-        private void radioButtonVQ_Click(object sender, EventArgs e)
-        {
-            BaseParamter.SelectProjectType = (int)BaseParamter.SelectProjectTypeEnum.BeiQi_Old;
-            Properties.Settings.Default.ProjectSelectIndex = BaseParamter.SelectProjectType;
-            Properties.Settings.Default.Save();
-            BaseParamter.FlashDriverSelectIndex = (ushort)BaseParamter.SelectProjectType;
-
-            Properties.Settings.Default.UDS_TX_ID = 0x7F0;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_TX_ID = (ushort)Properties.Settings.Default.UDS_TX_ID;
-
-            Properties.Settings.Default.UDS_RX_ID = 0x7F8;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_RX_ID = (ushort)Properties.Settings.Default.UDS_RX_ID;
-
-            textBox_InputPartVer.ReadOnly = false;
-            PartResult.BackColor = Color.White;
-            SwResult.BackColor = Color.White;
-            HwResult.BackColor = Color.White;
-            projectCheckDeal();
-        }
-
-        private void radioButtonVQNew_Click(object sender, EventArgs e)
-        {
-            BaseParamter.SelectProjectType = (int)BaseParamter.SelectProjectTypeEnum.BeiQi_New;
-            Properties.Settings.Default.ProjectSelectIndex = BaseParamter.SelectProjectType;
-            Properties.Settings.Default.Save();
-            BaseParamter.FlashDriverSelectIndex = (ushort)BaseParamter.SelectProjectType;
-
-            Properties.Settings.Default.UDS_TX_ID = 0x7F0;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_TX_ID = (ushort)Properties.Settings.Default.UDS_TX_ID;
-
-            Properties.Settings.Default.UDS_RX_ID = 0x7F8;
-            Properties.Settings.Default.Save();
-            BaseParamter.UDS_RX_ID = (ushort)Properties.Settings.Default.UDS_RX_ID;
-
-            textBox_InputPartVer.ReadOnly = false;
-            PartResult.BackColor = Color.White;
-            SwResult.BackColor = Color.White;
-            HwResult.BackColor = Color.White;
-            projectCheckDeal();
-        }
-
-        private void textBox_InputSwVer_TextChanged(object sender, EventArgs e)
-        {
-            Properties.Settings.Default.SetSwVer = textBox_InputSwVer.Text; /* 记忆软件版本号 */
-            Properties.Settings.Default.Save();
-        }
-
-        private void textBox_InputHwVer_TextChanged(object sender, EventArgs e)
-        {
-            Properties.Settings.Default.SetHwVer = textBox_InputHwVer.Text; /* 记忆硬件版本号 */
-            Properties.Settings.Default.Save();
-        }
-
-        private void textBox_InputPartVer_TextChanged(object sender, EventArgs e)
-        {
-            Properties.Settings.Default.SetPartVer = textBox_InputPartVer.Text; /* 记忆零件号 */
-            Properties.Settings.Default.Save();
-        }
-
-        public void RxData(TPCANMsg msg, TPCANTimestamp timesamp)
-        {
-            if(BaseParamter.IsSelectProjectType(BaseParamter.SelectProjectTypeEnum.LingPao))
-            {
-                if(0x524 == msg.ID)
-                {
-                    liveCount = 0;
-                    liveFlag = true;
-                }
-            }
-            else
-            {
-                if (0x664 == msg.ID)
-                {
-                    liveCount = 0;
-                    liveFlag = true;
-                }
-            }
-        }
-        public void VersionCheck()
-        {
-            int timeout = 11;
-            if (BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
-            {
-                return;
-            }
-
-            if (BaseParamter.IsSelectProjectType(BaseParamter.SelectProjectTypeEnum.LingPao) && liveFlag)
-            {
-                timeout = 6;
-                PartResult.BackColor = Color.Green;
-                var message = BaseParamter.dbcHelper.GetMessageById(0x524);
-                if(null == message)
-                {
-                    SwResult.BackColor = Color.Red;
-                    HwResult.BackColor = Color.Red;
-                    return;
-                }
-                try
-                {
-                    string ByteToHexPair(byte b) => $"{b >> 4:X}{b & 0x0F:X}";
-
-                    var versionA = message.signals.FirstOrDefault(m => m.signalName == "TMS_SWVersionA");
-                    var versionB = message.signals.FirstOrDefault(m => m.signalName == "TMS_SWVersionB");
-                    var versionC = message.signals.FirstOrDefault(m => m.signalName == "TMS_SWVersionC");
-
-                    if (versionA == null || versionB == null || versionC == null)
-                    {
-                        textBox_ReadSwVer.Text = "版本信息不完整";
-                        return;
-                    }
-
-                    string readSwVer = $"{versionA.result}.{ByteToHexPair((byte)versionB.result)}.{ByteToHexPair((byte)versionC.result)}";
-                    textBox_ReadSwVer.Text = readSwVer;
-                    if (textBox_ReadSwVer.Text.Equals(textBox_InputSwVer.Text))
-                    {
-                        SwResult.BackColor = Color.Green;
-                    }
-                    else
-                    {
-                        SwResult.BackColor = Color.Red;
-                    }
-
-                    versionA = message.signals.FirstOrDefault(m => m.signalName == "TMS_HWVersionA");
-                    versionB = message.signals.FirstOrDefault(m => m.signalName == "TMS_HWVersionB");
-                    versionC = message.signals.FirstOrDefault(m => m.signalName == "TMS_HWVersionC");
-
-                    if (versionA == null || versionB == null || versionC == null)
-                    {
-                        textBox_ReadHwVer.Text = "版本信息不完整";
-                        return;
-                    }
-
-                    string readHwVer = $"{versionA.result}.{ByteToHexPair((byte)versionB.result)}.{ByteToHexPair((byte)versionC.result)}";
-                    textBox_ReadHwVer.Text = readHwVer;
-
-                    if (textBox_ReadHwVer.Text.Equals(textBox_InputHwVer.Text))
-                    {
-                        HwResult.BackColor = Color.Green;
-                    }
-                    else
-                    {
-                        HwResult.BackColor = Color.Red;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    textBox_ReadSwVer.Text = $"解析版本失败: {ex.Message}";
-                    textBox_ReadHwVer.Text = $"解析版本失败: {ex.Message}";
-                    SwResult.BackColor = Color.Red;
-                    HwResult.BackColor = Color.Red;
-                }
-            }
-            else if (liveFlag)
-            {
-                var message = BaseParamter.dbcHelper.GetMessageById(0x664);
-                if (null == message)
-                {
-                    SwResult.BackColor = Color.Red;
-                    HwResult.BackColor = Color.Red;
-                    PartResult.BackColor = Color.Red;
-                    return;
-                }
-
-                string ByteToHexPair(byte b) => $"{b >> 4:X}{b & 0x0F:X}";
-
-                var SwVersM = message.signals.FirstOrDefault(m => m.signalName == "ECC_SwVersM");
-                var SwVersS = message.signals.FirstOrDefault(m => m.signalName == "ECC_SwVersS");
-
-                if (SwVersM == null || SwVersS == null)
-                {
-                    textBox_ReadSwVer.Text = "版本信息不完整";
-                    return;
-                }
-                string readSwVer = "S" + string.Format("{0:D3}", (int)SwVersM.result) + "." + string.Format("{0:D3}", (int)SwVersS.result);
-                textBox_ReadSwVer.Text = readSwVer;
-                if (textBox_ReadSwVer.Text.Equals(textBox_InputSwVer.Text))
-                {
-                    SwResult.BackColor = Color.Green;
-                }
-                else
-                {
-                    SwResult.BackColor = Color.Red;
-                }
-
-
-                var HwVersM = message.signals.FirstOrDefault(m => m.signalName == "ECC_HwVers");
-                if (HwVersM == null)
-                {
-                    textBox_ReadHwVer.Text = "版本信息不完整";
-                    return;
-                }
-                string readHwVer = "H" + string.Format("{0:D3}", (int)HwVersM.result);
-                textBox_ReadHwVer.Text = readHwVer;
-
-                if (textBox_ReadHwVer.Text.Equals(textBox_InputHwVer.Text))
-                {
-                    HwResult.BackColor = Color.Green;
-                }
-                else
-                {
-                    HwResult.BackColor = Color.Red;
-                }
-
-
-                var PartVersS = message.signals.FirstOrDefault(m => m.signalName == "ECC_PartVers");
-                if (PartVersS == null)
-                {
-                    textBox_ReadPartVer.Text = "版本信息不完整";
-                    return;
-                }
-                string readPartVer = ((int)PartVersS.result).ToString();
-                textBox_ReadPartVer.Text = readPartVer;
-
-                if (textBox_ReadPartVer.Text.Equals(textBox_InputPartVer.Text))
-                {
-                    PartResult.BackColor = Color.Green;
-                }
-                else
-                {
-                    PartResult.BackColor = Color.Red;
-                }
-            }
-
-            /* 超过1.1秒未收到报文，自动重连 */
-            if (!textBox_InputSwVer.Text.Equals("") && !textBox_InputHwVer.Text.Equals("") && RestartConnectFlag && (Main.updateOpenFlag is false || Main.updateingFlag is false))
-            {
-                if (timeout <= liveCount)
-                {
-                    liveCount = 0;
-                    SwResult.BackColor = Color.Red;
-                    HwResult.BackColor = Color.Red;
-                    PartResult.BackColor = Color.Red;
-                    liveFlag = false;
-                    if (CANDevice.Equals("PCAN"))
-                    {
-                        if (button1.Text.Equals("已连接"))
-                        {
-                            pCAN_API.PCAN_ChannelUninitialize();
-                            button1.Text = "连接";
-                            pcanOpenFlag = false;
-                        }
-
-                        PCAN_Connect(false);
-                    }
-                    else if (CANDevice.Equals("CANOE"))
-                    {
-                        if (button5.Text.Equals("已连接"))
-                        {
-                            canoe_API.CANOE_Close();
-                            button5.Text = "连接";
-                            canoeOpenFlag = false;
-                        }
-
-                        CANoeConnect(false);
-                    }
-                }
-                else
-                {
-                    liveCount++;
-                }
-            }
-        }
-
-        private void projectCheckDeal()
-        {
-            if (BaseParamter.IsSelectProjectType(BaseParamter.SelectProjectTypeEnum.LingPao))
-            {
-                radioButtonLP.Checked = true;
-
-                textBox_InputPartVer.ReadOnly = true;
-                PartResult.BackColor = Color.Green;
-                SwResult.BackColor = Color.White;
-                HwResult.BackColor = Color.White;
-            }
-            else if (BaseParamter.IsSelectProjectType(BaseParamter.SelectProjectTypeEnum.BeiQi_Old))
-            {
-                radioButtonVQ.Checked = true;
-                textBox_InputPartVer.ReadOnly = false;
-                PartResult.BackColor = Color.White;
-                SwResult.BackColor = Color.White;
-                HwResult.BackColor = Color.White;
-            }
-            else
-            {
-                radioButtonVQNew.Checked = true;
-                textBox_InputPartVer.ReadOnly = false;
-                PartResult.BackColor = Color.White;
-                SwResult.BackColor = Color.White;
-                HwResult.BackColor = Color.White;
             }
         }
     }

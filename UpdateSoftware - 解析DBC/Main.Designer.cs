@@ -34,8 +34,6 @@ namespace PCAN_Client
             this.textBox1 = new System.Windows.Forms.TextBox();
             this.comboBox1 = new System.Windows.Forms.ComboBox();
             this.button3 = new System.Windows.Forms.Button();
-            this.button2 = new System.Windows.Forms.Button();
-            this.button4 = new System.Windows.Forms.Button();
             this.groupBox1 = new System.Windows.Forms.GroupBox();
             this.groupBox2 = new System.Windows.Forms.GroupBox();
             this.comboBox_CanoeChannel = new System.Windows.Forms.ComboBox();
@@ -49,34 +47,11 @@ namespace PCAN_Client
             this.SendMsg = new System.Windows.Forms.Button();
             this.button6 = new System.Windows.Forms.Button();
             this.button7 = new System.Windows.Forms.Button();
-            this.label2 = new System.Windows.Forms.Label();
-            this.label3 = new System.Windows.Forms.Label();
-            this.textBox_InputSwVer = new System.Windows.Forms.TextBox();
-            this.textBox_InputHwVer = new System.Windows.Forms.TextBox();
-            this.label4 = new System.Windows.Forms.Label();
-            this.label5 = new System.Windows.Forms.Label();
-            this.textBox_ReadSwVer = new System.Windows.Forms.TextBox();
-            this.textBox_ReadHwVer = new System.Windows.Forms.TextBox();
-            this.radioButtonLP = new System.Windows.Forms.RadioButton();
-            this.radioButtonVQ = new System.Windows.Forms.RadioButton();
-            this.groupBox4 = new System.Windows.Forms.GroupBox();
-            this.radioButtonVQNew = new System.Windows.Forms.RadioButton();
-            this.PartResult = new System.Windows.Forms.TextBox();
-            this.label8 = new System.Windows.Forms.Label();
-            this.textBox_ReadPartVer = new System.Windows.Forms.TextBox();
-            this.label9 = new System.Windows.Forms.Label();
-            this.textBox_InputPartVer = new System.Windows.Forms.TextBox();
-            this.label10 = new System.Windows.Forms.Label();
-            this.HwResult = new System.Windows.Forms.TextBox();
-            this.label7 = new System.Windows.Forms.Label();
-            this.SwResult = new System.Windows.Forms.TextBox();
-            this.label6 = new System.Windows.Forms.Label();
             this.dataGridView1 = new System.Windows.Forms.DataGridView();
             this.textBox__txtIdFilter = new System.Windows.Forms.TextBox();
             this.groupBox1.SuspendLayout();
             this.groupBox2.SuspendLayout();
             this.groupBox3.SuspendLayout();
-            this.groupBox4.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -122,26 +97,6 @@ namespace PCAN_Client
             this.button3.Text = "存储数据";
             this.button3.UseVisualStyleBackColor = true;
             this.button3.Click += new System.EventHandler(this.button3_Click);
-            // 
-            // button2
-            // 
-            this.button2.Location = new System.Drawing.Point(396, 5);
-            this.button2.Name = "button2";
-            this.button2.Size = new System.Drawing.Size(74, 28);
-            this.button2.TabIndex = 41;
-            this.button2.Text = "UDS";
-            this.button2.UseVisualStyleBackColor = true;
-            this.button2.Click += new System.EventHandler(this.button2_Click);
-            // 
-            // button4
-            // 
-            this.button4.Location = new System.Drawing.Point(316, 5);
-            this.button4.Name = "button4";
-            this.button4.Size = new System.Drawing.Size(74, 28);
-            this.button4.TabIndex = 42;
-            this.button4.Text = "程序刷写";
-            this.button4.UseVisualStyleBackColor = true;
-            this.button4.Click += new System.EventHandler(this.button4_Click);
             // 
             // groupBox1
             // 
@@ -286,250 +241,6 @@ namespace PCAN_Client
             this.button7.UseVisualStyleBackColor = true;
             this.button7.Click += new System.EventHandler(this.button7_Click);
             // 
-            // label2
-            // 
-            this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(4, 20);
-            this.label2.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(65, 12);
-            this.label2.TabIndex = 55;
-            this.label2.Text = "软件版本：";
-            // 
-            // label3
-            // 
-            this.label3.AutoSize = true;
-            this.label3.Location = new System.Drawing.Point(4, 38);
-            this.label3.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label3.Name = "label3";
-            this.label3.Size = new System.Drawing.Size(65, 12);
-            this.label3.TabIndex = 56;
-            this.label3.Text = "硬件版本：";
-            // 
-            // textBox_InputSwVer
-            // 
-            this.textBox_InputSwVer.Location = new System.Drawing.Point(65, 12);
-            this.textBox_InputSwVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_InputSwVer.Name = "textBox_InputSwVer";
-            this.textBox_InputSwVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_InputSwVer.TabIndex = 57;
-            this.textBox_InputSwVer.TextChanged += new System.EventHandler(this.textBox_InputSwVer_TextChanged);
-            // 
-            // textBox_InputHwVer
-            // 
-            this.textBox_InputHwVer.Location = new System.Drawing.Point(65, 34);
-            this.textBox_InputHwVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_InputHwVer.Name = "textBox_InputHwVer";
-            this.textBox_InputHwVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_InputHwVer.TabIndex = 58;
-            this.textBox_InputHwVer.TextChanged += new System.EventHandler(this.textBox_InputHwVer_TextChanged);
-            // 
-            // label4
-            // 
-            this.label4.AutoSize = true;
-            this.label4.Location = new System.Drawing.Point(224, 17);
-            this.label4.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label4.Name = "label4";
-            this.label4.Size = new System.Drawing.Size(89, 12);
-            this.label4.TabIndex = 59;
-            this.label4.Text = "总线软件版本：";
-            // 
-            // label5
-            // 
-            this.label5.AutoSize = true;
-            this.label5.Location = new System.Drawing.Point(224, 38);
-            this.label5.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label5.Name = "label5";
-            this.label5.Size = new System.Drawing.Size(89, 12);
-            this.label5.TabIndex = 60;
-            this.label5.Text = "总线硬件版本：";
-            // 
-            // textBox_ReadSwVer
-            // 
-            this.textBox_ReadSwVer.Location = new System.Drawing.Point(310, 12);
-            this.textBox_ReadSwVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_ReadSwVer.Name = "textBox_ReadSwVer";
-            this.textBox_ReadSwVer.ReadOnly = true;
-            this.textBox_ReadSwVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_ReadSwVer.TabIndex = 61;
-            // 
-            // textBox_ReadHwVer
-            // 
-            this.textBox_ReadHwVer.Location = new System.Drawing.Point(310, 34);
-            this.textBox_ReadHwVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_ReadHwVer.Name = "textBox_ReadHwVer";
-            this.textBox_ReadHwVer.ReadOnly = true;
-            this.textBox_ReadHwVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_ReadHwVer.TabIndex = 62;
-            // 
-            // radioButtonLP
-            // 
-            this.radioButtonLP.AutoSize = true;
-            this.radioButtonLP.Location = new System.Drawing.Point(145, 15);
-            this.radioButtonLP.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButtonLP.Name = "radioButtonLP";
-            this.radioButtonLP.Size = new System.Drawing.Size(77, 16);
-            this.radioButtonLP.TabIndex = 63;
-            this.radioButtonLP.TabStop = true;
-            this.radioButtonLP.Text = "客户B平台";
-            this.radioButtonLP.UseVisualStyleBackColor = true;
-            this.radioButtonLP.Click += new System.EventHandler(this.radioButtonLP_Click);
-            // 
-            // radioButtonVQ
-            // 
-            this.radioButtonVQ.AutoSize = true;
-            this.radioButtonVQ.Location = new System.Drawing.Point(145, 35);
-            this.radioButtonVQ.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButtonVQ.Name = "radioButtonVQ";
-            this.radioButtonVQ.Size = new System.Drawing.Size(71, 16);
-            this.radioButtonVQ.TabIndex = 64;
-            this.radioButtonVQ.TabStop = true;
-            this.radioButtonVQ.Text = "客户-Old";
-            this.radioButtonVQ.UseVisualStyleBackColor = true;
-            this.radioButtonVQ.Click += new System.EventHandler(this.radioButtonVQ_Click);
-            // 
-            // groupBox4
-            // 
-            this.groupBox4.Controls.Add(this.radioButtonVQNew);
-            this.groupBox4.Controls.Add(this.PartResult);
-            this.groupBox4.Controls.Add(this.label8);
-            this.groupBox4.Controls.Add(this.textBox_ReadPartVer);
-            this.groupBox4.Controls.Add(this.label9);
-            this.groupBox4.Controls.Add(this.textBox_InputPartVer);
-            this.groupBox4.Controls.Add(this.label10);
-            this.groupBox4.Controls.Add(this.HwResult);
-            this.groupBox4.Controls.Add(this.label7);
-            this.groupBox4.Controls.Add(this.SwResult);
-            this.groupBox4.Controls.Add(this.label6);
-            this.groupBox4.Controls.Add(this.radioButtonVQ);
-            this.groupBox4.Controls.Add(this.radioButtonLP);
-            this.groupBox4.Controls.Add(this.textBox_ReadHwVer);
-            this.groupBox4.Controls.Add(this.textBox_ReadSwVer);
-            this.groupBox4.Controls.Add(this.label5);
-            this.groupBox4.Controls.Add(this.label4);
-            this.groupBox4.Controls.Add(this.textBox_InputHwVer);
-            this.groupBox4.Controls.Add(this.textBox_InputSwVer);
-            this.groupBox4.Controls.Add(this.label3);
-            this.groupBox4.Controls.Add(this.label2);
-            this.groupBox4.Location = new System.Drawing.Point(650, 42);
-            this.groupBox4.Margin = new System.Windows.Forms.Padding(2);
-            this.groupBox4.Name = "groupBox4";
-            this.groupBox4.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox4.Size = new System.Drawing.Size(530, 86);
-            this.groupBox4.TabIndex = 54;
-            this.groupBox4.TabStop = false;
-            this.groupBox4.Text = "版本校验";
-            // 
-            // radioButtonVQNew
-            // 
-            this.radioButtonVQNew.AutoSize = true;
-            this.radioButtonVQNew.Location = new System.Drawing.Point(145, 55);
-            this.radioButtonVQNew.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButtonVQNew.Name = "radioButtonVQNew";
-            this.radioButtonVQNew.Size = new System.Drawing.Size(71, 16);
-            this.radioButtonVQNew.TabIndex = 75;
-            this.radioButtonVQNew.TabStop = true;
-            this.radioButtonVQNew.Text = "客户-New";
-            this.radioButtonVQNew.UseVisualStyleBackColor = true;
-            this.radioButtonVQNew.Click += new System.EventHandler(this.radioButtonVQNew_Click);
-            // 
-            // PartResult
-            // 
-            this.PartResult.Location = new System.Drawing.Point(478, 60);
-            this.PartResult.Margin = new System.Windows.Forms.Padding(2);
-            this.PartResult.Multiline = true;
-            this.PartResult.Name = "PartResult";
-            this.PartResult.ReadOnly = true;
-            this.PartResult.Size = new System.Drawing.Size(48, 20);
-            this.PartResult.TabIndex = 74;
-            // 
-            // label8
-            // 
-            this.label8.AutoSize = true;
-            this.label8.Location = new System.Drawing.Point(392, 65);
-            this.label8.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label8.Name = "label8";
-            this.label8.Size = new System.Drawing.Size(89, 12);
-            this.label8.TabIndex = 73;
-            this.label8.Text = "零件校验结果：";
-            // 
-            // textBox_ReadPartVer
-            // 
-            this.textBox_ReadPartVer.Location = new System.Drawing.Point(310, 58);
-            this.textBox_ReadPartVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_ReadPartVer.Name = "textBox_ReadPartVer";
-            this.textBox_ReadPartVer.ReadOnly = true;
-            this.textBox_ReadPartVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_ReadPartVer.TabIndex = 72;
-            // 
-            // label9
-            // 
-            this.label9.AutoSize = true;
-            this.label9.Location = new System.Drawing.Point(224, 62);
-            this.label9.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label9.Name = "label9";
-            this.label9.Size = new System.Drawing.Size(89, 12);
-            this.label9.TabIndex = 71;
-            this.label9.Text = "总线零件总成：";
-            // 
-            // textBox_InputPartVer
-            // 
-            this.textBox_InputPartVer.Location = new System.Drawing.Point(65, 58);
-            this.textBox_InputPartVer.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_InputPartVer.Name = "textBox_InputPartVer";
-            this.textBox_InputPartVer.Size = new System.Drawing.Size(76, 21);
-            this.textBox_InputPartVer.TabIndex = 70;
-            this.textBox_InputPartVer.TextChanged += new System.EventHandler(this.textBox_InputPartVer_TextChanged);
-            // 
-            // label10
-            // 
-            this.label10.AutoSize = true;
-            this.label10.Location = new System.Drawing.Point(4, 62);
-            this.label10.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label10.Name = "label10";
-            this.label10.Size = new System.Drawing.Size(65, 12);
-            this.label10.TabIndex = 69;
-            this.label10.Text = "零件总成：";
-            // 
-            // HwResult
-            // 
-            this.HwResult.Location = new System.Drawing.Point(478, 37);
-            this.HwResult.Margin = new System.Windows.Forms.Padding(2);
-            this.HwResult.Multiline = true;
-            this.HwResult.Name = "HwResult";
-            this.HwResult.ReadOnly = true;
-            this.HwResult.Size = new System.Drawing.Size(48, 20);
-            this.HwResult.TabIndex = 68;
-            // 
-            // label7
-            // 
-            this.label7.AutoSize = true;
-            this.label7.Location = new System.Drawing.Point(392, 42);
-            this.label7.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label7.Name = "label7";
-            this.label7.Size = new System.Drawing.Size(89, 12);
-            this.label7.TabIndex = 67;
-            this.label7.Text = "硬件校验结果：";
-            // 
-            // SwResult
-            // 
-            this.SwResult.Location = new System.Drawing.Point(478, 14);
-            this.SwResult.Margin = new System.Windows.Forms.Padding(2);
-            this.SwResult.Multiline = true;
-            this.SwResult.Name = "SwResult";
-            this.SwResult.ReadOnly = true;
-            this.SwResult.Size = new System.Drawing.Size(48, 20);
-            this.SwResult.TabIndex = 66;
-            // 
-            // label6
-            // 
-            this.label6.AutoSize = true;
-            this.label6.Location = new System.Drawing.Point(392, 19);
-            this.label6.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label6.Name = "label6";
-            this.label6.Size = new System.Drawing.Size(89, 12);
-            this.label6.TabIndex = 65;
-            this.label6.Text = "软件校验结果：";
             //
             // dataGridView1
             // 
@@ -555,15 +266,12 @@ namespace PCAN_Client
             this.ClientSize = new System.Drawing.Size(1193, 641);
             this.Controls.Add(this.dataGridView1);
             this.Controls.Add(this.textBox__txtIdFilter);
-            this.Controls.Add(this.groupBox4);
             this.Controls.Add(this.button7);
             this.Controls.Add(this.button6);
             this.Controls.Add(this.SendMsg);
             this.Controls.Add(this.groupBox3);
             this.Controls.Add(this.groupBox2);
             this.Controls.Add(this.groupBox1);
-            this.Controls.Add(this.button4);
-            this.Controls.Add(this.button2);
             this.Controls.Add(this.button3);
             this.Controls.Add(this.textBox1);
             this.Controls.Add(this.listView1);
@@ -578,8 +286,6 @@ namespace PCAN_Client
             this.groupBox2.ResumeLayout(false);
             this.groupBox3.ResumeLayout(false);
             this.groupBox3.PerformLayout();
-            this.groupBox4.ResumeLayout(false);
-            this.groupBox4.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
@@ -592,8 +298,6 @@ namespace PCAN_Client
         private System.Windows.Forms.TextBox textBox1;
         private System.Windows.Forms.ComboBox comboBox1;
         private System.Windows.Forms.Button button3;
-        private System.Windows.Forms.Button button2;
-        private System.Windows.Forms.Button button4;
         private System.Windows.Forms.GroupBox groupBox1;
         private System.Windows.Forms.GroupBox groupBox2;
         private System.Windows.Forms.ComboBox comboBox_CanoeChannel;
@@ -607,28 +311,6 @@ namespace PCAN_Client
         private System.Windows.Forms.Button SendMsg;
         private System.Windows.Forms.Button button6;
         private System.Windows.Forms.Button button7;
-        private System.Windows.Forms.Label label2;
-        private System.Windows.Forms.Label label3;
-        private System.Windows.Forms.TextBox textBox_InputSwVer;
-        private System.Windows.Forms.TextBox textBox_InputHwVer;
-        private System.Windows.Forms.Label label4;
-        private System.Windows.Forms.Label label5;
-        private System.Windows.Forms.TextBox textBox_ReadSwVer;
-        private System.Windows.Forms.TextBox textBox_ReadHwVer;
-        private System.Windows.Forms.RadioButton radioButtonLP;
-        private System.Windows.Forms.RadioButton radioButtonVQ;
-        private System.Windows.Forms.GroupBox groupBox4;
-        private System.Windows.Forms.TextBox HwResult;
-        private System.Windows.Forms.Label label7;
-        private System.Windows.Forms.TextBox SwResult;
-        private System.Windows.Forms.Label label6;
-        private System.Windows.Forms.TextBox PartResult;
-        private System.Windows.Forms.Label label8;
-        private System.Windows.Forms.TextBox textBox_ReadPartVer;
-        private System.Windows.Forms.Label label9;
-        private System.Windows.Forms.TextBox textBox_InputPartVer;
-        private System.Windows.Forms.Label label10;
-        private System.Windows.Forms.RadioButton radioButtonVQNew;
         private System.Windows.Forms.DataGridView dataGridView1;
         private System.Windows.Forms.TextBox textBox__txtIdFilter;
     }

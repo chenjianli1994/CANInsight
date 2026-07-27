@@ -51,10 +51,6 @@ namespace PCAN_Client.util
                 {
                     PCAN_API.PCAN_API.PcanChannelNumRefresh();
                     FunctionCallBack();
-                    if (!Main.updateingFlag)
-                    {
-                        FunctionCallBack();
-                    }
                 }
             }
             catch (Exception ex)

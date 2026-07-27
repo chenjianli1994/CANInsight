@@ -23,7 +23,6 @@ namespace PCAN_Client.CAN_API
         static ulong time_us_last = 0;
         static long startTime;
         static readonly long refersh = (long)(0.5 * 1000 * 1000); /* 100ms */
-        static bool Service19RunFlag = false;
 
         // 添加批量处理相关的成员变量
         private static readonly StringBuilder _uiBuffer = new StringBuilder();
@@ -40,10 +39,6 @@ namespace PCAN_Client.CAN_API
 
         public static object _receiveCanDataLock = new object();
 
-        internal static void SetService19RunFlag(bool flag)
-        {
-            Service19RunFlag = flag;
-        }
         internal static Boolean CanTransmit(uint ID, ushort len, byte[] data)
         {
             Boolean result = false;
@@ -111,14 +106,11 @@ namespace PCAN_Client.CAN_API
             {
                 BaseParamter.dbcHelper.CANDataDeal(ID, len, data, timestamp2);
             }
-            // 非刷写模式下，记录实时CAN原始报文（用于ChartFrom保存BLF）
-            if (!Main.updateingFlag)
+            // 记录实时CAN原始报文（用于ChartFrom保存BLF）
+            ChartFrom.RecordRealtimeRawMessage(ID, data);
+            if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
             {
-                ChartFrom.RecordRealtimeRawMessage(ID, data);
-                if(Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
-                {
-                    Log.AddCanMessageToWrite(ID, data, timestamp2);
-                }
+                Log.AddCanMessageToWrite(ID, data, timestamp2);
             }
             if (0 == startTime)
             {
@@ -136,52 +128,13 @@ namespace PCAN_Client.CAN_API
                 msg.MSGTYPE = MSGTYPE;
                 Array.Copy(data, 0, msg.DATA, 0, len);
 
-                // 更新报文显示记录（所有消息，包括刷写时）
+                // 更新报文显示记录
                 bool isTx = (PendingTxId == ID);
-                if(Main.updateingFlag is false)
-                {
-                    Main.main.RecordCanMessage(msg, timestamp2, isTx);
-                }
+                Main.main.RecordCanMessage(msg, timestamp2, isTx);
 
-                if (Main.udsOpenFlag is false || Main.updateingFlag is true || Service19RunFlag is true)
-                {
-                    /* empty */
-                }
-                else
-                {
-                    Main.uDS.UDS_RxData(msg, timesamp);
-                }
-
-                if (Main.Service2FOpenFlag is false)
-                {
-                    /* empty */
-                }
-                else
-                {
-                    Main.service_2F.Service2F_RxData(msg, timesamp);
-                }
-
-                if (Main.Service19OpenFlag is false)
-                {
-                    /* empty */
-                }
-                else
-                {
-                    Main.service_19.DataReceive(msg, timesamp);
-                }
-                if (Main.updateOpenFlag is false || Main.updateingFlag is false)
-                {
-                    /* empty */
-                }
-                else
-                {
-                    Main.update.Update_RxData(msg, timesamp);
-                }
-                if (Main.updateingFlag is false)
                 {
                     time_us = timestamp2;
 
-                    Main.main.RxData(msg, timesamp);
                     // 批量缓冲数据
                     lock (_bufferLock)
                     {
