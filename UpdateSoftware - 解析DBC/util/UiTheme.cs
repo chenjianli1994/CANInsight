@@ -18,10 +18,14 @@ namespace PCAN_Client
         public static readonly Color SelectionBack = Color.FromArgb(198, 222, 241);
         public static readonly Color Accent = Color.FromArgb(0, 120, 215);
 
-        /// <summary>应用窗体级界面字体（控件自动继承）</summary>
-        public static void StyleForm(Form form)
+        /// <summary>
+        /// 窗体级样式。applyFont=false（默认）：不设置窗体 Font——这些窗口都是
+        /// AutoScaleMode.Font，改窗体字体会触发全部控件按比例重排、布局错位；
+        /// 需要微软雅黑的控件（按钮/表头）由 StyleButton/StyleGrid 单独设置。
+        /// </summary>
+        public static void StyleForm(Form form, bool applyFont = false)
         {
-            form.Font = UiFont;
+            if (applyFont) form.Font = UiFont;
         }
 
         /// <summary>应用统一的 DataGridView 样式（不改动各列既有字体/颜色语义）</summary>
