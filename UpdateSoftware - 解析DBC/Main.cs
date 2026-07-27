@@ -156,11 +156,12 @@ namespace PCAN_Client
         };
 
         // 工具栏控件
-        internal Panel _toolbarPanel;
-        internal Button _btnScroll;
-        internal Button _btnPause;
-        internal Button _btnClear;
-        internal Button _btnDbcOnly;
+        internal ToolStrip _toolbarPanel;
+        internal ToolStrip _topActionsStrip;
+        internal ToolStripButton _btnScroll;
+        internal ToolStripButton _btnPause;
+        internal ToolStripButton _btnClear;
+        internal ToolStripButton _btnDbcOnly;
         internal bool _dbcOnlyMode = false;
 
         // === CAN通道列排序状态 ===
@@ -478,7 +479,7 @@ namespace PCAN_Client
             if (!_scrollMode)
             {
                 _scrollMode = true;
-                _btnScroll.BackColor = Color.FromArgb(144, 238, 144);
+                _btnScroll.Checked = true;
                 _btnScroll.Text = "Scroll";
             }
 
@@ -722,7 +723,7 @@ namespace PCAN_Client
             }
             if (_pauseUpdate == paused) return;
             _pauseUpdate = paused;
-            _btnPause.BackColor = paused ? Color.FromArgb(255, 200, 200) : Color.LightGray;
+            _btnPause.Checked = paused;
             _btnPause.Text = paused ? "Paused" : "Pause";
         }
 
@@ -1567,36 +1568,27 @@ namespace PCAN_Client
             main = this;
         }
 
-        /// <summary>创建报文显示工具栏</summary>
+        /// <summary>创建报文显示工具栏（与绘图窗口一致的ToolStrip无边框风格）</summary>
         private void CreateMessageToolbar()
         {
-            _toolbarPanel = new Panel();
+            _toolbarPanel = new ToolStrip();
             _toolbarPanel.Name = "toolbarPanel";
-            _toolbarPanel.Height = 28;
-            _toolbarPanel.Width = 200;
+            _toolbarPanel.GripStyle = ToolStripGripStyle.Hidden;
+            _toolbarPanel.ImageScalingSize = new Size(20, 20);
+            _toolbarPanel.RenderMode = ToolStripRenderMode.System;
+            _toolbarPanel.Padding = new Padding(4, 2, 4, 2);
+            _toolbarPanel.Font = UiTheme.UiFont;
             // 不使用Dock，改为手动定位在DataGridView上方
             _toolbarPanel.Dock = DockStyle.None;
-            _toolbarPanel.BackColor = Color.FromArgb(240, 240, 245);
-            _toolbarPanel.BorderStyle = BorderStyle.FixedSingle;
-            _toolbarPanel.Padding = new Padding(5, 2, 5, 2);
+            _toolbarPanel.AutoSize = true;
 
-            int btnWidth = 80;
-            int btnHeight = 24;
-            int x = 5;
-            int y = 2;
-
-            // Scroll 按钮
-            _btnScroll = new Button();
-            _btnScroll.Text = "Scroll";
-            _btnScroll.Width = btnWidth;
-            _btnScroll.Height = btnHeight;
-            _btnScroll.Location = new Point(x, y);
-            UiTheme.StyleButton(_btnScroll, "scroll");
-            _btnScroll.BackColor = Color.LightGray;
+            // Scroll 按钮（CheckOnClick：Checked高亮表示Scroll模式开启）
+            _btnScroll = new ToolStripButton("Fixed", ToolbarIcons.Get("scroll"));
+            _btnScroll.CheckOnClick = true;
             _btnScroll.Click += (s, e) =>
             {
                 _scrollMode = !_scrollMode;
-                _btnScroll.BackColor = _scrollMode ? Color.FromArgb(144, 238, 144) : Color.LightGray;
+                _btnScroll.Checked = _scrollMode;
                 _btnScroll.Text = _scrollMode ? "Scroll" : "Fixed";
                 // 切换后刷新模式
                 _scrollFramesLoaded = 0; // 重置增量计数
@@ -1607,23 +1599,16 @@ namespace PCAN_Client
                 _msgDisplayRefreshPending = true;
                 RefreshMessageDisplay();
             };
-            _btnScroll.BackColor = Color.LightGray; // 默认关闭（Fixed模式）
-            _toolbarPanel.Controls.Add(_btnScroll);
-            x += btnWidth + 5;
+            _toolbarPanel.Items.Add(_btnScroll);
 
-            // Pause 按钮
-            _btnPause = new System.Windows.Forms.Button();
-            _btnPause.Text = "Pause";
-            _btnPause.Width = btnWidth;
-            _btnPause.Height = btnHeight;
-            _btnPause.Location = new Point(x, y);
-            UiTheme.StyleButton(_btnPause, "stop");
-            _btnPause.BackColor = Color.LightGray;
+            // Pause 按钮（CheckOnClick：Checked高亮表示已暂停）
+            _btnPause = new ToolStripButton("Pause", ToolbarIcons.Get("stop"));
+            _btnPause.CheckOnClick = true;
             _btnPause.Click += (s, e) =>
             {
                 bool wasPaused = _pauseUpdate;
                 _pauseUpdate = !_pauseUpdate;
-                _btnPause.BackColor = _pauseUpdate ? Color.FromArgb(255, 200, 200) : Color.LightGray;
+                _btnPause.Checked = _pauseUpdate;
                 _btnPause.Text = _pauseUpdate ? "Paused" : "Pause";
 
                 if (!_scrollMode)
@@ -1712,17 +1697,10 @@ namespace PCAN_Client
                     catch { }
                 }
             };
-            _toolbarPanel.Controls.Add(_btnPause);
-            x += btnWidth + 5;
+            _toolbarPanel.Items.Add(_btnPause);
 
             // Clear 按钮
-            _btnClear = new Button();
-            _btnClear.Text = "Clear";
-            _btnClear.Width = btnWidth;
-            _btnClear.Height = btnHeight;
-            _btnClear.Location = new Point(x, y);
-            UiTheme.StyleButton(_btnClear, "clear");
-            _btnClear.BackColor = Color.LightGray;
+            _btnClear = new ToolStripButton("Clear", ToolbarIcons.Get("clear"));
             _btnClear.Click += (s, e) =>
             {
                 lock (_displayList)
@@ -1747,21 +1725,15 @@ namespace PCAN_Client
                 _dgvMessages.RowCount = 0;
                 _msgDisplayRefreshPending = true;
             };
-            _toolbarPanel.Controls.Add(_btnClear);
-            x += btnWidth + 5;
+            _toolbarPanel.Items.Add(_btnClear);
 
-            // DBC Only 按钮
-            _btnDbcOnly = new Button();
-            _btnDbcOnly.Text = "全部报文";
-            _btnDbcOnly.Width = 104;
-            _btnDbcOnly.Height = btnHeight;
-            _btnDbcOnly.Location = new Point(x, y);
-            UiTheme.StyleButton(_btnDbcOnly, "list");
-            _btnDbcOnly.BackColor = Color.LightGray;
+            // DBC Only 按钮（CheckOnClick：Checked高亮表示仅显示DBC报文）
+            _btnDbcOnly = new ToolStripButton("全部报文", ToolbarIcons.Get("list"));
+            _btnDbcOnly.CheckOnClick = true;
             _btnDbcOnly.Click += (s, e) =>
             {
                 _dbcOnlyMode = !_dbcOnlyMode;
-                _btnDbcOnly.BackColor = _dbcOnlyMode ? Color.FromArgb(173, 216, 230) : Color.LightGray;
+                _btnDbcOnly.Checked = _dbcOnlyMode;
                 _btnDbcOnly.Text = _dbcOnlyMode ? "仅DBC报文" : "全部报文";
                 // 切换后刷新
                 _flatRowsDirty = true;
@@ -1769,10 +1741,7 @@ namespace PCAN_Client
                 _msgDisplayRefreshPending = true;
                 RefreshMessageDisplay();
             };
-            _toolbarPanel.Controls.Add(_btnDbcOnly);
-
-            // 面板宽度自适应按钮总宽
-            _toolbarPanel.Width = _btnDbcOnly.Right + 6;
+            _toolbarPanel.Items.Add(_btnDbcOnly);
 
             this.Controls.Add(_toolbarPanel);
         }
@@ -1866,14 +1835,40 @@ namespace PCAN_Client
             this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             this.Text = "CANInsight  " + BaseParamter.softVersion;
 
-            // 浅色现代风：窗体字体 + 顶部功能按钮统一风格并前置图标
+            // 浅色现代风：窗体字体 + 连接按钮无边框风格
             UiTheme.StyleForm(this);
-            UiTheme.StyleButton(button3, "save");
-            UiTheme.StyleButton(SendMsg, "swap");
-            UiTheme.StyleButton(button6, "chart");
-            UiTheme.StyleButton(button7, "folder");
             UiTheme.StyleButton(button1);
             UiTheme.StyleButton(button5);
+
+            // 顶部功能按钮：与绘图窗口一致的ToolStrip无边框风格（锚定右上）
+            button3.Visible = false;
+            SendMsg.Visible = false;
+            button6.Visible = false;
+            button7.Visible = false;
+            _topActionsStrip = new ToolStrip
+            {
+                GripStyle = ToolStripGripStyle.Hidden,
+                ImageScalingSize = new Size(20, 20),
+                RenderMode = ToolStripRenderMode.System,
+                Padding = new Padding(4, 2, 4, 2),
+                Font = UiTheme.UiFont,
+                Dock = DockStyle.None,
+                AutoSize = true
+            };
+            var itemSave = new ToolStripButton("存储数据", ToolbarIcons.Get("save"));
+            itemSave.Click += button3_Click;
+            var itemSend = new ToolStripButton("发送报文", ToolbarIcons.Get("swap"));
+            itemSend.Click += SendMsg_Click;
+            var itemChart = new ToolStripButton("曲线绘制", ToolbarIcons.Get("chart"));
+            itemChart.Click += button6_Click;
+            var itemConvert = new ToolStripButton("数据转换", ToolbarIcons.Get("folder"));
+            itemConvert.Click += button7_Click;
+            _topActionsStrip.Items.AddRange(new ToolStripItem[] { itemSave, itemSend, itemChart, itemConvert });
+            this.Controls.Add(_topActionsStrip);
+            _topActionsStrip.Top = 8;
+            _topActionsStrip.Left = this.ClientSize.Width - _topActionsStrip.PreferredSize.Width - 12;
+            _topActionsStrip.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _topActionsStrip.BringToFront();
 
             // 绘图主页面已由Program入口预建并显示(秒开优化),此处直接接管;
             // 未预建时(兼容路径)现场创建,保证绘图窗口关闭时退出程序

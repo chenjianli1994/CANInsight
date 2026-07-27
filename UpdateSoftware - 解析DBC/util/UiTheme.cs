@@ -45,12 +45,17 @@ namespace PCAN_Client
             dgv.BackgroundColor = Color.White;
         }
 
-        /// <summary>按钮统一为 Flat 风格并前置 ToolbarIcons 图标（icon 为空则不加图标）</summary>
+        /// <summary>
+        /// 按钮统一为无边框 ToolStrip 风格（与绘图窗口工具栏一致）：
+        /// 无边框、控件底色、悬停淡蓝，可前置 ToolbarIcons 图标（icon 为空则不加图标）
+        /// </summary>
         public static void StyleButton(Button btn, string icon = null)
         {
             btn.FlatStyle = FlatStyle.Flat;
-            btn.FlatAppearance.BorderColor = GridLine;
-            btn.BackColor = Color.White;
+            btn.FlatAppearance.BorderSize = 0;
+            btn.FlatAppearance.MouseOverBackColor = SelectionBack;
+            btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(160, 200, 235);
+            btn.BackColor = SystemColors.Control;
             btn.Font = UiFont;
             if (!string.IsNullOrEmpty(icon))
             {
