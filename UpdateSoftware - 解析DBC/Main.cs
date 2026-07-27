@@ -1924,6 +1924,17 @@ namespace PCAN_Client
             // 应用图标:读取exe内嵌图标(csproj ApplicationIcon)
             this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             this.Text = "CANInsight  " + BaseParamter.softVersion;
+
+            // 绘图主页面已由Program入口预建并显示(秒开优化),此处直接接管;
+            // 未预建时(兼容路径)现场创建,保证绘图窗口关闭时退出程序
+            chartFromShow = Program.PreloadedChart;
+            if (chartFromShow == null)
+            {
+                chartFromShow = new ChartFrom();
+                chartFromShow.FormClosed += (s, ev) => System.Windows.Forms.Application.Exit();
+                chartFromShow.Show();
+            }
+
             treeView1.Nodes.Add("Nodes");
             treeView1.Nodes.Add("Message");
 
@@ -2161,11 +2172,7 @@ namespace PCAN_Client
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
             this.FormClosing += Main_FormClosingEx;
 
-            // 启动后直接进入绘图界面:打开绘图窗口,绘图窗口关闭时退出程序
-            // (Main实例保持存活:初始化/清理逻辑及Main.main静态引用均依赖它)
-            chartFromShow = new ChartFrom();
-            chartFromShow.FormClosed += (s, ev) => System.Windows.Forms.Application.Exit();
-            chartFromShow.Show();
+            // (绘图窗口已在Load开头优先显示,此处不再重复创建)
             // Load事件中直接Hide不生效(显示流程会覆盖),延迟到显示完成后再隐藏
             BeginInvoke(new Action(() => this.Hide()));
         }

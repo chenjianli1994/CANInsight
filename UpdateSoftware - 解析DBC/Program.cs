@@ -72,6 +72,12 @@ namespace PCAN_Client
             }
             else
             {
+                // 秒开优化:先创建并显示绘图主页面(ChartFrom不依赖Main实例,启动路径仅用静态成员),
+                // Main窗口随后再构建;Main_Load通过PreloadedChart接管已显示的实例,不重复创建
+                PreloadedChart = new ChartFrom();
+                PreloadedChart.FormClosed += (s, ev) => Application.Exit();
+                PreloadedChart.Show();
+
                 // 主窗口以最小化+不显示任务栏按钮的方式启动:窗口全程不可见,
                 // 避免"先显示Main→Load中打开绘图窗口→再Hide"造成的启动闪窗。
                 // Load事件照常触发(绘图窗口正常打开);"报文列表"按钮唤出时恢复Normal即可。
@@ -81,6 +87,8 @@ namespace PCAN_Client
                 Application.Run(mainForm);
             }
         }
+        /// <summary>入口预建并已显示的绘图窗口,供Main_Load接管(避免重复创建)</summary>
+        internal static ChartFrom PreloadedChart = null;
         public static void ExtractEmbeddedDLL()
         {
             string dllName = "JLinkARM.dll";

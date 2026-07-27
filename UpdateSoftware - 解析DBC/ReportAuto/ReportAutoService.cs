@@ -29,6 +29,8 @@ namespace PCAN_Client.ReportAuto
         private static PptReportBuilder _builder = null;
         private static bool _started = false;
         private static string _templatePath = null;
+        private static string _templatePathRaw = null;   // 未经可读性验证的原始路径(启动时仅记录,首次使用时才验证)
+        private static readonly object _templateLock = new object();
         // 已累积页的元数据(与PPT文档内页顺序一致,随AppendPage/DeletePage/MovePage同步)
         private static readonly List<ReportPageInfo> _pages = new List<ReportPageInfo>();
 
@@ -41,15 +43,32 @@ namespace PCAN_Client.ReportAuto
         /// <summary>当前报告页元数据列表(只读,顺序与PPT一致)</summary>
         public static IReadOnlyList<ReportPageInfo> Pages => _pages;
 
-        /// <summary>设置PPT模板路径(若受DLP透明加密则自动提取明文副本)</summary>
+        /// <summary>设置PPT模板路径(仅记录路径;DLP可读性验证延迟到首次使用模板时执行,避免拖慢启动)</summary>
         public static void SetTemplatePath(string path)
         {
-            _templatePath = TryEnsureReadableTemplate(path);
+            lock (_templateLock)
+            {
+                _templatePathRaw = path;
+                _templatePath = null;
+            }
+        }
+
+        /// <summary>首次使用模板前调用:执行一次DLP可读性验证(约1~2秒),后续直接返回缓存结果</summary>
+        private static void EnsureTemplateReady()
+        {
+            lock (_templateLock)
+            {
+                if (_templatePath == null && _templatePathRaw != null)
+                {
+                    _templatePath = TryEnsureReadableTemplate(_templatePathRaw);
+                }
+            }
         }
 
         /// <summary>获取当前PPT模板路径（供编辑器读取Shape列表）</summary>
         public static string GetTemplatePath()
         {
+            EnsureTemplateReady();
             return _templatePath;
         }
 
@@ -185,6 +204,7 @@ namespace PCAN_Client.ReportAuto
         {
             if (form == null) throw new InvalidOperationException("绘图窗体未就绪");
             if (type == null) throw new InvalidOperationException("未选择分析项目类型");
+            EnsureTemplateReady(); /* 首次使用模板时执行DLP可读性验证 */
             if (string.IsNullOrEmpty(_templatePath) || !File.Exists(_templatePath))
                 throw new FileNotFoundException("未设置PPT模板路径或模板不存在: " + (_templatePath ?? "(空)"));
             if (form.Channels == null || form.Channels.Count == 0)

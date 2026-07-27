@@ -42,6 +42,11 @@ namespace PCAN_Client.util
 
         private static void Check()
         {
+            /* 先快速探测服务器可达性，避免不可达时 SMB 长时间挂起拖慢进程 */
+            if (!QuickProbe(UpdateDir, 1500))
+            {
+                return;
+            }
             string versionFile = Path.Combine(UpdateDir, "version.txt");
             if (!File.Exists(versionFile))
             {
@@ -89,6 +94,30 @@ namespace PCAN_Client.util
             }
 
             StartReplaceAndExit(tempExe, Application.ExecutablePath);
+        }
+
+        /// <summary>快速探测 UNC 主机的 445 端口可达性；非 UNC 路径（本地/映射盘）直接返回 true</summary>
+        private static bool QuickProbe(string uncPath, int timeoutMs)
+        {
+            try
+            {
+                var m = Regex.Match(uncPath, @"^\\\\([^\\]+)");
+                if (!m.Success)
+                {
+                    return true;
+                }
+                using (var client = new System.Net.Sockets.TcpClient())
+                {
+                    var ar = client.BeginConnect(m.Groups[1].Value, 445, null, null);
+                    bool ok = ar.AsyncWaitHandle.WaitOne(timeoutMs) && client.Connected;
+                    client.Close();
+                    return ok;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>读取更新说明，文件不存在或读取失败返回空字符串；自动识别 UTF-8/GBK 编码</summary>
