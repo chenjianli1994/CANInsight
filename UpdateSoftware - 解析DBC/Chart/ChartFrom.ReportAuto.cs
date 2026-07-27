@@ -406,6 +406,16 @@ namespace PCAN_Client
                     _busChannels.Add(bc);
                 }
                 _btnBusConfig.Text = $"通道配置({_busChannels.Count})";
+
+                // 工况通道即全局唯一DBC源：刷新聚合视图(Main/CanSend/版本校验用)并持久化
+                BaseParamter.RefreshGlobalDbcFromChannels();
+                BaseParamter.SaveBusChannelsConfig();
+                try
+                {
+                    Main.main?.UpdateDbcTreeview();
+                    if (Main.canSendOpenFlag) Main.canSend?.UpdateDbcTreeview();
+                }
+                catch { /* 窗口未初始化时忽略 */ }
             }
 
             // 如果当前绘图区的信号列表与工况分类保存的相同，跳过重新加载（避免编辑/保存工况后清空绘图区）
@@ -427,12 +437,10 @@ namespace PCAN_Client
 
             if (type.SignalList == null || type.SignalList.Count == 0) return;
 
-            // 需要DBC已加载（兼容模式或至少一个CAN通道已配置）
-            bool hasAnyDbc = (BaseParamter.dbcHelper != null && BaseParamter.dbcHelper.dbcFile != null &&
-                             BaseParamter.dbcHelper.dbcFile.messages.Count > 0);
-            if (!hasAnyDbc && _busChannels.Count == 0)
+            // 需要至少一个CAN通道已配置DBC
+            if (!_busChannels.Any(bc => bc.IsConfigured))
             {
-                _statusLabel.Text = "状态: 请先加载DBC文件或配置CAN通道再切换工况分类";
+                _statusLabel.Text = "状态: 请先在通道配置中为CAN通道加载DBC文件再切换工况分类";
                 _statusLabel.ForeColor = Color.Orange;
                 return;
             }
@@ -455,22 +463,14 @@ namespace PCAN_Client
 
             foreach (var preset in type.SignalList)
             {
-                // 根据BusChannelIndex选择对应的DBC实例
-                CAN_Data.DbcFile dbcFile = null;
-                if (preset.BusChannelIndex >= 0 && preset.BusChannelIndex < _busChannels.Count)
-                {
-                    var busCh = _busChannels[preset.BusChannelIndex];
-                    if (busCh.IsConfigured)
-                        dbcFile = busCh.DbcHelper.dbcFile;
-                }
-                else if (BaseParamter.dbcHelper?.dbcFile != null)
-                {
-                    dbcFile = BaseParamter.dbcHelper.dbcFile;
-                }
+                // 定位通道DBC报文（旧数据 BusChannelIndex=-1 自动按 CAN ID+信号名 重定位；找不到跳过）
+                var msg = ResolveChannelDbcMessage(preset.BusChannelIndex, preset.MessageIndex, (uint)preset.MessageId,
+                    preset.SignalName, out int busIdx, out int msgIdx, out int sigIdx);
+                if (msg == null) continue;
 
-                if (dbcFile == null) continue;
-                if (preset.MessageIndex < 0 || preset.MessageIndex >= dbcFile.messages.Count) continue;
-                var msg = dbcFile.messages[preset.MessageIndex];
+                preset.BusChannelIndex = busIdx;
+                preset.MessageIndex = msgIdx;
+                if (sigIdx >= 0) preset.SignalIndex = sigIdx;
                 if (preset.SignalIndex < 0 || preset.SignalIndex >= msg.signals.Count) continue;
 
                 var signal = msg.signals[preset.SignalIndex];
@@ -532,17 +532,14 @@ namespace PCAN_Client
 
                 if (!seen.Add(stat.MessageId + "|" + stat.SignalName)) continue;
 
-                // 在DBC中定位信号定义(多通道模式遍历各总线DBC,兼容模式用全局DBC)
+                // 在DBC中定位信号定义(遍历各总线通道DBC)
                 CAN_Data.Signal sigDef = null;
                 int foundMsgId = stat.MessageId, msgIndex = -1, sigIndex = -1, busIdx = -1;
                 double cycleTime = 0.1;
 
-                for (int bi = -1; bi < _busChannels.Count && sigDef == null; bi++)
+                for (int bi = 0; bi < _busChannels.Count && sigDef == null; bi++)
                 {
-                    // bi=-1:兼容模式(全局DBC); bi>=0:多通道模式各总线DBC
-                    CAN_Data.DbcFile dbc = (bi < 0)
-                        ? (_busChannels.Count == 0 ? BaseParamter.dbcHelper?.dbcFile : null)
-                        : (_busChannels[bi].IsConfigured ? _busChannels[bi].DbcHelper?.dbcFile : null);
+                    CAN_Data.DbcFile dbc = _busChannels[bi].IsConfigured ? _busChannels[bi].DbcHelper?.dbcFile : null;
                     if (dbc?.messages == null) continue;
 
                     for (int mi = 0; mi < dbc.messages.Count && sigDef == null; mi++)
@@ -553,7 +550,7 @@ namespace PCAN_Client
                             if (dbc.messages[mi].signals[si].signalName != stat.SignalName) continue;
                             sigDef = dbc.messages[mi].signals[si];
                             foundMsgId = (int)dbc.messages[mi].messgeId;
-                            msgIndex = mi; sigIndex = si; busIdx = bi < 0 ? -1 : bi;
+                            msgIndex = mi; sigIndex = si; busIdx = bi;
                             cycleTime = dbc.messages[mi].cycleTime > 0 ? dbc.messages[mi].cycleTime / 1000.0 : 0.1;
                             break;
                         }

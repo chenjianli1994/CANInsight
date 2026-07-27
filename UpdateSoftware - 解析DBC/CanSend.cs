@@ -429,11 +429,7 @@ namespace PCAN_Client
             // 启动调度器
             multiMessageCANScheduler.Start();
 
-            if(0 == BaseParamter.dbcHelper.dbcFile.messages.Count)
-            {
-                LoadFilePath(Properties.Settings.Default.DBCFilePath);
-            }
-            else
+            // DBC统一来自"通道配置"的聚合视图（启动时已由Main恢复），直接刷新界面
             {
                 try
                 {
@@ -489,28 +485,6 @@ namespace PCAN_Client
 
             timer1.Interval = 200; // 降低UI定时器频率
             timer1.Start();
-        }
-
-        private void button_load_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择DBC文件";
-            dialog.Filter = "DBC文件|*.dbc";
-            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                BaseParamter.DBCFilepath = dialog.FileName;
-                textBox_path.Text = BaseParamter.DBCFilepath;
-
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    UpdateDbcTreeview();
-                }
-                catch (Exception en)
-                {
-                    CAN_Data.ExceptionHandler.Handle(en);
-                }
-            }
         }
 
         internal void UpdateDbcTreeview()
@@ -851,6 +825,13 @@ namespace PCAN_Client
         {
             try
             {
+                // DBC本体统一来自"通道配置"，.dbccfg只恢复发送配置（发送标记/周期/命令值）
+                if (0 == BaseParamter.dbcHelper.dbcFile.messages.Count)
+                {
+                    MessageBox.Show("请先在通道配置中为CAN通道加载DBC文件，再导入发送配置");
+                    return;
+                }
+
                 Console.WriteLine(FileName);
                 string json = File.ReadAllText(FileName);
                 AppConfig config = JsonConvert.DeserializeObject<AppConfig>(json,
@@ -860,16 +841,35 @@ namespace PCAN_Client
                         TypeNameHandling = TypeNameHandling.Auto
                     });
 
-                // 直接替换DBC对象
-                BaseParamter.dbcHelper.dbcFile = config.DbcData;
-                SelectMessageIndex = config.SelectedMessageIndex;
-                // 新增：按Message ID排序消息列表
-                BaseParamter.dbcHelper.dbcFile.messages.Sort((m1, m2) => m1.messgeId.CompareTo(m2.messgeId));
-                // 重建字典
-                BaseParamter.dbcHelper.RebuildMessageDict();
-                // 更新UI
-                textBox_path.Text = BaseParamter.DBCFilepath;
-                UpdateDbcTreeview();
+                // 按报文ID把配置中的发送设置应用到当前通道DBC聚合视图
+                if (config.DbcData?.messages != null)
+                {
+                    foreach (var cfgMsg in config.DbcData.messages)
+                    {
+                        if (!BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(cfgMsg.messgeId, out var curMsg))
+                            continue;
+
+                        curMsg.sendFalg = cfgMsg.sendFalg;
+                        curMsg.enableFlag = cfgMsg.enableFlag;
+                        curMsg.cycleTime = cfgMsg.cycleTime;
+                        curMsg.NextSendTime = 0;
+
+                        // 按信号名恢复命令值
+                        if (cfgMsg.signals != null)
+                        {
+                            foreach (var cfgSig in cfgMsg.signals)
+                            {
+                                var curSig = curMsg.signals.FirstOrDefault(s => s.signalName == cfgSig.signalName);
+                                if (curSig != null) curSig.cmdValue = cfgSig.cmdValue;
+                            }
+                        }
+                    }
+                }
+
+                SelectMessageIndex = (config.SelectedMessageIndex >= 0 &&
+                    config.SelectedMessageIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
+                    ? config.SelectedMessageIndex : 0;
+
                 // 刷新UI
                 UpdateDbcTreeview();
                 messagesTable.Rows.Clear();
@@ -914,9 +914,6 @@ namespace PCAN_Client
                     Main.canSend.UpdateDbcTreeview();
                 }
                 Main.main.UpdateDbcTreeview();
-
-                Properties.Settings.Default.DBCFilePath = FileName;
-                Properties.Settings.Default.Save();
             }
             catch (Exception ex)
             {
@@ -939,66 +936,10 @@ namespace PCAN_Client
 
         private void LoadFilePath(string filePath)
         {
+            // 仅支持拖入.dbccfg发送配置；.dbc统一在"通道配置"中加载
             if (filePath.Contains(".dbccfg"))
             {
                 loadCfgFile(filePath);
-            }
-            else
-            {
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(filePath);
-
-                    Properties.Settings.Default.DBCFilePath = filePath;
-                    Properties.Settings.Default.Save();
-                    UpdateDbcTreeview();
-                    messagesTable.Rows.Clear();
-                    foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                    {
-                        DataRow newRow;
-                        int i;
-                        if (message.sendFalg)
-                        {
-                            newRow = messagesTable.NewRow();
-                            newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                            newRow["MessageName"] = message.messageName;
-                            newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                            newRow["SendCnt"] = message.sendCnt.ToString();
-                            newRow["Enable"] = message.enableFlag.ToString();
-                            messagesTable.Rows.Add(newRow);
-                            if (message.enableFlag)
-                            {
-                                multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
-                            }
-                        }
-                        message.NextSendTime = 0;
-                    }
-                    dataGridView2.DataSource = messagesTable;
-                    dataGridView2.Columns[0].Width = 100;
-                    dataGridView2.Columns[0].Width = 150;
-                    dataGridView2.Columns[1].Width = 150;
-                    dataGridView2.Columns[2].Width = 125;
-                    dataGridView2.Columns[3].Width = 75;
-                    dataGridView2.Refresh();
-
-                    UpdateDbcListview(SelectMessageIndex);
-                    foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                    {
-                        message.NextSendTime = 0;
-                    }
-                    sw = new Stopwatch();
-                    sw.Start();
-
-                    if (Main.canSendOpenFlag)
-                    {
-                        Main.canSend.UpdateDbcTreeview();
-                    }
-                    Main.main.UpdateDbcTreeview();
-                }
-                catch
-                {
-                    /* empty */
-                }
             }
         }
         private void CanSend_DragDrop(object sender, DragEventArgs e)

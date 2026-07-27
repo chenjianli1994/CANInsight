@@ -54,11 +54,10 @@ namespace PCAN_Client
         private Button _btnAddChannel;
         private Button _btnAutoScroll;
         private Button _btnLoadFile;
-        private Button _btnLoadDbc;
         private ToolStrip _topToolStrip;
         private ToolStrip _analysisToolStrip;   // 第二行工具栏(信号与报告)
         private ToolStripButton _btnShowMainForm;   // 唤出报文列表窗口(Main)
-        private ToolStripButton _toolLoadDbc, _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear;
+        private ToolStripButton _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear;
         private ToolStripDropDownButton _toolSignalGroup;   // 信号组(加载/保存)下拉
         private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
@@ -149,8 +148,8 @@ namespace PCAN_Client
         private int _playbackRawIndex = 0;                       // _rawMessages 中的当前播放位置
         private double _playbackStartWallTime = 0;               // 开始播放时的 wall clock（秒）
         private Dictionary<int, Dictionary<uint, List<(CAN_Data.Signal signal, int channelIndex)>>> _canIdSignalMap; // 播放用查找表（外层key=BusChannelIndex，内层key=CAN ID）
-        // CAN总线解析通道（多通道模式）
-        private List<CanBusChannel> _busChannels = new List<CanBusChannel>();
+        // CAN总线解析通道（全局唯一数据源，详见 BaseParamter.BusChannels）
+        private List<CanBusChannel> _busChannels => BaseParamter.BusChannels;
         private ToolStripButton _btnBusConfig; // 工具栏"通道配置"按钮
         // 实时数据BLF保存相关
         private static List<CanRawMessage> _realtimeRawMessages = new List<CanRawMessage>();
@@ -398,12 +397,10 @@ namespace PCAN_Client
             this._btnDeletePreset = new System.Windows.Forms.Button();
             this._radioRealTime = new System.Windows.Forms.RadioButton();
             this._radioFileData = new System.Windows.Forms.RadioButton();
-            this._btnLoadDbc = new System.Windows.Forms.Button();
             this._btnLoadFile = new System.Windows.Forms.Button();
             this._topToolStrip = new System.Windows.Forms.ToolStrip();
             this._analysisToolStrip = new System.Windows.Forms.ToolStrip();
             this._toolSignalGroup = new System.Windows.Forms.ToolStripDropDownButton();
-            this._toolLoadDbc = new System.Windows.Forms.ToolStripButton();
             this._toolLoadLog = new System.Windows.Forms.ToolStripButton();
             this._toolModeToggle = new System.Windows.Forms.ToolStripDropDownButton();
             this._toolStart = new System.Windows.Forms.ToolStripButton();
@@ -606,16 +603,7 @@ namespace PCAN_Client
             this._radioFileData.TabStop = true;
             this._radioFileData.Text = "报文数据";
             this._radioFileData.UseVisualStyleBackColor = true;
-            // 
-            // _btnLoadDbc
-            // 
-            this._btnLoadDbc.Location = new System.Drawing.Point(11, 615);
-            this._btnLoadDbc.Name = "_btnLoadDbc";
-            this._btnLoadDbc.Size = new System.Drawing.Size(277, 28);
-            this._btnLoadDbc.TabIndex = 18;
-            this._btnLoadDbc.Text = "加载DBC文件...";
-            this._btnLoadDbc.Click += new System.EventHandler(this._btnLoadDbc_Click);
-            // 
+            //
             // _btnLoadFile
             // 
             this._btnLoadFile.Location = new System.Drawing.Point(11, 645);
@@ -630,7 +618,6 @@ namespace PCAN_Client
             this._topToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this._topToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
             this._topToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this._toolLoadDbc,
             this._toolLoadLog,
             this._btnBusConfig,
             this._toolSignalGroup,
@@ -677,16 +664,6 @@ namespace PCAN_Client
             this._toolSignalGroup.Size = new System.Drawing.Size(72, 22);
             this._toolSignalGroup.Text = "信号组";
             this._toolSignalGroup.ToolTipText = "加载/保存信号组";
-            //
-            // _toolLoadDbc
-            //
-            this._toolLoadDbc.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
-            this._toolLoadDbc.Image = ToolbarIcons.Get("dbc");
-            this._toolLoadDbc.Name = "_toolLoadDbc";
-            this._toolLoadDbc.Size = new System.Drawing.Size(61, 22);
-            this._toolLoadDbc.Text = "加载DBC";
-            this._toolLoadDbc.ToolTipText = "加载DBC文件";
-            this._toolLoadDbc.Click += new System.EventHandler(this._btnLoadDbc_Click);
             //
             // _btnBusConfig
             //
@@ -1183,7 +1160,6 @@ namespace PCAN_Client
             _toolStop.Enabled = _btnStop.Enabled;
             _toolClear.Enabled = _btnClear.Enabled;
             _toolShowAll.Enabled = _btnShowAll.Enabled;
-            _toolLoadDbc.Enabled = _btnLoadDbc.Enabled;
             _toolLoadLog.Enabled = _btnLoadFile.Enabled;
             _toolSignalGroup.Enabled = true;
             _toolAutoScroll.Enabled = _btnAutoScroll.Enabled;
@@ -1639,16 +1615,13 @@ namespace PCAN_Client
                 _currentTime = 0;
 
                 // 预构建 BusChannelIndex → (CAN ID → (signal, channelIndex)) 查找表
-                // 兼容模式(BusChannelIndex=-1)使用全局DBC，多通道模式使用各通道独立的DBC
+                // 信号统一从各通道独立的DBC中按 CAN ID+信号名 定位（含旧数据 BusChannelIndex=-1 的重定位）
                 var canIdSignalMap = new Dictionary<int, Dictionary<uint, List<(CAN_Data.Signal signal, int channelIndex)>>>();
-                var globalMsgDict = (_busChannels.Count == 0) ? BaseParamter.dbcHelper.dbcFile.messageDict : null;
 
                 for (int ci = 0; ci < Channels.Count; ci++)
                 {
                     var channel = Channels[ci];
-                    int busIdx = channel.BusChannelIndex;
 
-                    // 获取信号的 CAN ID 和信号名（从全局 DBC 获取，因为信号可能是从全局 DBC 添加的）
                     uint canId = (uint)channel.DbcMessageId;
                     string signalName = channel.DbcSignalName;
 
@@ -1657,61 +1630,30 @@ namespace PCAN_Client
                         continue;
                     }
 
-                    if (_busChannels.Count > 0)
+                    // 遍历所有通道，查找包含该 CAN ID 和信号名的通道 DBC
+                    for (int bi = 0; bi < _busChannels.Count; bi++)
                     {
-                        // 多通道模式：遍历所有通道，查找包含该 CAN ID 和信号名的通道 DBC
-                        bool mapped = false;
-                        for (int bi = 0; bi < _busChannels.Count; bi++)
-                        {
-                            var busCh = _busChannels[bi];
-                            if (!busCh.IsConfigured || busCh.DbcHelper?.dbcFile?.messageDict == null)
-                                continue;
+                        var busCh = _busChannels[bi];
+                        if (!busCh.IsConfigured || busCh.DbcHelper?.dbcFile?.messageDict == null)
+                            continue;
 
-                            if (busCh.DbcHelper.dbcFile.messageDict.TryGetValue(canId, out var chMsg))
-                            {
-                                // 在通道 DBC 中按信号名查找
-                                CAN_Data.Signal chSig = chMsg.signals.FirstOrDefault(s => s.signalName == signalName);
-                                if (chSig == null) continue;
-
-                                if (!canIdSignalMap.TryGetValue(bi, out var innerMap))
-                                    innerMap = new Dictionary<uint, List<(CAN_Data.Signal, int)>>();
-                                if (!innerMap.TryGetValue(canId, out var list))
-                                    list = new List<(CAN_Data.Signal, int)>();
-                                list.Add((chSig, ci));
-                                innerMap[canId] = list;
-                                canIdSignalMap[bi] = innerMap;
-                                mapped = true;
-                                break; // 找到第一个匹配的通道即可
-                            }
-                        }
-                        if (!mapped)
+                        if (busCh.DbcHelper.dbcFile.messageDict.TryGetValue(canId, out var chMsg))
                         {
-                            // 信号未在任何通道DBC中找到，跳过
+                            // 在通道 DBC 中按信号名查找
+                            CAN_Data.Signal chSig = chMsg.signals.FirstOrDefault(s => s.signalName == signalName);
+                            if (chSig == null) continue;
+
+                            if (!canIdSignalMap.TryGetValue(bi, out var innerMap))
+                                innerMap = new Dictionary<uint, List<(CAN_Data.Signal, int)>>();
+                            if (!innerMap.TryGetValue(canId, out var list))
+                                list = new List<(CAN_Data.Signal, int)>();
+                            list.Add((chSig, ci));
+                            innerMap[canId] = list;
+                            canIdSignalMap[bi] = innerMap;
+                            break; // 找到第一个匹配的通道即可
                         }
                     }
-                    else
-                    {
-                        // 兼容模式：使用全局 DBC
-                        var globalMsgList = BaseParamter.dbcHelper.dbcFile.messages;
-                        if (channel.DbcMessageIndex < 0 || channel.DbcMessageIndex >= globalMsgList.Count)
-                        {
-                            continue;
-                        }
-                        var msg = globalMsgList[channel.DbcMessageIndex];
-                        if (channel.DbcSignalIndex < 0 || channel.DbcSignalIndex >= msg.signals.Count)
-                        {
-                            continue;
-                        }
-                        var sig = msg.signals[channel.DbcSignalIndex];
-
-                        if (!canIdSignalMap.TryGetValue(-1, out var innerMap))
-                            innerMap = new Dictionary<uint, List<(CAN_Data.Signal, int)>>();
-                        if (!innerMap.TryGetValue(canId, out var list))
-                            list = new List<(CAN_Data.Signal, int)>();
-                        list.Add((sig, ci));
-                        innerMap[canId] = list;
-                        canIdSignalMap[-1] = innerMap;
-                    }
+                    // 信号未在任何通道DBC中找到则跳过
                 }
 
                 if (_playbackSpeed == 0)
@@ -1757,11 +1699,9 @@ namespace PCAN_Client
                                     innerMap.TryGetValue(rawMsg.CanId, out var signalList))
                                 {
                                     // 获取对应通道的DBC实例
-                                    Dictionary<uint, CAN_Data.Message> msgDict;
+                                    Dictionary<uint, CAN_Data.Message> msgDict = null;
                                     if (busIdx >= 0 && busIdx < _busChannels.Count && _busChannels[busIdx].DbcHelper != null)
                                         msgDict = _busChannels[busIdx].DbcHelper.dbcFile.messageDict;
-                                    else
-                                        msgDict = globalMsgDict;
 
                                     if (msgDict != null && msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage))
                                     {
@@ -2019,7 +1959,6 @@ namespace PCAN_Client
 
             // 一次性处理所有时间戳 <= virtualTime 的报文
             var parser = new CAN_Data.CanSignalParser();
-            var globalMsgDict = (_busChannels.Count == 0) ? BaseParamter.dbcHelper.dbcFile.messageDict : null;
 
             bool allDone = true;
             int messagesThisTick = 0;       // 本Tick处理的消息数限制
@@ -2129,11 +2068,9 @@ namespace PCAN_Client
                     innerMap.TryGetValue(rawMsg.CanId, out var signalList))
                 {
                     // 获取对应通道的DBC实例
-                    Dictionary<uint, CAN_Data.Message> msgDict;
+                    Dictionary<uint, CAN_Data.Message> msgDict = null;
                     if (busIdx >= 0 && busIdx < _busChannels.Count && _busChannels[busIdx].DbcHelper != null)
                         msgDict = _busChannels[busIdx].DbcHelper.dbcFile.messageDict;
-                    else
-                        msgDict = globalMsgDict;
 
                     if (msgDict != null && msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage))
                     {
@@ -2248,7 +2185,16 @@ namespace PCAN_Client
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    _busChannels = dlg.Channels;
+                    BaseParamter.BusChannels = dlg.Channels;
+                    // 通道配置是全局唯一DBC源：刷新聚合视图(Main/CanSend/版本校验用)并持久化
+                    BaseParamter.RefreshGlobalDbcFromChannels();
+                    BaseParamter.SaveBusChannelsConfig();
+                    try
+                    {
+                        Main.main?.UpdateDbcTreeview();
+                        if (Main.canSendOpenFlag) Main.canSend?.UpdateDbcTreeview();
+                    }
+                    catch { /* 窗口未初始化时忽略 */ }
                     _btnBusConfig.Text = _busChannels.Count > 0 ? $"通道配置({_busChannels.Count})" : "通道配置";
 
                     // 通道配置变更立即回写当前工况JSON:否则下次应用工况时会被工况里保存的旧路径覆盖(跨机器使用时表现为"路径每次被重置")
@@ -2298,7 +2244,7 @@ namespace PCAN_Client
         private int GetBusChannelIndex(byte blfChannel)
         {
             if (_busChannels == null || _busChannels.Count == 0)
-                return -1; // 兼容模式
+                return -1; // 未配置通道（不解码）
             for (int i = 0; i < _busChannels.Count; i++)
             {
                 if (_busChannels[i].BlfChannelId == blfChannel)
@@ -2352,7 +2298,6 @@ namespace PCAN_Client
 
             // 快照后台线程需要的引用(避免扫描期间被界面操作修改)
             var busChannelsSnapshot = _busChannels.ToArray();
-            var globalMsgDict = (_busChannels.Count == 0) ? BaseParamter.dbcHelper?.dbcFile?.messageDict : null;
             var memSource = fromMemory ? _rawMessages : null;
 
             Task.Run(() =>
@@ -2365,7 +2310,7 @@ namespace PCAN_Client
                     foreach (var rawMsg in source)
                     {
                         if (_backfillCancel) break;
-                        ProcessBackfillFrame(rawMsg, batch, parser, busChannelsSnapshot, globalMsgDict);
+                        ProcessBackfillFrame(rawMsg, batch, parser, busChannelsSnapshot);
                         frames++;
                         if (frames % 50000 == 0)
                         {
@@ -2439,38 +2384,30 @@ namespace PCAN_Client
 
         /// <summary>单帧补采处理(后台线程):按CAN ID+总线匹配目标通道,解码存点</summary>
         private static void ProcessBackfillFrame(CanRawMessage rawMsg, List<ChannelData> batch,
-            CAN_Data.CanSignalParser parser, CanBusChannel[] busChannels,
-            Dictionary<uint, CAN_Data.Message> globalMsgDict)
+            CAN_Data.CanSignalParser parser, CanBusChannel[] busChannels)
         {
-            // 总线索引(基于快照):-2=无匹配通道跳过,-1=兼容模式
+            // 总线索引(基于快照):无匹配通道直接跳过
+            if (busChannels.Length == 0) return;
             int busIdx = -1;
-            if (busChannels.Length > 0)
+            for (int i = 0; i < busChannels.Length; i++)
             {
-                busIdx = -2;
-                for (int i = 0; i < busChannels.Length; i++)
-                {
-                    if (busChannels[i].BlfChannelId == rawMsg.Channel) { busIdx = i; break; }
-                }
-                if (busIdx == -2) return;
+                if (busChannels[i].BlfChannelId == rawMsg.Channel) { busIdx = i; break; }
             }
+            if (busIdx < 0) return;
 
-            // 本帧可能命中的报告通道(按 CAN ID + 总线索引匹配)
+            // 本帧可能命中的报告通道(按 CAN ID + 总线索引匹配;BusChannelIndex=-1的旧数据接受任意总线)
             List<ChannelData> hits = null;
             foreach (var ch in batch)
             {
                 if (ch.DbcMessageId != (int)rawMsg.CanId) continue;
-                if (busIdx >= 0 && ch.BusChannelIndex >= 0 && ch.BusChannelIndex != busIdx) continue;
+                if (ch.BusChannelIndex >= 0 && ch.BusChannelIndex != busIdx) continue;
                 if (hits == null) hits = new List<ChannelData>();
                 hits.Add(ch);
             }
             if (hits == null) return;
 
             // 获取对应总线的DBC报文定义并解析全部信号
-            Dictionary<uint, CAN_Data.Message> msgDict;
-            if (busIdx >= 0 && busIdx < busChannels.Length && busChannels[busIdx].DbcHelper != null)
-                msgDict = busChannels[busIdx].DbcHelper.dbcFile.messageDict;
-            else
-                msgDict = globalMsgDict;
+            Dictionary<uint, CAN_Data.Message> msgDict = busChannels[busIdx].DbcHelper?.dbcFile?.messageDict;
             if (msgDict == null || !msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage)) return;
 
             var allValues = parser.ParseSignals(rawMsg.Data, dbcMessage.signals);
@@ -2499,16 +2436,8 @@ namespace PCAN_Client
                 MessageBox.Show("请先添加需要显示的信号通道", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            // 检查DBC是否可用：兼容模式需要全局DBC，多通道模式至少一个通道配置了DBC
-            if (_busChannels.Count == 0)
-            {
-                if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null)
-                {
-                    MessageBox.Show("请先加载DBC文件", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
-            }
-            else if (!_busChannels.Any(bc => bc.IsConfigured))
+            // 检查DBC是否可用：至少一个通道配置了DBC
+            if (!_busChannels.Any(bc => bc.IsConfigured))
             {
                 MessageBox.Show("请先在通道配置中为至少一个CAN通道加载DBC文件", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
@@ -2728,11 +2657,9 @@ namespace PCAN_Client
             if (_streamingMode)
             {
                 List<CanRawMessage> cache = _cacheWhileStreaming ? new List<CanRawMessage>() : null;
-                // 兼容模式：使用全局DBC；多通道模式：收集所有通道的DBC messageDict
-                var globalMsgDict = (cache != null && _busChannels.Count == 0 && BaseParamter.dbcHelper?.dbcFile?.messageDict != null)
-                    ? BaseParamter.dbcHelper.dbcFile.messageDict : null;
+                // 收集所有通道DBC中定义了的CAN ID（缓存时只保留有定义的报文，减少内存占用）
                 HashSet<uint> multiChannelCanIds = null;
-                if (cache != null && _busChannels.Count > 0)
+                if (cache != null)
                 {
                     multiChannelCanIds = new HashSet<uint>();
                     foreach (var busCh in _busChannels)
@@ -2767,10 +2694,7 @@ namespace PCAN_Client
                         // 缓存模式下，只缓存DBC中有定义的报文（减少内存占用）
                         if (cache != null)
                         {
-                            bool hasDef = (globalMsgDict == null || globalMsgDict.ContainsKey(raw.CanId));
-                            if (_busChannels.Count > 0)
-                                hasDef = multiChannelCanIds != null && multiChannelCanIds.Contains(raw.CanId);
-                            if (hasDef)
+                            if (multiChannelCanIds != null && multiChannelCanIds.Contains(raw.CanId))
                                 cache.Add(raw);
                         }
                         yield return raw;
@@ -2804,9 +2728,16 @@ namespace PCAN_Client
 
         private void _btnAddChannel_Click(object sender, EventArgs e)
         {
-            // 多通道模式：先选择CAN总线通道
+            // 必须先配置CAN通道（DBC唯一入口）
+            if (_busChannels.Count == 0)
+            {
+                MessageBox.Show("请先通过\"通道配置\"添加CAN通道并加载DBC文件", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // 选择CAN总线通道
             int selectedBusChannelIndex = -1;
-            if (_busChannels.Count > 0)
             {
                 using (var channelSelectorForm = new Form())
                 {
@@ -2852,31 +2783,17 @@ namespace PCAN_Client
                 }
             }
 
-            // 创建并显示信号选择器
-            SignalSelector selector;
-            if (_busChannels.Count > 0 && selectedBusChannelIndex >= 0)
-            {
-                // 多通道模式：使用选定通道的DBC实例
-                selector = new SignalSelector(_busChannels[selectedBusChannelIndex].DbcHelper, selectedBusChannelIndex);
-            }
-            else
-            {
-                // 兼容模式：使用全局DBC
-                selector = new SignalSelector();
-            }
+            // 创建并显示信号选择器（使用选定通道的DBC实例）
+            SignalSelector selector = new SignalSelector(_busChannels[selectedBusChannelIndex].DbcHelper, selectedBusChannelIndex);
 
             using (selector)
             {
                 // 把当前已有的通道标记为已选中，以便在信号选择界面自动勾上
-                // 多通道模式下：只预填充同一 BusChannelIndex 的信号（避免不同 DBC 的 MsgIndex 含义不同导致误判）
+                // 只预填充同一 BusChannelIndex 的信号（避免不同 DBC 的 MsgIndex 含义不同导致误判）
                 foreach (var channel in Channels)
                 {
-                    // 多通道模式下，只预填充 BusChannelIndex 匹配的信号
-                    if (_busChannels.Count > 0 && selectedBusChannelIndex >= 0)
-                    {
-                        if (channel.BusChannelIndex != selectedBusChannelIndex)
-                            continue;
-                    }
+                    if (channel.BusChannelIndex != selectedBusChannelIndex)
+                        continue;
 
                     selector.SelectedSignals.Add(new SelectedSignalInfo
                     {
@@ -2941,19 +2858,16 @@ namespace PCAN_Client
                             (double)(signal.CycleTime / 1000.0f), (int)signal.MsgId, signal.MsgIndex, signal.SignalIndex,
                             signal.SignalName, signal.BusChannelIndex));
                         _chartControl.SetChannels(Channels);
-                        multiChartFromScheduler.AddMessage(signal.MsgIndex, signal.CycleTime);
 
-                        // 设置ChartShowFlag到对应的DBC实例
-                        if (signal.BusChannelIndex >= 0 && signal.BusChannelIndex < _busChannels.Count
-                            && _busChannels[signal.BusChannelIndex].DbcHelper != null)
+                        // 从通道DBC取报文对象，注册调度并设置ChartShowFlag
+                        CAN_Data.Message dbcMsg = ResolveChannelDbcMessage(
+                            signal.BusChannelIndex, signal.MsgIndex, signal.MsgId, signal.SignalName,
+                            out _, out _, out _);
+                        if (dbcMsg != null)
                         {
-                            _busChannels[signal.BusChannelIndex].DbcHelper.dbcFile.messages[signal.MsgIndex]
-                                .signals[signal.SignalIndex].ChartShowFlag = true;
-                        }
-                        else
-                        {
-                            BaseParamter.dbcHelper.dbcFile.messages[signal.MsgIndex]
-                                .signals[signal.SignalIndex].ChartShowFlag = true;
+                            multiChartFromScheduler.AddMessage(dbcMsg, signal.CycleTime);
+                            if (signal.SignalIndex >= 0 && signal.SignalIndex < dbcMsg.signals.Count)
+                                dbcMsg.signals[signal.SignalIndex].ChartShowFlag = true;
                         }
                     }
                     PopulateChannelGrid();
@@ -2971,6 +2885,9 @@ namespace PCAN_Client
         {
             Channels = new List<ChannelData>();
             Main.ChartShowOpenFlag = true;
+            // 启动时已从BusChannels.json恢复全局通道配置,同步按钮文字
+            if (_busChannels.Count > 0)
+                _btnBusConfig.Text = $"通道配置({_busChannels.Count})";
             // 初始选中工况在构造函数阶段仅加载未应用,此时Channels已就绪,补应用(恢复信号列表)
             if (_currentAnalysisType != null)
                 ApplyAnalysisType(_currentAnalysisType);
@@ -3551,14 +3468,15 @@ namespace PCAN_Client
                 _ChartfromBuffer = new List<CAN_Data.Message>();
             }
 
-            public void AddMessage(int msgIndex, uint intervalMs)
+            public void AddMessage(CAN_Data.Message message, uint intervalMs)
             {
                 intervalMs = (uint)((intervalMs <= 0) ? 1 : intervalMs*2);
                 lock (_lock)
                 {
+                    if (message == null) return;
                     var schedule = new CANMessageSchedule
                     {
-                        Message = BaseParamter.dbcHelper.dbcFile.messages[msgIndex],
+                        Message = message,
                         IntervalMs = intervalMs,
                         NextTriggerTime = GetCurrentTime()
                     };
@@ -3884,31 +3802,6 @@ namespace PCAN_Client
             _chartControl.Invalidate();
         }
 
-        private void _btnLoadDbc_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择DBC文件";
-            dialog.Filter = "DBC文件|*.dbc|所有文件|*.*";
-            if (dialog.ShowDialog() == DialogResult.OK)
-            {
-                BaseParamter.DBCFilepath = dialog.FileName;
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    _statusLabel.Text = $"状态: DBC已加载 ({BaseParamter.dbcHelper.dbcFile.messages.Count}条报文)";
-                    _statusLabel.ForeColor = Color.Green;
-                    SyncToolbarStateFromLegacyControls();
-                }
-                catch (Exception ex)
-                {
-                    CAN_Data.ExceptionHandler.Handle(ex);
-                    _statusLabel.Text = "状态: DBC加载失败";
-                    _statusLabel.ForeColor = Color.Red;
-                    SyncToolbarStateFromLegacyControls();
-                }
-            }
-        }
-
         private void _btnLoadFile_Click(object sender, EventArgs e)
         {
             using (var dialog = new LogFileListDialog(_logFileEntries))
@@ -3987,19 +3880,14 @@ namespace PCAN_Client
         {
             var files = ((Array)e.Data.GetData(DataFormats.FileDrop)).Cast<string>().ToList();
             var logFiles = new List<string>();
-            var dbcFiles = new List<string>();
 
-            // 分类文件
+            // 分类文件（DBC请通过"通道配置"加载，拖拽不再支持）
             foreach (var path in files)
             {
                 string ext = Path.GetExtension(path).ToLower();
                 if (ext == ".blf" || ext == ".bin" || ext == ".asc")
                 {
                     logFiles.Add(path);
-                }
-                else if (ext == ".dbc")
-                {
-                    dbcFiles.Add(path);
                 }
             }
 
@@ -4011,23 +3899,6 @@ namespace PCAN_Client
                     SwitchToFileModeInternal();
                 }
                 LoadAndPlotFiles(logFiles);
-            }
-
-            // 处理DBC文件（加载最后一个）
-            if (dbcFiles.Count > 0)
-            {
-                string dbcPath = dbcFiles.Last();
-                BaseParamter.DBCFilepath = dbcPath;
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    _statusLabel.Text = $"状态: DBC已加载 ({BaseParamter.dbcHelper.dbcFile.messages.Count}条报文)";
-                    _statusLabel.ForeColor = Color.Green;
-                }
-                catch (Exception ex)
-                {
-                    CAN_Data.ExceptionHandler.Handle(ex);
-                }
             }
         }
 
@@ -4071,24 +3942,11 @@ namespace PCAN_Client
                 return;
             }
 
-            // 检查DBC是否可用：兼容模式需要全局DBC，多通道模式至少一个通道配置了DBC
-            if (_busChannels.Count == 0)
+            // 检查DBC是否可用：至少一个通道配置了DBC
+            if (!_busChannels.Any(bc => bc.IsConfigured))
             {
-                if (BaseParamter.dbcHelper == null || BaseParamter.dbcHelper.dbcFile == null ||
-                    BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
-                {
-                    MessageBox.Show("DBC文件未加载，请先加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-            }
-            else
-            {
-                bool hasAnyDbc = _busChannels.Any(bc => bc.IsConfigured);
-                if (!hasAnyDbc)
-                {
-                    MessageBox.Show("请先在通道配置中为至少一个CAN通道加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
+                MessageBox.Show("请先在通道配置中为至少一个CAN通道加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
 
             // 断开PCAN/CANoe连接（含按钮文字、下拉框同步更新）
@@ -4366,6 +4224,51 @@ namespace PCAN_Client
             }).ToList();
         }
 
+        /// <summary>
+        /// 定位信号所属的通道DBC报文：优先按 BusChannelIndex+MsgIndex 直接取；
+        /// 无效(旧数据-1或越界)时按 CAN ID+信号名 跨通道搜索并重定位。
+        /// 找不到返回 null。
+        /// </summary>
+        private CAN_Data.Message ResolveChannelDbcMessage(int busChannelIndex, int msgIndex, uint msgId, string signalName,
+            out int resolvedBusIdx, out int resolvedMsgIdx, out int resolvedSigIdx)
+        {
+            resolvedBusIdx = -1;
+            resolvedMsgIdx = -1;
+            resolvedSigIdx = -1;
+
+            // 1) 直接按 BusChannelIndex+MsgIndex 取
+            if (busChannelIndex >= 0 && busChannelIndex < _busChannels.Count)
+            {
+                var bc = _busChannels[busChannelIndex];
+                if (bc.IsConfigured && msgIndex >= 0 && msgIndex < bc.DbcHelper.dbcFile.messages.Count)
+                {
+                    var msg = bc.DbcHelper.dbcFile.messages[msgIndex];
+                    resolvedBusIdx = busChannelIndex;
+                    resolvedMsgIdx = msgIndex;
+                    resolvedSigIdx = string.IsNullOrEmpty(signalName) ? -1 :
+                        msg.signals.FindIndex(s => s.signalName == signalName);
+                    return msg;
+                }
+            }
+
+            // 2) 旧数据重定位：按 CAN ID+信号名 跨通道搜索
+            for (int bi = 0; bi < _busChannels.Count; bi++)
+            {
+                var bc = _busChannels[bi];
+                if (!bc.IsConfigured || bc.DbcHelper?.dbcFile?.messageDict == null) continue;
+                if (!bc.DbcHelper.dbcFile.messageDict.TryGetValue(msgId, out var chMsg)) continue;
+                int sigIdx = string.IsNullOrEmpty(signalName) ? 0 :
+                    chMsg.signals.FindIndex(s => s.signalName == signalName);
+                if (sigIdx < 0) continue;
+
+                resolvedBusIdx = bi;
+                resolvedMsgIdx = bc.DbcHelper.dbcFile.messages.IndexOf(chMsg);
+                resolvedSigIdx = sigIdx;
+                return chMsg;
+            }
+            return null;
+        }
+
         private void ApplySignalData(List<SignalPresetData> signals)
         {
             // 清空当前曲线
@@ -4389,34 +4292,28 @@ namespace PCAN_Client
 
             foreach (var signal in signals)
             {
+                // 定位信号所属的通道DBC报文（旧数据 BusChannelIndex=-1 自动重定位；找不到则跳过）
+                CAN_Data.Message msg = ResolveChannelDbcMessage(
+                    signal.BusChannelIndex, signal.MsgIndex, signal.MsgId, signal.SignalName,
+                    out int busIdx, out int msgIdx, out int sigIdx);
+                if (msg == null) continue;
+
+                // 重定位到通道DBC索引
+                signal.BusChannelIndex = busIdx;
+                signal.MsgIndex = msgIdx;
+                if (sigIdx >= 0) signal.SignalIndex = sigIdx;
+
                 int channelCount = Channels.Count;
                 Color color = signal.ColorArgb != 0 ? Color.FromArgb(signal.ColorArgb) : colors[channelCount % colors.Length];
                 string channelName = signal.SignalName;
                 if (!string.IsNullOrEmpty(signal.SignalComment))
                     channelName = TruncateName($"{signal.SignalName} ({signal.SignalComment})");
 
-                // 从 DBC 信号中获取枚举值定义（根据BusChannelIndex选择对应的DBC实例）
+                // 从 DBC 信号中获取枚举值定义
                 var enumDefs = new Dictionary<double, string>();
                 try
                 {
-                    // 根据BusChannelIndex选择对应的DBC实例
-                    CAN_Data.Message msg = null;
-                    if (signal.BusChannelIndex >= 0 && signal.BusChannelIndex < _busChannels.Count)
-                    {
-                        // 多通道模式：使用对应通道的DBC实例
-                        var busChannel = _busChannels[signal.BusChannelIndex];
-                        if (busChannel.IsConfigured && busChannel.DbcHelper.dbcFile.messages.Count > signal.MsgIndex)
-                        {
-                            msg = busChannel.DbcHelper.dbcFile.messages[signal.MsgIndex];
-                        }
-                    }
-                    else if (BaseParamter.dbcHelper.dbcFile.messages.Count > signal.MsgIndex)
-                    {
-                        // 兼容模式：使用全局DBC实例
-                        msg = BaseParamter.dbcHelper.dbcFile.messages[signal.MsgIndex];
-                    }
-
-                    if (msg != null && signal.SignalIndex >= 0 && signal.SignalIndex < msg.signals.Count)
+                    if (signal.SignalIndex >= 0 && signal.SignalIndex < msg.signals.Count)
                     {
                         var dbcSignal = msg.signals[signal.SignalIndex];
                         if (dbcSignal.enumDefinitions != null && dbcSignal.enumDefinitions.Count > 0)
@@ -4432,23 +4329,13 @@ namespace PCAN_Client
                     signal.CycleTime / 1000.0, (int)signal.MsgId,
                     signal.MsgIndex, signal.SignalIndex, signal.SignalName,
                     signal.BusChannelIndex));
-                multiChartFromScheduler.AddMessage(signal.MsgIndex, signal.CycleTime);
+                multiChartFromScheduler.AddMessage(msg, signal.CycleTime);
 
-                // 设置ChartShowFlag（根据BusChannelIndex选择对应的DBC实例）
+                // 设置ChartShowFlag到通道DBC实例
                 try
                 {
-                    if (signal.BusChannelIndex >= 0 && signal.BusChannelIndex < _busChannels.Count)
-                    {
-                        var busChannel = _busChannels[signal.BusChannelIndex];
-                        if (busChannel.IsConfigured && busChannel.DbcHelper.dbcFile.messages.Count > signal.MsgIndex)
-                        {
-                            busChannel.DbcHelper.dbcFile.messages[signal.MsgIndex].signals[signal.SignalIndex].ChartShowFlag = true;
-                        }
-                    }
-                    else
-                    {
-                        BaseParamter.dbcHelper.dbcFile.messages[signal.MsgIndex].signals[signal.SignalIndex].ChartShowFlag = true;
-                    }
+                    if (signal.SignalIndex >= 0 && signal.SignalIndex < msg.signals.Count)
+                        msg.signals[signal.SignalIndex].ChartShowFlag = true;
                 }
                 catch { }
             }

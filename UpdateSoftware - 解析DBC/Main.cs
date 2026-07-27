@@ -208,63 +208,26 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 从所有可用的DBC中查找报文定义（支持全局DBC + 多通道DBC）
+        /// 从通道DBC聚合视图中查找报文定义（dbcHelper 由通道配置统一刷新）
         /// </summary>
         internal static bool TryFindDbcMessage(uint canId, out CAN_Data.Message dbcMsg)
         {
             dbcMsg = null;
-            
-            // 1. 先查全局DBC
             if (BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
                 BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
             {
                 return true;
             }
-            
-            // 2. 再查多通道DBC（从chartFromShow获取）
-            if (chartFromShow != null && chartFromShow.BusChannels != null)
-            {
-                foreach (var busChannel in chartFromShow.BusChannels)
-                {
-                    if (busChannel.IsConfigured && 
-                        busChannel.DbcHelper?.dbcFile?.messageDict != null &&
-                        busChannel.DbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
-                    {
-                        return true;
-                    }
-                }
-            }
-            
             return false;
         }
 
         /// <summary>
-        /// 检查报文ID是否在任何DBC中有定义（支持全局DBC + 多通道DBC）
+        /// 检查报文ID是否在通道DBC聚合视图中有定义
         /// </summary>
         internal static bool ContainsDbcMessage(uint canId)
         {
-            // 1. 先查全局DBC
-            if (BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
-                BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(canId))
-            {
-                return true;
-            }
-            
-            // 2. 再查多通道DBC
-            if (chartFromShow != null && chartFromShow.BusChannels != null)
-            {
-                foreach (var busChannel in chartFromShow.BusChannels)
-                {
-                    if (busChannel.IsConfigured && 
-                        busChannel.DbcHelper?.dbcFile?.messageDict != null &&
-                        busChannel.DbcHelper.dbcFile.messageDict.ContainsKey(canId))
-                    {
-                        return true;
-                    }
-                }
-            }
-            
-            return false;
+            return BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
+                BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(canId);
         }
 
         /// <summary>记录CAN报文（CAN接收线程调用，极轻量）</summary>
@@ -2105,16 +2068,6 @@ namespace PCAN_Client
             timer1.Interval = 200;
 
             timer1.Start();
-            if(Properties.Settings.Default.LP_24YearSelected)
-            {
-                BaseParamter.LP_24Selected = true;
-                radioButton2.Checked = true;
-            }
-            else
-            {
-                BaseParamter.LP_24Selected = false;
-                radioButton1.Checked = true;
-            }
             if (Properties.Settings.Default.CANType.Equals("CAN"))
             {
                 radioButtonCAN.Checked = true;
@@ -2167,6 +2120,8 @@ namespace PCAN_Client
             {
                 textBox_InputPartVer.Text = Properties.Settings.Default.SetPartVer;
             }
+            // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送/版本校验使用
+            BaseParamter.LoadBusChannelsConfig();
             projectCheckDeal();
 
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
@@ -2581,32 +2536,6 @@ namespace PCAN_Client
             {
                 Properties.Settings.Default.CANoe_Channel = comboBox_CanoeChannel.Text;
                 Properties.Settings.Default.Save();
-            }
-        }
-
-        private void button_load_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择DBC文件";
-            dialog.Filter = "DBC文件|*.dbc";
-            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                BaseParamter.DBCFilepath = dialog.FileName;
-                textBox_path.Text = BaseParamter.DBCFilepath;
-
-                try
-                {
-                    updeteDbcSuccess = false;
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    UpdateDbcTreeview();
-                    SelectMessageIndex = 0;
-                    UpdateDbcListview(SelectMessageIndex);
-                    updeteDbcSuccess = true;
-                }
-                catch (Exception en)
-                {
-                    CAN_Data.ExceptionHandler.Handle(en);
-                }
             }
         }
 
@@ -3589,52 +3518,6 @@ namespace PCAN_Client
                 PartResult.BackColor = Color.Green;
                 SwResult.BackColor = Color.White;
                 HwResult.BackColor = Color.White;
-
-                if (BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
-                {
-                    string resourceName = "PCAN_Client.Resources.V35.dbc";
-                    if (BaseParamter.LP_24Selected)
-                    {
-                        resourceName = "PCAN_Client.Resources.V30.dbc";
-                    }
-                    else
-                    {
-                        resourceName = "PCAN_Client.Resources.V35.dbc";
-                    }
-                    StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                    BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                    UpdateDbcTreeview();
-                }
-                else if (null == BaseParamter.dbcHelper.GetMessageById(0x524))
-                {
-                    try
-                    {
-                        var dialogResult = MessageBox.Show("是否使用该项目默认dbc文件", "确认", MessageBoxButtons.YesNo);
-                        if (dialogResult == DialogResult.Yes)
-                        {
-                            string resourceName = "PCAN_Client.Resources.V35.dbc";
-                            if (BaseParamter.LP_24Selected)
-                            {
-                                resourceName = "PCAN_Client.Resources.V30.dbc";
-                            }
-                            else
-                            {
-                                resourceName = "PCAN_Client.Resources.V35.dbc";
-                            }
-                            StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                            BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                            UpdateDbcTreeview();
-                        }
-                        else
-                        {
-                            /* empty */
-                        }
-                    }
-                    catch (Exception en)
-                    {
-                        CAN_Data.ExceptionHandler.Handle(en);
-                    }
-                }
             }
             else if (BaseParamter.IsSelectProjectType(BaseParamter.SelectProjectTypeEnum.BeiQi_Old))
             {
@@ -3643,36 +3526,6 @@ namespace PCAN_Client
                 PartResult.BackColor = Color.White;
                 SwResult.BackColor = Color.White;
                 HwResult.BackColor = Color.White;
-
-                if(BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
-                {
-                    string resourceName = "PCAN_Client.Resources.VQ.dbc";
-                    StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                    BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                    UpdateDbcTreeview();
-                }
-                else if (null == BaseParamter.dbcHelper.GetMessageById(0x664))
-                {
-                    try
-                    {
-                        var dialogResult = MessageBox.Show("是否使用该项目默认dbc文件", "确认", MessageBoxButtons.YesNo);
-                        if (dialogResult == DialogResult.Yes)
-                        {
-                            string resourceName = "PCAN_Client.Resources.VQ.dbc";
-                            StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                            BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                            UpdateDbcTreeview();
-                        }
-                        else
-                        {
-                            /* empty */
-                        }
-                    }
-                    catch (Exception en)
-                    {
-                        CAN_Data.ExceptionHandler.Handle(en);
-                    }
-                }
             }
             else
             {
@@ -3681,88 +3534,6 @@ namespace PCAN_Client
                 PartResult.BackColor = Color.White;
                 SwResult.BackColor = Color.White;
                 HwResult.BackColor = Color.White;
-
-                if (BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
-                {
-                    string resourceName = "PCAN_Client.Resources.VQ.dbc";
-                    StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                    BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                    UpdateDbcTreeview();
-                }
-                else if (null == BaseParamter.dbcHelper.GetMessageById(0x664))
-                {
-                    try
-                    {
-                        var dialogResult = MessageBox.Show("是否使用该项目默认dbc文件", "确认", MessageBoxButtons.YesNo);
-                        if (dialogResult == DialogResult.Yes)
-                        {
-                            string resourceName = "PCAN_Client.Resources.VQ.dbc";
-                            StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                            BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                            UpdateDbcTreeview();
-                        }
-                        else
-                        {
-                            /* empty */
-                        }
-                    }
-                    catch (Exception en)
-                    {
-                        CAN_Data.ExceptionHandler.Handle(en);
-                    }
-                }
-            }
-        }
-
-        private void radioButton2_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                BaseParamter.LP_24Selected = true;
-                Properties.Settings.Default.LP_24YearSelected = true;
-                Properties.Settings.Default.Save();
-                var dialogResult = MessageBox.Show("是否使用该项目默认dbc文件", "确认", MessageBoxButtons.YesNo);
-                if (dialogResult == DialogResult.Yes)
-                {
-                    string resourceName = "PCAN_Client.Resources.V30.dbc";
-                    StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                    BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                    UpdateDbcTreeview();
-                }
-                else
-                {
-                    /* empty */
-                }
-            }
-            catch (Exception en)
-            {
-                CAN_Data.ExceptionHandler.Handle(en);
-            }
-        }
-
-        private void radioButton1_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                BaseParamter.LP_24Selected = false;
-                Properties.Settings.Default.LP_24YearSelected = false;
-                Properties.Settings.Default.Save();
-                var dialogResult = MessageBox.Show("是否使用该项目默认dbc文件", "确认", MessageBoxButtons.YesNo);
-                if (dialogResult == DialogResult.Yes)
-                {
-                    string resourceName = "PCAN_Client.Resources.V35.dbc";
-                    StreamReader Reader = new StreamReader(Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName), Encoding.GetEncoding("GB2312"));
-                    BaseParamter.dbcHelper.ParseForStr(Reader.ReadToEnd());
-                    UpdateDbcTreeview();
-                }
-                else
-                {
-                    /* empty */
-                }
-            }
-            catch (Exception en)
-            {
-                CAN_Data.ExceptionHandler.Handle(en);
             }
         }
     }

@@ -98,18 +98,7 @@ namespace PCAN_Client.DataLog
             }
             else if(path.Contains(".dbc") || path.Contains(".DBC"))
             {
-                BaseParamter.DBCFilepath = path;
-                textBox_path.Text = BaseParamter.DBCFilepath;
-
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    MessageBox.Show("成功加载dbc");
-                }
-                catch (Exception en)
-                {
-                    CAN_Data.ExceptionHandler.Handle(en);
-                }
+                MessageBox.Show("DBC文件请通过绘图窗口的\"通道配置\"加载");
             }
             else
             {
@@ -146,7 +135,7 @@ namespace PCAN_Client.DataLog
 
             if (saveExcelFlag && 0 == BaseParamter.dbcHelper.dbcFile.messages.Count)
             {
-                MessageBox.Show("检测到已经勾选CSV数据转换，请先将DBC文件拖入此界面");
+                MessageBox.Show("检测到已经勾选CSV数据转换，请先在通道配置中为CAN通道加载DBC文件");
                 return;
             }
 
@@ -1501,26 +1490,5 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        private void button_load_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择DBC文件";
-            dialog.Filter = "DBC文件|*.dbc";
-            if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-            {
-                BaseParamter.DBCFilepath = dialog.FileName;
-                textBox_path.Text = BaseParamter.DBCFilepath;
-
-                try
-                {
-                    BaseParamter.dbcHelper.Parse(BaseParamter.DBCFilepath);
-                    MessageBox.Show("成功加载dbc");
-                }
-                catch (Exception en)
-                {
-                    CAN_Data.ExceptionHandler.Handle(en);
-                }
-            }
-        }
     }
 }

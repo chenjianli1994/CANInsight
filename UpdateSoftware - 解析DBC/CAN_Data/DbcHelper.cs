@@ -248,58 +248,6 @@ namespace PCAN_Client.CAN_Data
             return err;
         }
 
-        public int ParseForStr(string data)
-        {
-            int err = 0;
-
-            //path = _path;
-            //dbcFilePath = path;
-            //err = FileLoader.Load(path, ref fileBuffer);
-            fileBuffer = data;
-            err = StrToDbeFile();
-            // 新增：按Message ID排序消息列表
-            dbcFile.messages.Sort((m1, m2) => m1.messgeId.CompareTo(m2.messgeId));
-            RebuildMessageDict(); // 重新构建字典
-
-            try
-            {
-                if (Main.canSendOpenFlag)
-                {
-                    Main.canSend.UpdateDbcTreeview();
-                }
-                Main.main.UpdateDbcTreeview();
-                /* 判断校验方式 */
-                foreach (var message in dbcFile.messages)
-                {
-                    if (message.messgeId == 0x3BA)
-                    {
-                        foreach (var signal in message.signals)
-                        {
-                            if (signal.signalName.Contains("GW_CRC_3BA"))
-                            {
-                                CrcCheckStatus = 1;
-                                break;
-                            }
-                            else if (signal.signalName.Contains("GW_CheckSum"))
-                            {
-                                CrcCheckStatus = 2;
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                if (Main.DataShowOpenFlag)
-                {
-                    Main.dataShow.DataShowInit();
-                }
-            }
-            catch { }
-
-            return err;
-        }
-
         private int StrToDbeFile()
         {
             int err = 0;

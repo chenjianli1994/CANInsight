@@ -43,9 +43,6 @@ namespace PCAN_Client
             this.groupBox3 = new System.Windows.Forms.GroupBox();
             this.radioButtonCAN = new System.Windows.Forms.RadioButton();
             this.radioButtonCANFD = new System.Windows.Forms.RadioButton();
-            this.textBox_path = new System.Windows.Forms.TextBox();
-            this.label1 = new System.Windows.Forms.Label();
-            this.button_load = new System.Windows.Forms.Button();
             this.treeView1 = new System.Windows.Forms.TreeView();
             this.listView1 = new System.Windows.Forms.ListView();
             this.timer1 = new System.Windows.Forms.Timer(this.components);
@@ -74,16 +71,12 @@ namespace PCAN_Client
             this.label7 = new System.Windows.Forms.Label();
             this.SwResult = new System.Windows.Forms.TextBox();
             this.label6 = new System.Windows.Forms.Label();
-            this.groupBox5 = new System.Windows.Forms.GroupBox();
-            this.radioButton1 = new System.Windows.Forms.RadioButton();
-            this.radioButton2 = new System.Windows.Forms.RadioButton();
             this.dataGridView1 = new System.Windows.Forms.DataGridView();
             this.textBox__txtIdFilter = new System.Windows.Forms.TextBox();
             this.groupBox1.SuspendLayout();
             this.groupBox2.SuspendLayout();
             this.groupBox3.SuspendLayout();
             this.groupBox4.SuspendLayout();
-            this.groupBox5.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -236,37 +229,7 @@ namespace PCAN_Client
             this.radioButtonCANFD.Text = "CANFD";
             this.radioButtonCANFD.UseVisualStyleBackColor = true;
             this.radioButtonCANFD.Click += new System.EventHandler(this.radioButtonCANFD_Click);
-            // 
-            // textBox_path
-            // 
-            this.textBox_path.Location = new System.Drawing.Point(877, 13);
-            this.textBox_path.Margin = new System.Windows.Forms.Padding(2);
-            this.textBox_path.Name = "textBox_path";
-            this.textBox_path.ReadOnly = true;
-            this.textBox_path.Size = new System.Drawing.Size(206, 21);
-            this.textBox_path.TabIndex = 48;
-            // 
-            // label1
-            // 
-            this.label1.AutoSize = true;
-            this.label1.Location = new System.Drawing.Point(814, 18);
-            this.label1.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label1.Name = "label1";
-            this.label1.Size = new System.Drawing.Size(59, 12);
-            this.label1.TabIndex = 47;
-            this.label1.Text = "Dbc文件：";
-            // 
-            // button_load
-            // 
-            this.button_load.Location = new System.Drawing.Point(1087, 13);
-            this.button_load.Margin = new System.Windows.Forms.Padding(2);
-            this.button_load.Name = "button_load";
-            this.button_load.Size = new System.Drawing.Size(74, 22);
-            this.button_load.TabIndex = 46;
-            this.button_load.Text = "浏览";
-            this.button_load.UseVisualStyleBackColor = true;
-            this.button_load.Click += new System.EventHandler(this.button_load_Click);
-            // 
+            //
             // treeView1
             // 
             this.treeView1.Location = new System.Drawing.Point(9, 634);
@@ -567,46 +530,7 @@ namespace PCAN_Client
             this.label6.Size = new System.Drawing.Size(89, 12);
             this.label6.TabIndex = 65;
             this.label6.Text = "软件校验结果：";
-            // 
-            // groupBox5
-            // 
-            this.groupBox5.Controls.Add(this.radioButton1);
-            this.groupBox5.Controls.Add(this.radioButton2);
-            this.groupBox5.Location = new System.Drawing.Point(650, 4);
-            this.groupBox5.Margin = new System.Windows.Forms.Padding(2);
-            this.groupBox5.Name = "groupBox5";
-            this.groupBox5.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox5.Size = new System.Drawing.Size(160, 34);
-            this.groupBox5.TabIndex = 55;
-            this.groupBox5.TabStop = false;
-            this.groupBox5.Text = "年款选择";
-            // 
-            // radioButton1
-            // 
-            this.radioButton1.AutoSize = true;
-            this.radioButton1.Location = new System.Drawing.Point(86, 14);
-            this.radioButton1.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButton1.Name = "radioButton1";
-            this.radioButton1.Size = new System.Drawing.Size(65, 16);
-            this.radioButton1.TabIndex = 1;
-            this.radioButton1.TabStop = true;
-            this.radioButton1.Text = "26/27款";
-            this.radioButton1.UseVisualStyleBackColor = true;
-            this.radioButton1.Click += new System.EventHandler(this.radioButton1_Click);
-            // 
-            // radioButton2
-            // 
-            this.radioButton2.AutoSize = true;
-            this.radioButton2.Location = new System.Drawing.Point(4, 15);
-            this.radioButton2.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButton2.Name = "radioButton2";
-            this.radioButton2.Size = new System.Drawing.Size(47, 16);
-            this.radioButton2.TabIndex = 0;
-            this.radioButton2.TabStop = true;
-            this.radioButton2.Text = "24款";
-            this.radioButton2.UseVisualStyleBackColor = true;
-            this.radioButton2.Click += new System.EventHandler(this.radioButton2_Click);
-            // 
+            //
             // dataGridView1
             // 
             this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
@@ -631,14 +555,10 @@ namespace PCAN_Client
             this.ClientSize = new System.Drawing.Size(1193, 641);
             this.Controls.Add(this.dataGridView1);
             this.Controls.Add(this.textBox__txtIdFilter);
-            this.Controls.Add(this.groupBox5);
             this.Controls.Add(this.groupBox4);
             this.Controls.Add(this.button7);
             this.Controls.Add(this.button6);
             this.Controls.Add(this.SendMsg);
-            this.Controls.Add(this.textBox_path);
-            this.Controls.Add(this.label1);
-            this.Controls.Add(this.button_load);
             this.Controls.Add(this.groupBox3);
             this.Controls.Add(this.groupBox2);
             this.Controls.Add(this.groupBox1);
@@ -660,8 +580,6 @@ namespace PCAN_Client
             this.groupBox3.PerformLayout();
             this.groupBox4.ResumeLayout(false);
             this.groupBox4.PerformLayout();
-            this.groupBox5.ResumeLayout(false);
-            this.groupBox5.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
@@ -683,9 +601,6 @@ namespace PCAN_Client
         private System.Windows.Forms.GroupBox groupBox3;
         private System.Windows.Forms.RadioButton radioButtonCAN;
         private System.Windows.Forms.RadioButton radioButtonCANFD;
-        private System.Windows.Forms.TextBox textBox_path;
-        private System.Windows.Forms.Label label1;
-        private System.Windows.Forms.Button button_load;
         private System.Windows.Forms.TreeView treeView1;
         private System.Windows.Forms.ListView listView1;
         private System.Windows.Forms.Timer timer1;
@@ -714,9 +629,6 @@ namespace PCAN_Client
         private System.Windows.Forms.TextBox textBox_InputPartVer;
         private System.Windows.Forms.Label label10;
         private System.Windows.Forms.RadioButton radioButtonVQNew;
-        private System.Windows.Forms.GroupBox groupBox5;
-        private System.Windows.Forms.RadioButton radioButton1;
-        private System.Windows.Forms.RadioButton radioButton2;
         private System.Windows.Forms.DataGridView dataGridView1;
         private System.Windows.Forms.TextBox textBox__txtIdFilter;
     }

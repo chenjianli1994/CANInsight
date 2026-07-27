@@ -30,9 +30,6 @@
         {
             this.components = new System.ComponentModel.Container();
             this.treeView1 = new System.Windows.Forms.TreeView();
-            this.textBox_path = new System.Windows.Forms.TextBox();
-            this.label1 = new System.Windows.Forms.Label();
-            this.button_load = new System.Windows.Forms.Button();
             this.dataGridView1 = new System.Windows.Forms.DataGridView();
             this.CmdType = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.Physical = new System.Windows.Forms.DataGridViewTextBoxColumn();
@@ -82,40 +79,7 @@
             this.treeView1.TabIndex = 51;
             this.treeView1.AfterSelect += new System.Windows.Forms.TreeViewEventHandler(this.treeView1_AfterSelect);
             this.treeView1.DoubleClick += new System.EventHandler(this.treeView1_DoubleClick);
-            // 
-            // textBox_path
-            // 
-            this.textBox_path.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.textBox_path.Location = new System.Drawing.Point(70, 13);
-            this.textBox_path.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
-            this.textBox_path.Name = "textBox_path";
-            this.textBox_path.ReadOnly = true;
-            this.textBox_path.Size = new System.Drawing.Size(221, 21);
-            this.textBox_path.TabIndex = 55;
-            // 
-            // label1
-            // 
-            this.label1.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.label1.AutoSize = true;
-            this.label1.Location = new System.Drawing.Point(9, 17);
-            this.label1.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
-            this.label1.Name = "label1";
-            this.label1.Size = new System.Drawing.Size(59, 12);
-            this.label1.TabIndex = 54;
-            this.label1.Text = "Dbc文件：";
-            // 
-            // button_load
-            // 
-            this.button_load.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.button_load.Location = new System.Drawing.Point(295, 11);
-            this.button_load.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
-            this.button_load.Name = "button_load";
-            this.button_load.Size = new System.Drawing.Size(74, 22);
-            this.button_load.TabIndex = 53;
-            this.button_load.Text = "浏览";
-            this.button_load.UseVisualStyleBackColor = true;
-            this.button_load.Click += new System.EventHandler(this.button_load_Click);
-            // 
+            //
             // dataGridView1
             // 
             this.dataGridView1.AllowUserToAddRows = false;
@@ -441,9 +405,6 @@
             this.Controls.Add(this.button1);
             this.Controls.Add(this.readCfgButton);
             this.Controls.Add(this.saveCfgButton);
-            this.Controls.Add(this.textBox_path);
-            this.Controls.Add(this.label1);
-            this.Controls.Add(this.button_load);
             this.Controls.Add(this.treeView1);
             this.Controls.Add(this.dataGridView1);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
@@ -468,9 +429,6 @@
 
         #endregion
         private System.Windows.Forms.TreeView treeView1;
-        private System.Windows.Forms.TextBox textBox_path;
-        private System.Windows.Forms.Label label1;
-        private System.Windows.Forms.Button button_load;
         private System.Windows.Forms.DataGridView dataGridView1;
         private System.Windows.Forms.Timer timer1;
         private System.Windows.Forms.DataGridView dataGridView2;

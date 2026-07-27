@@ -528,9 +528,6 @@
     <EmbeddedResource Include="Resources\V11download.json" />
     <EmbeddedResource Include="Resources\V50download.json" />
     <EmbeddedResource Include="Resources\VQ_ASdownload.json" />
-    <EmbeddedResource Include="Resources\VQ.dbc" />
-    <EmbeddedResource Include="Resources\V30.dbc" />
-    <EmbeddedResource Include="Resources\V35.dbc" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />

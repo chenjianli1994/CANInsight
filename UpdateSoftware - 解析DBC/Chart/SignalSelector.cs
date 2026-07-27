@@ -17,7 +17,7 @@ namespace PCAN_Client
         private DbcHelper _customDbcHelper = null;
         private int _busChannelIndex = -1;
 
-        // 多通道模式:各CAN通道的DBC;为空则仅用全局DBC
+        // 多通道模式:各CAN通道的DBC
         private List<CanBusChannel> _busChannels = null;
         // 单选模式:勾选新信号自动取消其他(占位符场景一个占位符只能绑一个信号)
         public bool SingleSelect { get; set; } = false;
@@ -30,7 +30,7 @@ namespace PCAN_Client
             public DbcHelper Helper;
             public Message Msg;
             public int MsgIndex;
-            public int ChannelIndex;  // -1=全局
+            public int ChannelIndex;
         }
 
         // 信号行上下文:记录该信号来自哪个DBC/报文/通道
@@ -50,15 +50,7 @@ namespace PCAN_Client
             get { return selectedSignals; }
         }
 
-        /// <summary>
-        /// 当前使用的DBC实例（优先使用自定义实例，否则使用全局实例）
-        /// </summary>
-        private DbcHelper ActiveDbcHelper
-        {
-            get { return _customDbcHelper ?? BaseParamter.dbcHelper; }
-        }
-
-        public SignalSelector()
+        private SignalSelector()
         {
             InitializeComponent();
             _searchTimer = new Timer { Interval = 2000 };
@@ -66,9 +58,9 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 使用自定义DBC实例的信号选择器（多通道模式）
+        /// 使用指定通道DBC实例的信号选择器
         /// </summary>
-        /// <param name="customDbcHelper">自定义DBC解析实例</param>
+        /// <param name="customDbcHelper">通道DBC解析实例</param>
         /// <param name="busChannelIndex">所属CAN总线通道索引</param>
         public SignalSelector(DbcHelper customDbcHelper, int busChannelIndex) : this()
         {
@@ -77,7 +69,7 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 多通道模式:合并显示全局DBC与各CAN通道DBC的所有报文(占位符选信号覆盖多路CAN)
+        /// 多通道模式:合并显示各CAN通道DBC的所有报文(占位符选信号覆盖多路CAN)
         /// </summary>
         /// <param name="busChannels">CAN总线通道列表(含各通道DBC)</param>
         public SignalSelector(List<CanBusChannel> busChannels) : this()
@@ -97,7 +89,7 @@ namespace PCAN_Client
         {
             tvMessages.Nodes.Clear();
 
-            // 收集所有可用DBC:优先各CAN通道DBC,无已配置通道时才回退全局
+            // 收集所有可用DBC:各CAN通道DBC,或调用方明确传入的通道DBC
             var sources = new List<(DbcHelper helper, string label, int channelIndex)>();
             if (_busChannels != null)
             {
@@ -108,18 +100,14 @@ namespace PCAN_Client
                         sources.Add((bc.DbcHelper, bc.Name ?? ("CAN" + i), i));
                 }
             }
-            // 单通道构造(调用方明确传入通道DBC)时优先用传入实例;全局DBC仅作无指定时的回退
-            if (sources.Count == 0)
+            if (sources.Count == 0 && _customDbcHelper?.dbcFile != null)
             {
-                if (_customDbcHelper?.dbcFile != null)
-                    sources.Add((_customDbcHelper, "DBC", _busChannelIndex));
-                else if (BaseParamter.dbcHelper?.dbcFile != null)
-                    sources.Add((BaseParamter.dbcHelper, "全局", -1));
+                sources.Add((_customDbcHelper, "DBC", _busChannelIndex));
             }
 
             if (sources.Count == 0)
             {
-                MessageBox.Show("DBC文件未加载，请先加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("请先在通道配置中为CAN通道加载DBC文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -320,7 +308,7 @@ namespace PCAN_Client
 
             dgvSignals.Rows.Clear();
 
-            // 收集所有DBC源(与LoadMessages一致:优先通道DBC,无则全局)
+            // 收集所有DBC源(与LoadMessages一致:各CAN通道DBC,或调用方传入的通道DBC)
             var sources = new List<(DbcHelper helper, int channelIndex, string label)>();
             if (_busChannels != null)
             {
@@ -331,13 +319,9 @@ namespace PCAN_Client
                         sources.Add((bc.DbcHelper, i, bc.Name ?? ("CAN" + i)));
                 }
             }
-            // 回退顺序与LoadMessages一致:单通道构造优先用传入的通道DBC
-            if (sources.Count == 0)
+            if (sources.Count == 0 && _customDbcHelper?.dbcFile != null)
             {
-                if (_customDbcHelper?.dbcFile != null)
-                    sources.Add((_customDbcHelper, _busChannelIndex, "DBC"));
-                else if (BaseParamter.dbcHelper?.dbcFile != null)
-                    sources.Add((BaseParamter.dbcHelper, -1, "全局"));
+                sources.Add((_customDbcHelper, _busChannelIndex, "DBC"));
             }
 
             bool multi = sources.Count > 1;
@@ -531,7 +515,7 @@ namespace PCAN_Client
         // 新增：信号单位
         public string Unit { get; set; } = "";
         /// <summary>
-        /// 所属CAN总线通道索引（-1 = 兼容模式，使用全局DBC）
+        /// 所属CAN总线通道索引（-1 = 未指定，添加时按 CAN ID+信号名 重定位到通道DBC）
         /// </summary>
         public int BusChannelIndex { get; set; } = -1;
     }

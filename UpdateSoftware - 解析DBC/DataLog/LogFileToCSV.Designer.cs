@@ -37,9 +37,6 @@
             this.checkBox_CSV = new System.Windows.Forms.CheckBox();
             this.label1 = new System.Windows.Forms.Label();
             this.comboBoxExcelSaveTime = new System.Windows.Forms.ComboBox();
-            this.textBox_path = new System.Windows.Forms.TextBox();
-            this.label2 = new System.Windows.Forms.Label();
-            this.button_load = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // progressBar1
@@ -120,50 +117,13 @@
             this.comboBoxExcelSaveTime.Size = new System.Drawing.Size(126, 23);
             this.comboBoxExcelSaveTime.TabIndex = 23;
             this.comboBoxExcelSaveTime.SelectedIndexChanged += new System.EventHandler(this.comboBoxExcelSaveTime_SelectedIndexChanged);
-            // 
-            // textBox_path
-            // 
-            this.textBox_path.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.textBox_path.Location = new System.Drawing.Point(91, 6);
-            this.textBox_path.Name = "textBox_path";
-            this.textBox_path.ReadOnly = true;
-            this.textBox_path.Size = new System.Drawing.Size(489, 25);
-            this.textBox_path.TabIndex = 51;
-            // 
-            // label2
-            // 
-            this.label2.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
-            this.label2.AutoSize = true;
-            this.label2.Location = new System.Drawing.Point(9, 11);
-            this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(76, 15);
-            this.label2.TabIndex = 50;
-            this.label2.Text = "Dbc文件：";
-            // 
-            // button_load
-            // 
-            this.button_load.Anchor = System.Windows.Forms.AnchorStyles.None;
-            this.button_load.Location = new System.Drawing.Point(589, 6);
-            this.button_load.Name = "button_load";
-            this.button_load.Size = new System.Drawing.Size(154, 25);
-            this.button_load.TabIndex = 49;
-            this.button_load.Text = "浏览";
-            this.button_load.UseVisualStyleBackColor = true;
-            this.button_load.Click += new System.EventHandler(this.button_load_Click);
-            // 
+            //
             // LogFileToCSV
             // 
             this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(755, 170);
-            this.Controls.Add(this.textBox_path);
-            this.Controls.Add(this.label2);
-            this.Controls.Add(this.button_load);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.comboBoxExcelSaveTime);
             this.Controls.Add(this.checkBox_CSV);
@@ -195,8 +155,5 @@
         private System.Windows.Forms.CheckBox checkBox_CSV;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.ComboBox comboBoxExcelSaveTime;
-        private System.Windows.Forms.TextBox textBox_path;
-        private System.Windows.Forms.Label label2;
-        private System.Windows.Forms.Button button_load;
     }
 }
