@@ -36,7 +36,7 @@ namespace PCAN_Client
         public static readonly byte[] BaseKeyBuf_uds = new byte[16] { 0xB7, 0xF9, 0xCE, 0x9C, 0xC9, 0x78, 0x17, 0xB6, 0x21, 0xE6, 0x9C, 0x98, 0x32, 0x8C, 0xAB, 0x3E };
         public static readonly byte[] BaseKeyBuf_program = new byte[16] { 0xD3, 0x97, 0xA1, 0xF0, 0x96, 0xB2, 0x4C, 0xA6, 0x8D, 0x4E, 0x8F, 0x8E, 0xCC, 0x51, 0xCB, 0x79 };
         public static int DataDlc = 8;
-        public static readonly string softVersion = "V3.01.10 -- 2026-07-27";
+        public static readonly string softVersion = "V3.01.11 -- 2026-07-27";
         public static bool LP_24Selected = false;
         public static void MngBaseParamterInit()
         {
