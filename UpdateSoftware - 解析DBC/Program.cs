@@ -39,15 +39,31 @@ namespace PCAN_Client
             };
             //ExtractEmbeddedDLL();
             HideRelatedFiles();
-            /* 由更新批处理带 /updated 参数重启时，提示更新完成 */
+            /* 首次打开或版本更新后首次打开：弹窗提示（/updated 为更新批处理重启时携带的参数） */
+            bool justUpdated = false;
             foreach (var arg in args)
             {
                 if (arg.Equals("/updated", StringComparison.OrdinalIgnoreCase))
                 {
-                    MessageBox.Show("更新完成！\r\n当前版本：" + BaseParamter.softVersion,
-                        "更新成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    justUpdated = true;
                     break;
                 }
+            }
+            if (justUpdated || !Properties.Settings.Default.NoticeShownVersion.Equals(BaseParamter.softVersion))
+            {
+                string notice = "1、使用过程中发现问题请内部沟通工具联系developer进行反馈\r\n" +
+                                "2、如需要更新软件需要连接上公司内网，确认可以访问\\\\update-server地址后重新打开此软件";
+                if (justUpdated)
+                {
+                    MessageBox.Show("更新完成！当前版本：" + BaseParamter.softVersion + "\r\n\r\n" + notice,
+                        "更新成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show(notice, "温馨提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                Properties.Settings.Default.NoticeShownVersion = BaseParamter.softVersion;
+                Properties.Settings.Default.Save();
             }
             util.SelfUpdater.CheckOnStartup(); /* 启动时后台检查局域网共享文件夹中的新版本 */
             if (BaseParamter.Pre_b_OnlyUpdateFlag)

@@ -125,5 +125,8 @@
     <Setting Name="ChartMode" Type="System.String" Scope="User">
       <Value Profile="(Default)">RealTime</Value>
     </Setting>
+    <Setting Name="NoticeShownVersion" Type="System.String" Scope="User">
+      <Value Profile="(Default)" />
+    </Setting>
   </Settings>
 </SettingsFile>

@@ -457,6 +457,18 @@ namespace PCAN_Client.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string NoticeShownVersion {
+            get {
+                return ((string)(this["NoticeShownVersion"]));
+            }
+            set {
+                this["NoticeShownVersion"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
         public bool LP_24YearSelected {
             get {
