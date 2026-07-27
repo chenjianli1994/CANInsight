@@ -12,16 +12,16 @@ namespace PCAN_Client
         /// 应用程序的主入口点。
         /// </summary>
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             Byte[] assemblyData = new Byte[1];
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             //原创来自 www.luofenming.com
             //初始化时添加下面代码 
-            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) =>
             {//注意WindowsFormsApplication1 这个是主程序的命名空间
-                string resourceName = "PCAN_Client.Lib." + new AssemblyName(args.Name).Name + ".dll";
+                string resourceName = "PCAN_Client.Lib." + new AssemblyName(resolveArgs.Name).Name + ".dll";
                 using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
                 {
                     if (stream == null)
@@ -39,6 +39,17 @@ namespace PCAN_Client
             };
             //ExtractEmbeddedDLL();
             HideRelatedFiles();
+            /* 由更新批处理带 /updated 参数重启时，提示更新完成 */
+            foreach (var arg in args)
+            {
+                if (arg.Equals("/updated", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show("更新完成！\r\n当前版本：" + BaseParamter.softVersion,
+                        "更新成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    break;
+                }
+            }
+            util.SelfUpdater.CheckOnStartup(); /* 启动时后台检查局域网共享文件夹中的新版本 */
             if (BaseParamter.Pre_b_OnlyUpdateFlag)
             {
                 Application.Run(new Update.update());

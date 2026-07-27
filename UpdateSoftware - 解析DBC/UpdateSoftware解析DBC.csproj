@@ -448,6 +448,7 @@
     <Compile Include="util\FrameCrcCal.cs" />
     <Compile Include="util\MyChart.cs" />
     <Compile Include="util\S19DataRead.cs" />
+    <Compile Include="util\SelfUpdater.cs" />
     <Compile Include="util\tmpFileRead.cs" />
     <Compile Include="util\USBEventWatch.cs" />
     <Compile Include="util\xmlFileRead.cs" />
@@ -586,4 +587,12 @@
   </Target>
   <Import Project="..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets" Condition="Exists('..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets')" />
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
+  <!-- Release 编译后自动生成 version.txt（内容取自 BaseParamter.softVersion），供局域网自更新发布使用 -->
+  <Target Name="GenerateVersionTxt" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <_SoftVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\BaseParamter.cs')), 'softVersion = "([^"]+)"').Groups[1].Value)</_SoftVersion>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(OutDir)version.txt" Lines="$(_SoftVersion)" Overwrite="true" />
+    <Message Text="已生成 version.txt：$(_SoftVersion)" Importance="high" />
+  </Target>
 </Project>

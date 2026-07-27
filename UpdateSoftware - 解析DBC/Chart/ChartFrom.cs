@@ -67,7 +67,6 @@ namespace PCAN_Client
         private ToolStripTextBox _txtEndTime;
         private int _streamingThresholdMB = 150;            // 流式阈值(MB,超过该值走流式读取)
         private ToolStripButton _btnShowData;
-        private ToolStripButton _btnChannelFilter;
         internal HashSet<byte> _selectedChannels = null; // null=全部通道
         private ProgressBar _progressBar;
         private Label _progressLabel;  // 进度条百分比文字标签
@@ -321,23 +320,6 @@ namespace PCAN_Client
                 }
             };
 
-            // 加载上次保存的通道筛选设置
-            var savedFilter = (string)PCAN_Client.Properties.Settings.Default["ChartChannelFilter"];
-            if (!string.IsNullOrEmpty(savedFilter))
-            {
-                var channels = new HashSet<byte>();
-                foreach (var part in savedFilter.Split(','))
-                {
-                    if (byte.TryParse(part.Trim(), out byte ch))
-                        channels.Add(ch);
-                }
-                if (channels.Count > 0)
-                {
-                    _selectedChannels = channels;
-                    _btnChannelFilter.Text = $"通道({channels.Count})";
-                }
-            }
-            
             // 加载上次保存的日志文件路径列表（包含勾选状态）
             var savedLogPaths = (string)PCAN_Client.Properties.Settings.Default["LogFilePaths"];
             if (!string.IsNullOrEmpty(savedLogPaths))
@@ -434,7 +416,6 @@ namespace PCAN_Client
             this._txtStartTime = new System.Windows.Forms.ToolStripTextBox();
             this._txtEndTime = new System.Windows.Forms.ToolStripTextBox();
             this._btnShowData = new System.Windows.Forms.ToolStripButton();
-            this._btnChannelFilter = new System.Windows.Forms.ToolStripButton();
             this._btnBusConfig = new System.Windows.Forms.ToolStripButton();
             this._btnSaveBlf = new System.Windows.Forms.Button();
             this._progressBar = new System.Windows.Forms.ProgressBar();
@@ -676,8 +657,6 @@ namespace PCAN_Client
             this._analysisToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this._analysisToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
             this._analysisToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this._btnChannelFilter,
-            new System.Windows.Forms.ToolStripSeparator(),
             new System.Windows.Forms.ToolStripLabel("区间:"),
             this._txtStartTime,
             new System.Windows.Forms.ToolStripLabel("~"),
@@ -832,16 +811,6 @@ namespace PCAN_Client
             this._btnShowData.Text = "数据显示";
             this._btnShowData.ToolTipText = "显示指定时间范围内的数据";
             this._btnShowData.Click += new System.EventHandler(this._btnShowData_Click);
-            //
-            // _btnChannelFilter
-            //
-            this._btnChannelFilter.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.ImageAndText;
-            this._btnChannelFilter.Image = ToolbarIcons.Get("filter");
-            this._btnChannelFilter.Name = "_btnChannelFilter";
-            this._btnChannelFilter.Size = new System.Drawing.Size(60, 22);
-            this._btnChannelFilter.Text = "通道筛选";
-            this._btnChannelFilter.ToolTipText = "选择要显示的CAN通道（默认全部）";
-            this._btnChannelFilter.Click += new System.EventHandler(this._btnChannelFilter_Click);
             // 
             // _btnSaveBlf
             // 
@@ -1139,6 +1108,8 @@ namespace PCAN_Client
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("流式阈值设置…", null, _menuStreamingThreshold_Click));
             _toolMore.DropDownItems.Add(new ToolStripSeparator());
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("删除全部", null, _btnRemoveAll_Click));
+            _toolMore.DropDownItems.Add(new ToolStripSeparator());
+            _toolMore.DropDownItems.Add(new ToolStripMenuItem("版本信息", null, _menuVersionInfo_Click));
 
             SyncToolbarStateFromLegacyControls();
         }
@@ -1153,6 +1124,16 @@ namespace PCAN_Client
                 if (menu == null) continue;
                 menu.Checked = RealTimeDataSta ? menu.Name == "menuRealtime" : menu.Name == "menuFileData";
             }
+        }
+
+        /// <summary>更多→版本信息:显示当前版本号与发布日期(取自 BaseParamter.softVersion)</summary>
+        private void _menuVersionInfo_Click(object sender, EventArgs e)
+        {
+            var parts = BaseParamter.softVersion.Split(new[] { "--" }, StringSplitOptions.None);
+            string ver = parts[0].Trim();
+            string date = parts.Length > 1 ? parts[1].Trim() : "未知";
+            MessageBox.Show("当前版本：" + ver + "\r\n发布日期：" + date,
+                "版本信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>更多→流式阈值设置:弹小对话框修改并持久化(下次加载生效)</summary>
@@ -2253,53 +2234,6 @@ namespace PCAN_Client
                     // 缓存模式：切回内存模式
                     FinalizeCachePlayback(totalMsgCount);
                 }));
-            }
-        }
-
-        private void _btnChannelFilter_Click(object sender, EventArgs e)
-        {
-            using (var form = new Form())
-            {
-                form.Text = "选择CAN通道";
-                form.StartPosition = FormStartPosition.CenterParent;
-                form.FormBorderStyle = FormBorderStyle.FixedDialog;
-                form.MaximizeBox = false;
-                form.MinimizeBox = false;
-                form.ClientSize = new Size(220, 320);
-
-                var clb = new CheckedListBox
-                {
-                    CheckOnClick = true,
-                    Dock = DockStyle.Top,
-                    Height = 240,
-                    IntegralHeight = false
-                };
-                for (int i = 0; i <= 15; i++)
-                    clb.Items.Add($"通道 {i}", _selectedChannels == null || _selectedChannels.Contains((byte)i));
-
-                var btnAll = new Button { Text = "全选", Width = 70, Left = 10, Top = 245 };
-                btnAll.Click += (ss, ee) => { for (int j = 0; j < clb.Items.Count; j++) clb.SetItemChecked(j, true); };
-
-                var btnNone = new Button { Text = "全不选", Width = 70, Left = 85, Top = 245 };
-                btnNone.Click += (ss, ee) => { for (int j = 0; j < clb.Items.Count; j++) clb.SetItemChecked(j, false); };
-
-                var btnOk = new Button { Text = "确定", Width = 80, Left = 70, Top = 275, DialogResult = DialogResult.OK };
-                form.Controls.AddRange(new Control[] { clb, btnAll, btnNone, btnOk });
-
-                if (form.ShowDialog(this) == DialogResult.OK)
-                {
-                    var selected = new HashSet<byte>();
-                    for (int j = 0; j < clb.Items.Count; j++)
-                    {
-                        if (clb.GetItemChecked(j))
-                            selected.Add((byte)j);
-                    }
-                    _selectedChannels = selected.Count == 0 ? null : selected;
-                    _btnChannelFilter.Text = _selectedChannels == null ? "通道筛选" : $"通道({_selectedChannels.Count})";
-                    // 保存到设置
-                    PCAN_Client.Properties.Settings.Default["ChartChannelFilter"] = _selectedChannels == null ? "" : string.Join(",", _selectedChannels);
-                    PCAN_Client.Properties.Settings.Default.Save();
-                }
             }
         }
 
