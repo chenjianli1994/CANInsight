@@ -1580,10 +1580,10 @@ namespace PCAN_Client
             _toolbarPanel.BorderStyle = BorderStyle.FixedSingle;
             _toolbarPanel.Padding = new Padding(5, 2, 5, 2);
 
-            int btnWidth = 65;
-            int btnHeight = 22;
+            int btnWidth = 80;
+            int btnHeight = 24;
             int x = 5;
-            int y = 3;
+            int y = 2;
 
             // Scroll 按钮
             _btnScroll = new Button();
@@ -1591,9 +1591,8 @@ namespace PCAN_Client
             _btnScroll.Width = btnWidth;
             _btnScroll.Height = btnHeight;
             _btnScroll.Location = new Point(x, y);
-            _btnScroll.FlatStyle = FlatStyle.Flat;
+            UiTheme.StyleButton(_btnScroll, "scroll");
             _btnScroll.BackColor = Color.LightGray;
-            _btnScroll.Font = new Font("Microsoft Sans Serif", 8f);
             _btnScroll.Click += (s, e) =>
             {
                 _scrollMode = !_scrollMode;
@@ -1618,9 +1617,8 @@ namespace PCAN_Client
             _btnPause.Width = btnWidth;
             _btnPause.Height = btnHeight;
             _btnPause.Location = new Point(x, y);
-            _btnPause.FlatStyle = FlatStyle.Flat;
+            UiTheme.StyleButton(_btnPause, "stop");
             _btnPause.BackColor = Color.LightGray;
-            _btnPause.Font = new Font("Microsoft Sans Serif", 8f);
             _btnPause.Click += (s, e) =>
             {
                 bool wasPaused = _pauseUpdate;
@@ -1723,9 +1721,8 @@ namespace PCAN_Client
             _btnClear.Width = btnWidth;
             _btnClear.Height = btnHeight;
             _btnClear.Location = new Point(x, y);
-            _btnClear.FlatStyle = FlatStyle.Flat;
+            UiTheme.StyleButton(_btnClear, "clear");
             _btnClear.BackColor = Color.LightGray;
-            _btnClear.Font = new Font("Microsoft Sans Serif", 8f);
             _btnClear.Click += (s, e) =>
             {
                 lock (_displayList)
@@ -1756,12 +1753,11 @@ namespace PCAN_Client
             // DBC Only 按钮
             _btnDbcOnly = new Button();
             _btnDbcOnly.Text = "全部报文";
-            _btnDbcOnly.Width = 80;
+            _btnDbcOnly.Width = 104;
             _btnDbcOnly.Height = btnHeight;
             _btnDbcOnly.Location = new Point(x, y);
-            _btnDbcOnly.FlatStyle = FlatStyle.Flat;
+            UiTheme.StyleButton(_btnDbcOnly, "list");
             _btnDbcOnly.BackColor = Color.LightGray;
-            _btnDbcOnly.Font = new Font("Microsoft Sans Serif", 8f);
             _btnDbcOnly.Click += (s, e) =>
             {
                 _dbcOnlyMode = !_dbcOnlyMode;
@@ -1774,6 +1770,9 @@ namespace PCAN_Client
                 RefreshMessageDisplay();
             };
             _toolbarPanel.Controls.Add(_btnDbcOnly);
+
+            // 面板宽度自适应按钮总宽
+            _toolbarPanel.Width = _btnDbcOnly.Right + 6;
 
             this.Controls.Add(_toolbarPanel);
         }
@@ -1867,6 +1866,15 @@ namespace PCAN_Client
             this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             this.Text = "CANInsight  " + BaseParamter.softVersion;
 
+            // 浅色现代风：窗体字体 + 顶部功能按钮统一风格并前置图标
+            UiTheme.StyleForm(this);
+            UiTheme.StyleButton(button3, "save");
+            UiTheme.StyleButton(SendMsg, "swap");
+            UiTheme.StyleButton(button6, "chart");
+            UiTheme.StyleButton(button7, "folder");
+            UiTheme.StyleButton(button1);
+            UiTheme.StyleButton(button5);
+
             // 绘图主页面已由Program入口预建并显示(秒开优化),此处直接接管;
             // 未预建时(兼容路径)现场创建,保证绘图窗口关闭时退出程序
             chartFromShow = Program.PreloadedChart;
@@ -1904,19 +1912,12 @@ namespace PCAN_Client
             _dgvMessages.RowHeadersVisible = false;
             _dgvMessages.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             _dgvMessages.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
+            // 应用公共主题（表头淡蓝灰/交替行/网格线/选中色/行高24），数据列字体随后单独指定
+            UiTheme.StyleGrid(_dgvMessages);
             _dgvMessages.DefaultCellStyle.Font = new Font("Consolas", 9f);
             _dgvMessages.DefaultCellStyle.ForeColor = Color.Black;
-            _dgvMessages.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
-            _dgvMessages.EnableHeadersVisualStyles = false;
-            _dgvMessages.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(240, 240, 240);
-            _dgvMessages.ColumnHeadersDefaultCellStyle.ForeColor = Color.Black;
-            _dgvMessages.ColumnHeadersDefaultCellStyle.Font = new Font("Microsoft Sans Serif", 8.25f, FontStyle.Bold);
             _dgvMessages.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
             _dgvMessages.CellBorderStyle = DataGridViewCellBorderStyle.Single;
-            _dgvMessages.GridColor = Color.FromArgb(200, 200, 200);
-            _dgvMessages.DefaultCellStyle.SelectionBackColor = Color.FromArgb(144, 238, 144);
-            _dgvMessages.DefaultCellStyle.SelectionForeColor = Color.Black;
-            _dgvMessages.RowTemplate.Height = 22;
             _dgvMessages.ShowCellToolTips = false;
 
             // === VirtualMode 启用 ===
@@ -1955,57 +1956,57 @@ namespace PCAN_Client
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.SetProperty,
                 null, _dgvMessages, new object[] { true });
 
-            // 列定义：Filter | Count | Time | Tx | Err | Description | ArbId/Header | Len | DataBytes | Network | Node | ChangeCnt | Timestamp
+            // 列定义：展开 | 次数 | 时间 | 发送 | 报文名称 | 报文ID | 长度 | 数据 | 帧类型 | CAN通道 | 变化次数 | 时间戳 | 最大/最小间隔
             _dgvMessages.Columns.Add("colFilter", "");
-            _dgvMessages.Columns["colFilter"].Width = 20;        // 减小30%（原28）
+            _dgvMessages.Columns["colFilter"].Width = 20;
             _dgvMessages.Columns["colFilter"].HeaderText = "";
 
-            _dgvMessages.Columns.Add("colCount", "Count");
-            _dgvMessages.Columns["colCount"].Width = 50;
+            _dgvMessages.Columns.Add("colCount", "次数");
+            _dgvMessages.Columns["colCount"].Width = 46;
             _dgvMessages.Columns["colCount"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            _dgvMessages.Columns.Add("colTime", "Time (abs|rel)");
-            _dgvMessages.Columns["colTime"].Width = 85;
+            _dgvMessages.Columns.Add("colTime", "时间 (abs|rel)");
+            _dgvMessages.Columns["colTime"].Width = 95;
 
-            _dgvMessages.Columns.Add("colTx", "Tx");
-            _dgvMessages.Columns["colTx"].Width = 18;           // 加宽30%（原14）
+            _dgvMessages.Columns.Add("colTx", "发送");
+            _dgvMessages.Columns["colTx"].Width = 40;
             _dgvMessages.Columns["colTx"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             _dgvMessages.Columns["colTx"].DefaultCellStyle.Font = new Font("Segoe UI", 9f);
 
-            _dgvMessages.Columns.Add("colDesc", "Description");
-            _dgvMessages.Columns["colDesc"].Width = 77;
+            _dgvMessages.Columns.Add("colDesc", "报文名称");
+            _dgvMessages.Columns["colDesc"].Width = 90;
 
-            _dgvMessages.Columns.Add("colMsgId", "ArbId/Header");
-            _dgvMessages.Columns["colMsgId"].Width = 73;
+            _dgvMessages.Columns.Add("colMsgId", "报文ID");
+            _dgvMessages.Columns["colMsgId"].Width = 70;
 
-            _dgvMessages.Columns.Add("colLen", "Len");
-            _dgvMessages.Columns["colLen"].Width = 17;          // 加宽30%（原13）
+            _dgvMessages.Columns.Add("colLen", "长度");
+            _dgvMessages.Columns["colLen"].Width = 40;
             _dgvMessages.Columns["colLen"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            _dgvMessages.Columns.Add("colData", "DataBytes");
-            _dgvMessages.Columns["colData"].Width = 251;        // 减宽30%（原358）
+            _dgvMessages.Columns.Add("colData", "数据");
+            _dgvMessages.Columns["colData"].Width = 251;
             _dgvMessages.Columns["colData"].DefaultCellStyle.Font = new Font("Consolas", 9f);
 
             _dgvMessages.Columns.Add("colNetwork", "帧类型");
-            _dgvMessages.Columns["colNetwork"].Width = 48;      // 加宽40%（原34）
+            _dgvMessages.Columns["colNetwork"].Width = 48;
 
             _dgvMessages.Columns.Add("colNode", "CAN通道");
-            _dgvMessages.Columns["colNode"].Width = 45;         // 不变
+            _dgvMessages.Columns["colNode"].Width = 45;
 
-            _dgvMessages.Columns.Add("colChangeCnt", "ChangeCnt");
-            _dgvMessages.Columns["colChangeCnt"].Width = 49;    // 加宽30%（原38）
+            _dgvMessages.Columns.Add("colChangeCnt", "变化次数");
+            _dgvMessages.Columns["colChangeCnt"].Width = 60;
             _dgvMessages.Columns["colChangeCnt"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            _dgvMessages.Columns.Add("colTimestamp", "Timestamp");
+            _dgvMessages.Columns.Add("colTimestamp", "时间戳");
             _dgvMessages.Columns["colTimestamp"].Width = 75;
             _dgvMessages.Columns["colTimestamp"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
 
-            _dgvMessages.Columns.Add("colMaxGap", "MaxGap");
-            _dgvMessages.Columns["colMaxGap"].Width = 70;       // 保留，位于最右侧通过滚动条查看
+            _dgvMessages.Columns.Add("colMaxGap", "最大间隔");
+            _dgvMessages.Columns["colMaxGap"].Width = 70;
             _dgvMessages.Columns["colMaxGap"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            _dgvMessages.Columns.Add("colMinGap", "MinGap");
-            _dgvMessages.Columns["colMinGap"].Width = 70;       // 保留，位于最右侧通过滚动条查看
+            _dgvMessages.Columns.Add("colMinGap", "最小间隔");
+            _dgvMessages.Columns["colMinGap"].Width = 70;
             _dgvMessages.Columns["colMinGap"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
             // 保存列宽度比例（用于自适应缩放）
@@ -2731,12 +2732,11 @@ namespace PCAN_Client
                     col.Width = widths[idx++];
             }
 
-            // 工具栏在最上方（紧贴DGV顶部）
+            // 工具栏在最上方（紧贴DGV顶部，宽度在CreateMessageToolbar中按按钮总宽自适应）
             if (_toolbarPanel != null && !_toolbarPanel.IsDisposed)
             {
                 _toolbarPanel.Left = _dgvMessages.Left;
                 _toolbarPanel.Top = _dgvMessages.Top - _toolbarPanel.Height - 2;
-                _toolbarPanel.Width = 305; // 固定宽度，包裹4个按钮
             }
 
             // 筛选行在工具栏右边，同一行

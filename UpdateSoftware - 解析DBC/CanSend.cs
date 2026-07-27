@@ -166,6 +166,22 @@ namespace PCAN_Client
             {
                 column.SortMode = DataGridViewColumnSortMode.NotSortable;
             }
+
+            // 浅色现代风：统一窗体/表格/按钮样式；列名保持英文键不变，仅改显示列头
+            UiTheme.StyleForm(this);
+            UiTheme.StyleGrid(dataGridView1);
+            UiTheme.StyleGrid(dataGridView2);
+            UiTheme.StyleGrid(dataGridView3);
+            UiTheme.StyleButton(saveCfgButton, "save");
+            UiTheme.StyleButton(readCfgButton, "folder");
+            UiTheme.SetGridHeaders(dataGridView1,
+                ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
+            UiTheme.SetGridHeaders(dataGridView2,
+                ("MessageID", "报文ID"), ("MessageName", "报文名称"), ("CycleTime(ms)", "周期(ms)"),
+                ("SendCnt", "发送次数"), ("Enable", "使能"));
+            UiTheme.SetGridHeaders(dataGridView3,
+                ("MessageID", "报文ID"), ("CycleTime(ms)", "周期(ms)"), ("SendCnt", "发送次数"),
+                ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"));
         }
 
         /* 循环发送报文 */

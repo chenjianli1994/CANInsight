@@ -87,12 +87,13 @@ namespace PCAN_Client
             this.comboBox1.TabIndex = 2;
             this.comboBox1.SelectedIndexChanged += new System.EventHandler(this.comboBox1_SelectedIndexChanged);
             this.comboBox1.Click += new System.EventHandler(this.comboBox1_Click);
-            // 
+            //
             // button3
-            // 
-            this.button3.Location = new System.Drawing.Point(482, 5);
+            //
+            this.button3.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.button3.Location = new System.Drawing.Point(753, 8);
             this.button3.Name = "button3";
-            this.button3.Size = new System.Drawing.Size(74, 28);
+            this.button3.Size = new System.Drawing.Size(100, 30);
             this.button3.TabIndex = 40;
             this.button3.Text = "存储数据";
             this.button3.UseVisualStyleBackColor = true;
@@ -102,11 +103,11 @@ namespace PCAN_Client
             // 
             this.groupBox1.Controls.Add(this.comboBox1);
             this.groupBox1.Controls.Add(this.button1);
-            this.groupBox1.Location = new System.Drawing.Point(9, 10);
+            this.groupBox1.Location = new System.Drawing.Point(9, 8);
             this.groupBox1.Margin = new System.Windows.Forms.Padding(2);
             this.groupBox1.Name = "groupBox1";
             this.groupBox1.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox1.Size = new System.Drawing.Size(208, 51);
+            this.groupBox1.Size = new System.Drawing.Size(230, 52);
             this.groupBox1.TabIndex = 43;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "PCAN";
@@ -115,11 +116,11 @@ namespace PCAN_Client
             // 
             this.groupBox2.Controls.Add(this.comboBox_CanoeChannel);
             this.groupBox2.Controls.Add(this.button5);
-            this.groupBox2.Location = new System.Drawing.Point(9, 66);
+            this.groupBox2.Location = new System.Drawing.Point(9, 64);
             this.groupBox2.Margin = new System.Windows.Forms.Padding(2);
             this.groupBox2.Name = "groupBox2";
             this.groupBox2.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox2.Size = new System.Drawing.Size(208, 49);
+            this.groupBox2.Size = new System.Drawing.Size(230, 52);
             this.groupBox2.TabIndex = 44;
             this.groupBox2.TabStop = false;
             this.groupBox2.Text = "CANOE";
@@ -150,11 +151,11 @@ namespace PCAN_Client
             // 
             this.groupBox3.Controls.Add(this.radioButtonCAN);
             this.groupBox3.Controls.Add(this.radioButtonCANFD);
-            this.groupBox3.Location = new System.Drawing.Point(222, 10);
+            this.groupBox3.Location = new System.Drawing.Point(245, 8);
             this.groupBox3.Margin = new System.Windows.Forms.Padding(2);
             this.groupBox3.Name = "groupBox3";
             this.groupBox3.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox3.Size = new System.Drawing.Size(62, 105);
+            this.groupBox3.Size = new System.Drawing.Size(82, 108);
             this.groupBox3.TabIndex = 45;
             this.groupBox3.TabStop = false;
             this.groupBox3.Text = "CAN类型";
@@ -162,7 +163,7 @@ namespace PCAN_Client
             // radioButtonCAN
             // 
             this.radioButtonCAN.AutoSize = true;
-            this.radioButtonCAN.Location = new System.Drawing.Point(4, 76);
+            this.radioButtonCAN.Location = new System.Drawing.Point(8, 56);
             this.radioButtonCAN.Margin = new System.Windows.Forms.Padding(2);
             this.radioButtonCAN.Name = "radioButtonCAN";
             this.radioButtonCAN.Size = new System.Drawing.Size(41, 16);
@@ -175,7 +176,7 @@ namespace PCAN_Client
             // radioButtonCANFD
             // 
             this.radioButtonCANFD.AutoSize = true;
-            this.radioButtonCANFD.Location = new System.Drawing.Point(4, 15);
+            this.radioButtonCANFD.Location = new System.Drawing.Point(8, 26);
             this.radioButtonCANFD.Margin = new System.Windows.Forms.Padding(2);
             this.radioButtonCANFD.Name = "radioButtonCANFD";
             this.radioButtonCANFD.Size = new System.Drawing.Size(53, 16);
@@ -210,32 +211,35 @@ namespace PCAN_Client
             // timer1
             // 
             this.timer1.Tick += new System.EventHandler(this.timer1_Tick);
-            // 
+            //
             // SendMsg
-            // 
-            this.SendMsg.Location = new System.Drawing.Point(316, 53);
+            //
+            this.SendMsg.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.SendMsg.Location = new System.Drawing.Point(863, 8);
             this.SendMsg.Name = "SendMsg";
-            this.SendMsg.Size = new System.Drawing.Size(74, 28);
+            this.SendMsg.Size = new System.Drawing.Size(100, 30);
             this.SendMsg.TabIndex = 51;
             this.SendMsg.Text = "发送报文";
             this.SendMsg.UseVisualStyleBackColor = true;
             this.SendMsg.Click += new System.EventHandler(this.SendMsg_Click);
-            // 
+            //
             // button6
-            // 
-            this.button6.Location = new System.Drawing.Point(396, 53);
+            //
+            this.button6.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.button6.Location = new System.Drawing.Point(973, 8);
             this.button6.Name = "button6";
-            this.button6.Size = new System.Drawing.Size(74, 28);
+            this.button6.Size = new System.Drawing.Size(100, 30);
             this.button6.TabIndex = 52;
             this.button6.Text = "曲线绘制";
             this.button6.UseVisualStyleBackColor = true;
             this.button6.Click += new System.EventHandler(this.button6_Click);
-            // 
+            //
             // button7
-            // 
-            this.button7.Location = new System.Drawing.Point(482, 53);
+            //
+            this.button7.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.button7.Location = new System.Drawing.Point(1083, 8);
             this.button7.Name = "button7";
-            this.button7.Size = new System.Drawing.Size(74, 28);
+            this.button7.Size = new System.Drawing.Size(100, 30);
             this.button7.TabIndex = 53;
             this.button7.Text = "数据转换";
             this.button7.UseVisualStyleBackColor = true;

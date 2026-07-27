@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Data;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -1151,6 +1152,22 @@ namespace PCAN_Client.DataLog
 
         private void LogFileToCSV_Load(object sender, EventArgs e)
         {
+            // 浅色现代风：统一字体/按钮样式，顶部补一行DBC来源提示（原DBC加载行已移除）
+            UiTheme.StyleForm(this);
+            UiTheme.StyleButton(button3, "folder");
+            UiTheme.StyleButton(button_Start, "play");
+            button_Start.BackColor = UiTheme.Accent;
+            button_Start.ForeColor = Color.White;
+            button_Start.FlatAppearance.BorderColor = UiTheme.Accent;
+            var lblDbcHint = new Label
+            {
+                Text = "DBC 请在绘图窗口的「通道配置」中加载，本窗口共用该DBC解析",
+                Location = new Point(12, 8),
+                AutoSize = true,
+                ForeColor = Color.Gray
+            };
+            this.Controls.Add(lblDbcHint);
+
             comboBoxExcelSaveTime.Items.Clear();
             foreach (var time in saveExcelTimeBuf)
             {

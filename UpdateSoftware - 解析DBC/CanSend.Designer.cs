@@ -384,7 +384,7 @@
             this.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
             this.MaximizeBox = false;
             this.Name = "CanSend";
-            this.Text = "CanSend";
+            this.Text = "报文发送";
             this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.CanSend_FormClosed);
             this.Load += new System.EventHandler(this.CanSend_Load);
             this.DragDrop += new System.Windows.Forms.DragEventHandler(this.CanSend_DragDrop);
