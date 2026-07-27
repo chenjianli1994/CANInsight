@@ -22,14 +22,13 @@ namespace PCAN_Client.util
     internal static class SelfUpdater
     {
         /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
-        private const string UpdateDir = @"\\update-server\company-share\I-文件中转站\新建文件夹\CANInsight";  /* 测试用本地路径；正式路径：\\update-server\company-share\I-文件中转站\新建文件夹\CANInsight */
+        private const string UpdateDir = @"\\update-server\company-share\I-文件中转站\新建文件夹\CANInsight";
 
         /// <summary>程序启动时调用，后台静默检查，失败（无网络/无权限）不影响正常使用</summary>
         public static void CheckOnStartup()
         {
             Task.Run(() =>
             {
-                TestShareAccess(); /* 临时诊断：弹窗报告中转站访问结果，验证后删除 */
                 try
                 {
                     Check();
@@ -39,36 +38,6 @@ namespace PCAN_Client.util
                     /* 共享不可达等异常静默跳过 */
                 }
             });
-        }
-
-        /// <summary>【临时诊断】启动时访问中转站并弹窗提示结果，验证完成后删除此方法及调用</summary>
-        private static void TestShareAccess()
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("检测路径：" + UpdateDir);
-            sb.AppendLine();
-            try
-            {
-                bool dirOk = Directory.Exists(UpdateDir);
-                sb.AppendLine("共享文件夹访问：" + (dirOk ? "成功" : "失败（路径不可达或无权限）"));
-                if (dirOk)
-                {
-                    string versionFile = Path.Combine(UpdateDir, "version.txt");
-                    bool verOk = File.Exists(versionFile);
-                    sb.AppendLine("version.txt 存在：" + (verOk ? "是" : "否"));
-                    if (verOk)
-                    {
-                        sb.AppendLine("version.txt 内容：" + File.ReadAllLines(versionFile)[0]);
-                    }
-                    string exeFile = Path.Combine(UpdateDir, "CANInsight.exe");
-                    sb.AppendLine("CANInsight.exe 存在：" + (File.Exists(exeFile) ? "是" : "否"));
-                }
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine("访问异常：" + ex.Message);
-            }
-            MessageBox.Show(sb.ToString(), "中转站访问测试", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private static void Check()
