@@ -302,12 +302,6 @@
     <Compile Include="CAN_Data\DbcHelper.cs" />
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
     <Compile Include="CAN_Data\FileLoader.cs" />
-    <Compile Include="ChartShow.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="ChartShow.Designer.cs">
-      <DependentUpon>ChartShow.cs</DependentUpon>
-    </Compile>
     <Compile Include="Chart\ChannelData.cs" />
     <Compile Include="Chart\ChartControl.cs">
       <SubType>Component</SubType>
@@ -352,24 +346,6 @@
     <Compile Include="DataLog\LogFrameReader.cs" />
     <Compile Include="DataLog\LogFileToCSV.Designer.cs">
       <DependentUpon>LogFileToCSV.cs</DependentUpon>
-    </Compile>
-    <Compile Include="IVI\IVI.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="IVI\IVI.Designer.cs">
-      <DependentUpon>IVI.cs</DependentUpon>
-    </Compile>
-    <Compile Include="J_Flash\JFlash.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="J_Flash\JFlash.Designer.cs">
-      <DependentUpon>JFlash.cs</DependentUpon>
-    </Compile>
-    <Compile Include="SignalChartShow.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="SignalChartShow.Designer.cs">
-      <DependentUpon>SignalChartShow.cs</DependentUpon>
     </Compile>
     <Compile Include="UDS\VehCfg.cs" />
     <Compile Include="UDS\ComTest.cs">
@@ -444,9 +420,7 @@
     </Compile>
     <Compile Include="util\CRC32.cs" />
     <Compile Include="util\Delay.cs" />
-    <Compile Include="util\J_Flash.cs" />
     <Compile Include="util\FrameCrcCal.cs" />
-    <Compile Include="util\MyChart.cs" />
     <Compile Include="util\S19DataRead.cs" />
     <Compile Include="util\SelfUpdater.cs" />
     <Compile Include="util\tmpFileRead.cs" />
@@ -454,9 +428,6 @@
     <Compile Include="util\xmlFileRead.cs" />
     <EmbeddedResource Include="CanSend.resx">
       <DependentUpon>CanSend.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="ChartShow.resx">
-      <DependentUpon>ChartShow.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Chart\ChartFrom.resx">
       <DependentUpon>ChartFrom.cs</DependentUpon>
@@ -469,12 +440,6 @@
     </EmbeddedResource>
     <EmbeddedResource Include="DataLog\LoggingSet.resx">
       <DependentUpon>LoggingSet.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="IVI\IVI.resx">
-      <DependentUpon>IVI.cs</DependentUpon>
-    </EmbeddedResource>
-    <EmbeddedResource Include="J_Flash\JFlash.resx">
-      <DependentUpon>JFlash.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Main.resx">
       <DependentUpon>Main.cs</DependentUpon>
@@ -489,9 +454,6 @@
       <DependentUpon>Resources.resx</DependentUpon>
       <DesignTime>True</DesignTime>
     </Compile>
-    <EmbeddedResource Include="SignalChartShow.resx">
-      <DependentUpon>SignalChartShow.cs</DependentUpon>
-    </EmbeddedResource>
     <EmbeddedResource Include="UDS\ComTest.resx">
       <DependentUpon>ComTest.cs</DependentUpon>
     </EmbeddedResource>

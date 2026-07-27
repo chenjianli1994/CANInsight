@@ -1,5 +1,4 @@
-﻿using PCAN_Client.J_Flash;
-using PCAN_Client.UDS;
+﻿using PCAN_Client.UDS;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
 using System.Diagnostics;

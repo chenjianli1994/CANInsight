@@ -40,9 +40,6 @@ namespace PCAN_Client
         internal static DataShow dataShow = null;
         internal static Update.update update = null;
         internal static ChartFrom chartFromShow = null;
-        internal static ChartShow chartShow = null;
-        internal static SignalChartShow signalChartShow = null;
-        internal static MyChart myChart = new MyChart();
         internal static LogFileToCSV LogFileToCSV = null;
         internal static Boolean udsOpenFlag = false;
         internal static Boolean canSendOpenFlag = false;
