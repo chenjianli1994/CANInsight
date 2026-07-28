@@ -609,6 +609,8 @@ namespace PCAN_Client.CAN_Data
             if (messageDef.updateFlag || null == messageDef.sendBuf)
             {
                 messageDef.sendBuf = CanMessageBuilder.EncodeSignals(messageDef.signals);
+                // 编码后复位：信号值未变化时后续周期帧复用编码结果（CRC/RollingCounter仍逐帧重算）
+                messageDef.updateFlag = false;
             }
             else
             {

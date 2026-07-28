@@ -40,7 +40,7 @@
             this.dataGridViewTextBoxColumn1 = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.dataGridViewTextBoxColumn2 = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.SendCnt = new System.Windows.Forms.DataGridViewTextBoxColumn();
-            this.Enable = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.Enable = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.saveCfgButton = new System.Windows.Forms.Button();
             this.readCfgButton = new System.Windows.Forms.Button();
             this.dataGridView3 = new System.Windows.Forms.DataGridView();
@@ -55,7 +55,7 @@
             this.Data6 = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.Data7 = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.dataGridViewTextBoxColumn6 = new System.Windows.Forms.DataGridViewTextBoxColumn();
-            this.CycleSend = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.CycleSend = new System.Windows.Forms.DataGridViewCheckBoxColumn();
             this.SigleSend = new System.Windows.Forms.DataGridViewTextBoxColumn();
             this.tabControl1 = new System.Windows.Forms.TabControl();
             this.tabPage1 = new System.Windows.Forms.TabPage();
@@ -409,7 +409,7 @@
         private System.Windows.Forms.DataGridViewTextBoxColumn dataGridViewTextBoxColumn1;
         private System.Windows.Forms.DataGridViewTextBoxColumn dataGridViewTextBoxColumn2;
         private System.Windows.Forms.DataGridViewTextBoxColumn SendCnt;
-        private System.Windows.Forms.DataGridViewTextBoxColumn Enable;
+        private System.Windows.Forms.DataGridViewCheckBoxColumn Enable;
         private System.Windows.Forms.DataGridViewTextBoxColumn CmdType;
         private System.Windows.Forms.DataGridViewTextBoxColumn Physical;
         private System.Windows.Forms.DataGridViewTextBoxColumn RawValue;
@@ -430,7 +430,7 @@
         private System.Windows.Forms.DataGridViewTextBoxColumn Data6;
         private System.Windows.Forms.DataGridViewTextBoxColumn Data7;
         private System.Windows.Forms.DataGridViewTextBoxColumn dataGridViewTextBoxColumn6;
-        private System.Windows.Forms.DataGridViewTextBoxColumn CycleSend;
+        private System.Windows.Forms.DataGridViewCheckBoxColumn CycleSend;
         private System.Windows.Forms.DataGridViewTextBoxColumn SigleSend;
     }
 }

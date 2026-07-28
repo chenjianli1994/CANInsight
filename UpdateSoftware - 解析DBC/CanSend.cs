@@ -64,13 +64,6 @@ namespace PCAN_Client
         int SelectMessageIndex = 0;
         // 在CanSend类中添加成员变量以跟踪当前活动的下拉框
         private ComboBox _currentComboBox;
-        // 在CanSend类中添加成员变量
-        private ToolStripDropDown _comboDropDown;
-        private ToolStripControlHost _comboHost;
-
-        private ManualResetEvent sendControlEvent = new ManualResetEvent(false);
-
-        private List<CAN_Data.Message> messages = new List<CAN_Data.Message>();
 
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
         public CanSend()
@@ -83,8 +76,8 @@ namespace PCAN_Client
             dataGridView1Column = 0;
             foreach (DataGridViewColumn column in dataGridView1.Columns)
             {
-                // Check if the header text is found
-                dataTable.Columns.Add(column.HeaderText, typeof(string));
+                // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
+                dataTable.Columns.Add(column.Name, typeof(string));
                 dataGridView1Column++;
             }
 
@@ -242,101 +235,6 @@ namespace PCAN_Client
                 ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"));
         }
 
-        /* 循环发送报文 */
-        private void SendDataCycleDeal()
-        {
-            sendControlEvent.Reset();
-            Task task = new Task(() =>
-            {
-                sw.Start();
-                int runCnt = 0;
-                while (aliveFlag)
-                {
-                    try
-                    {
-                        foreach (var message in messages)
-                        {
-                            //if (0x314 == message.messgeId && message.sendFalg && message.enableFlag)
-                            //{
-                            //    Console.WriteLine("NextSendTime:" + message.NextSendTime + " ElapsedMilliseconds:" + sw.ElapsedMilliseconds);
-                            //}
-                            if (message.sendFalg && message.enableFlag &&
-                              (0 == message.NextSendTime || sw.ElapsedMilliseconds >= message.NextSendTime))
-                            {
-                                message.NextSendTime = sw.ElapsedMilliseconds + message.cycleTime;
-                                message.aliveCount++;
-                                message.aliveCount &= 0x0F;
-                                BaseParamter.dbcHelper.SendCanMessage(message.messgeId);
-                            }
-                        }
-                        if(++runCnt >= 60)
-                        {
-                            runCnt = 0;
-                            if (this.IsHandleCreated)
-                            {
-                                this.BeginInvoke((EventHandler)(delegate
-                                {
-                                    try
-                                    {
-                                        int index = 0;
-                                        for (index = 0; index< messages.Count; index++)
-                                        {
-                                            if (null != messages[index] && messages[index].sendFalg && messages[index].enableFlag)
-                                            {
-                                                dataGridView2.Rows[index].Cells[(int)dataGridView2ColumnEnum.SendCnt].Value = messages[index].sendCnt.ToString();
-                                            }
-                                        }
-                                        //foreach (DataRow row in messagesTable.Rows)
-                                        //{
-                                        //    if(null != messages[index])
-                                        //    {
-                                        //        if (messages[index].sendFalg && messages[index].enableFlag)
-                                        //        {
-                                        //            dataGridView2.Rows[index].Cells[(int)dataGridView2ColumnEnum.SendCnt].Value = messages[index].sendCnt.ToString();
-                                        //        }
-                                        //    }
-                                        //    index++;
-                                        //}
-
-                                        //foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                                        //{
-                                        //    if (message.sendFalg && message.enableFlag)
-                                        //    {
-                                        //        int index = 0;
-                                        //        foreach (DataRow row in messagesTable.Rows)
-                                        //        {
-                                        //            if (row["MessageName"].Equals(message.messageName))
-                                        //            {
-                                        //                dataGridView2.Rows[index].Cells[(int)dataGridView2ColumnEnum.SendCnt].Value = message.sendCnt.ToString();
-                                        //                break;
-                                        //            }
-                                        //            else
-                                        //            {
-                                        //                index++;
-                                        //            }
-                                        //        }
-                                        //    }
-                                        //}
-                                    }
-                                    catch { }
-                                }));
-                            }
-                            else
-                            {
-                                /* empty */
-                            }
-                        }
-                    }
-                    catch { }
-                    //timeBeginPeriod(2);
-                    Thread.Sleep(0);
-                    //timeEndPeriod(2);
-                    //sendControlEvent.WaitOne(10);
-                }
-            });
-            task.Start();
-        }
-
         public void SetCANMessageSendENable(ref CAN_Data.Message message ,bool status, bool customFlag)
         {
             if(false == customFlag)
@@ -413,16 +311,10 @@ namespace PCAN_Client
                 }
                 else if (dataGridView2.Columns["Enable"].Index == dataGridView2SelectColumnIndex)
                 {
-                    if (row[dataGridView2SelectColumnIndex].Equals("True"))
-                    {
-                        messagesTable.Rows[dataGridView2SelectRowIndex].SetField("Enable", "False");
-                        SetCANMessageSendENable(ref Nowmessage, false, false);
-                    }
-                    else
-                    {
-                        messagesTable.Rows[dataGridView2SelectRowIndex].SetField("Enable", "True");
-                        SetCANMessageSendENable(ref Nowmessage, true, false);
-                    }
+                    // Enable为bool复选框列，直接取反
+                    bool enabled = row.Field<bool>("Enable");
+                    messagesTable.Rows[dataGridView2SelectRowIndex].SetField("Enable", !enabled);
+                    SetCANMessageSendENable(ref Nowmessage, !enabled, false);
                 }
                 else if (dataGridView2.Columns["MessageID"].Index == dataGridView2SelectColumnIndex ||
                          dataGridView2.Columns["MessageName"].Index == dataGridView2SelectColumnIndex)
@@ -449,6 +341,44 @@ namespace PCAN_Client
             catch { }
         }
 
+        /// <summary>
+        /// 重建发送列表（messagesTable→dataGridView2）：汇总全工程原先4处重复刷表块。
+        /// 使能报文注册到周期调度器；Enable为bool复选框列。
+        /// </summary>
+        private void RebuildMessagesTable()
+        {
+            messagesTable.Rows.Clear();
+            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
+            {
+                if (message.sendFalg)
+                {
+                    var newRow = messagesTable.NewRow();
+                    newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
+                    newRow["MessageName"] = message.messageName;
+                    newRow["CycleTime(ms)"] = message.cycleTime.ToString();
+                    newRow["SendCnt"] = message.sendCnt.ToString();
+                    newRow["Enable"] = message.enableFlag;
+                    messagesTable.Rows.Add(newRow);
+                    if (message.enableFlag)
+                    {
+                        multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
+                    }
+                }
+                message.NextSendTime = 0;
+            }
+            dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
+            // 仅周期列可编辑，其余只读
+            if (dataGridView2.Columns.Count >= 5)
+            {
+                dataGridView2.Columns[0].ReadOnly = true;
+                dataGridView2.Columns[1].ReadOnly = true;
+                dataGridView2.Columns[3].ReadOnly = true;
+                dataGridView2.Columns[4].ReadOnly = true;
+            }
+            dataGridView2.Refresh();
+        }
+
         private void CanSend_Load(object sender, EventArgs e)
         {
             treeView1.Nodes.Add("Nodes");
@@ -458,35 +388,7 @@ namespace PCAN_Client
                 UpdateDbcTreeview();
             }
 
-            messagesTable.Rows.Clear();
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-            {
-                DataRow newRow;
-                int i;
-                if (message.sendFalg)
-                {
-                    message.NextSendTime = 0;
-                    newRow = messagesTable.NewRow();
-                    newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                    newRow["MessageName"] = message.messageName;
-                    newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                    newRow["SendCnt"] = message.sendCnt.ToString();
-                    newRow["Enable"] = message.enableFlag.ToString();
-                    messagesTable.Rows.Add(newRow);
-                }
-            }
-            dataGridView2.DataSource = messagesTable;
-            EnsureSingleSendColumn();
-            dataGridView2.Columns[0].Width = 100;
-            dataGridView2.Columns[1].Width = 150;
-            dataGridView2.Columns[2].Width = 150;
-            dataGridView2.Columns[3].Width = 125;
-            dataGridView2.Columns[4].Width = 75;
-            dataGridView2.Columns[0].ReadOnly = true;
-            dataGridView2.Columns[1].ReadOnly = true;
-            dataGridView2.Columns[3].ReadOnly = true;
-            dataGridView2.Columns[4].ReadOnly = true;
-            dataGridView2.Refresh();
+            RebuildMessagesTable();
             aliveFlag = true;
 
             dataGridView3.DataSource = addMessagesTable;
@@ -527,41 +429,8 @@ namespace PCAN_Client
                 try
                 {
                     UpdateDbcTreeview();
-                    messagesTable.Rows.Clear();
-                    foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                    {
-                        DataRow newRow;
-                        int i;
-                        if (message.sendFalg)
-                        {
-                            newRow = messagesTable.NewRow();
-                            newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                            newRow["MessageName"] = message.messageName;
-                            newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                            newRow["SendCnt"] = message.sendCnt.ToString();
-                            newRow["Enable"] = message.enableFlag.ToString();
-                            messagesTable.Rows.Add(newRow);
-                            if (message.enableFlag)
-                            {
-                                multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
-                            }
-                        }
-                        message.NextSendTime = 0;
-                    }
-                    //dataGridView2.DataSource = messagesTable;
-            EnsureSingleSendColumn();
-                    //dataGridView2.Columns[0].Width = 100;
-                    //dataGridView2.Columns[0].Width = 150;
-                    //dataGridView2.Columns[1].Width = 150;
-                    //dataGridView2.Columns[2].Width = 125;
-                    //dataGridView2.Columns[3].Width = 75;
-                    //dataGridView2.Refresh();
-
+                    RebuildMessagesTable();
                     UpdateDbcListview(SelectMessageIndex);
-                    foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                    {
-                        message.NextSendTime = 0;
-                    }
                     sw = new Stopwatch();
                     sw.Start();
 
@@ -656,8 +525,8 @@ namespace PCAN_Client
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = new DataTable();
                     foreach (DataGridViewColumn column in dataGridView1.Columns)
                     {
-                        // Check if the header text is found
-                        BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.HeaderText, typeof(string));
+                        // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
+                        BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.Name, typeof(string));
                         dataGridView1Column++;
                     }
                 }
@@ -684,30 +553,7 @@ namespace PCAN_Client
             }
             tabControl1.SelectedIndex = 0;
 
-            messagesTable.Rows.Clear();
-            foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-            {
-                DataRow newRow;
-                int i;
-                if(message.sendFalg)
-                {
-                    newRow = messagesTable.NewRow();
-                    newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                    newRow["MessageName"] = message.messageName;
-                    newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                    newRow["SendCnt"] = message.sendCnt.ToString();
-                    newRow["Enable"] = message.enableFlag.ToString();
-                    messagesTable.Rows.Add(newRow);
-                }
-            }
-            dataGridView2.DataSource = messagesTable;
-            EnsureSingleSendColumn();
-            dataGridView2.Columns[0].Width = 100;
-            dataGridView2.Columns[0].Width = 150;
-            dataGridView2.Columns[1].Width = 150;
-            dataGridView2.Columns[2].Width = 125;
-            dataGridView2.Columns[3].Width = 75;
-            dataGridView2.Refresh();
+            RebuildMessagesTable();
         }
 
         private void dataGridView2_CellEndEdit(object sender, DataGridViewCellEventArgs e)
@@ -1015,41 +861,8 @@ namespace PCAN_Client
 
                 // 刷新UI
                 UpdateDbcTreeview();
-                messagesTable.Rows.Clear();
-                foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
-                {
-                    DataRow newRow;
-                    int i;
-                    if (message.sendFalg)
-                    {
-                        newRow = messagesTable.NewRow();
-                        newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
-                        newRow["MessageName"] = message.messageName;
-                        newRow["CycleTime(ms)"] = message.cycleTime.ToString();
-                        newRow["SendCnt"] = message.sendCnt.ToString();
-                        newRow["Enable"] = message.enableFlag.ToString();
-                        messagesTable.Rows.Add(newRow);
-                        if (message.enableFlag)
-                        {
-                            multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
-                        }
-                    }
-                    message.NextSendTime = 0;
-                }
-                dataGridView2.DataSource = messagesTable;
-            EnsureSingleSendColumn();
-                dataGridView2.Columns[0].Width = 100;
-                dataGridView2.Columns[0].Width = 150;
-                dataGridView2.Columns[1].Width = 150;
-                dataGridView2.Columns[2].Width = 125;
-                dataGridView2.Columns[3].Width = 75;
-                dataGridView2.Refresh();
-
+                RebuildMessagesTable();
                 UpdateDbcListview(SelectMessageIndex);
-                foreach(var message in BaseParamter.dbcHelper.dbcFile.messages)
-                {
-                    message.NextSendTime = 0;
-                }
                 sw = new Stopwatch();
                 sw.Start();
 
@@ -1126,27 +939,6 @@ namespace PCAN_Client
             try
             {
                 timeout++;
-                //if (timeout == 100)
-                //{
-                //    CAN_Data.Message message = new CAN_Data.Message();
-                //    message.messgeId = 0x33A;
-                //    message.cycleTime = 1000;
-                //    message.sendBuf = new byte[8] { 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-                //    message.sendFalg = true;
-                //    message.enableFlag = false;
-                //    CAN_API.CAN_API.CanTransmit(message.messgeId, (ushort)message.sendBuf.Length, message.sendBuf); 
-                //}
-                //else if(timeout == 200)
-                //{
-                //    timeout = 0;
-                //    CAN_Data.Message message = new CAN_Data.Message();
-                //    message.messgeId = 0x33A;
-                //    message.cycleTime = 1000;
-                //    message.sendBuf = new byte[8] { 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-                //    message.sendFalg = false; ;
-                //    message.enableFlag = false;
-                //    CAN_API.CAN_API.CanTransmit(message.messgeId, (ushort)message.sendBuf.Length, message.sendBuf);
-                //}
                 // 更新DBC报文的发送计数
                 int index = 0;
                 foreach (DataRow row in messagesTable.Rows)
@@ -1190,131 +982,6 @@ namespace PCAN_Client
             }
         }
 
-        //public class MultimediaTimer : IDisposable
-        //{
-        //    // 定时器回调委托
-        //    private delegate void TimeProc(uint uTimerID, uint uMsg, UIntPtr dwUser, UIntPtr dw1, UIntPtr dw2);
-
-        //    // Win32 API 导入
-        //    [DllImport("winmm.dll", SetLastError = true)]
-        //    private static extern uint timeSetEvent(
-        //        uint uDelay,
-        //        uint uResolution,
-        //        TimeProc lpTimeProc,
-        //        UIntPtr dwUser,
-        //        uint fuEvent);
-
-        //    [DllImport("winmm.dll", SetLastError = true)]
-        //    private static extern uint timeKillEvent(uint uTimerID);
-
-        //    [DllImport("winmm.dll", SetLastError = true)]
-        //    private static extern uint timeBeginPeriod(uint uPeriod);
-
-        //    [DllImport("winmm.dll", SetLastError = true)]
-        //    private static extern uint timeEndPeriod(uint uPeriod);
-
-        //    // 常量定义
-        //    private const uint TIME_PERIODIC = 0x0001;
-        //    private const uint TIME_ONESHOT = 0x0000;
-        //    private const uint TIME_KILL_SYNC = 0x0100;
-
-        //    private uint _timerId;
-        //    private readonly TimeProc _timeProc;
-        //    private readonly Action _callback;
-        //    private bool _disposed = false;
-        //    private bool _isRunning = false;
-
-        //    public MultimediaTimer(Action callback)
-        //    {
-        //        _callback = callback ?? throw new ArgumentNullException(nameof(callback));
-        //        _timeProc = new TimeProc(TimerCallback);
-        //    }
-
-        //    /// <summary>
-        //    /// 启动定时器
-        //    /// </summary>
-        //    /// <param name="intervalMs">定时间隔（毫秒）</param>
-        //    /// <param name="oneShot">是否只执行一次</param>
-        //    public void Start(uint intervalMs, bool oneShot = false)
-        //    {
-        //        if (_isRunning) return;
-
-        //        // 设置系统定时器精度（可选，但可以提高精度）
-        //        timeBeginPeriod(1);
-
-        //        uint mode = oneShot ? TIME_ONESHOT : TIME_PERIODIC;
-
-        //        _timerId = timeSetEvent(
-        //            intervalMs,        // 延迟时间（毫秒）
-        //            0,                // 分辨率（0表示最高精度）
-        //            _timeProc,        // 回调函数
-        //            UIntPtr.Zero,     // 用户数据
-        //            mode);           // 模式：周期性或单次
-
-        //        if (_timerId == 0)
-        //        {
-        //            throw new Exception("无法创建多媒体定时器");
-        //        }
-
-        //        _isRunning = true;
-        //    }
-
-        //    /// <summary>
-        //    /// 停止定时器
-        //    /// </summary>
-        //    public void Stop()
-        //    {
-        //        if (!_isRunning) return;
-
-        //        if (_timerId != 0)
-        //        {
-        //            timeKillEvent(_timerId);
-        //            _timerId = 0;
-        //        }
-
-        //        // 恢复系统定时器精度
-        //        timeEndPeriod(1);
-        //        _isRunning = false;
-        //    }
-
-        //    private void TimerCallback(uint uTimerID, uint uMsg, UIntPtr dwUser, UIntPtr dw1, UIntPtr dw2)
-        //    {
-        //        try
-        //        {
-        //            _callback?.Invoke();
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            // 记录异常，避免异常传播到非托管代码
-        //            System.Diagnostics.Debug.WriteLine($"定时器回调异常: {ex.Message}");
-        //        }
-        //    }
-
-        //    public void Dispose()
-        //    {
-        //        Dispose(true);
-        //        GC.SuppressFinalize(this);
-        //    }
-
-        //    protected virtual void Dispose(bool disposing)
-        //    {
-        //        if (!_disposed)
-        //        {
-        //            if (disposing)
-        //            {
-        //                // 释放托管资源
-        //            }
-
-        //            Stop();
-        //            _disposed = true;
-        //        }
-        //    }
-
-        //    ~MultimediaTimer()
-        //    {
-        //        Dispose(false);
-        //    }
-        //}
         public class MultiMessageCANScheduler : IDisposable
         {
             private class CANMessageSchedule : IComparable<CANMessageSchedule>
@@ -1648,7 +1315,7 @@ namespace PCAN_Client
                 row.SetField($"Data{j}", j < msg.sendBuf.Length ? $"0x{msg.sendBuf[j]:X2}" : "*");
             }
             row.SetField("SendCnt", msg.sendCnt.ToString());
-            row.SetField("Cycle Send", msg.enableFlag ? "True" : "False");
+            row.SetField("Cycle Send", msg.enableFlag);
             row.SetField("SigleSend", "单击发送");
         }
 
@@ -1670,7 +1337,7 @@ namespace PCAN_Client
                     newRow3[$"Data{j}"] = "*";
                 }
                 newRow3["SendCnt"] = msg.sendCnt;
-                newRow3["Cycle Send"] = (msg.enableFlag) ? "true" : "false";
+                newRow3["Cycle Send"] = msg.enableFlag;
                 newRow3["SigleSend"] = "单击发送";
                 addMessagesTable.Rows.Add(newRow3);
 
@@ -1693,7 +1360,7 @@ namespace PCAN_Client
             newRow3["Data6"] = "*";
             newRow3["Data7"] = "*";
             newRow3["SendCnt"] = 0;
-            newRow3["Cycle Send"] = "*";
+            newRow3["Cycle Send"] = DBNull.Value; // bool列不能用"*"
             newRow3["SigleSend"] = "*";
             addMessagesTable.Rows.Add(newRow3);
         }
@@ -1719,7 +1386,7 @@ namespace PCAN_Client
                 addMessagesTable.Rows[e.RowIndex].SetField("Data5", "0x00");
                 addMessagesTable.Rows[e.RowIndex].SetField("Data6", "0x00");
                 addMessagesTable.Rows[e.RowIndex].SetField("Data7", "0x00");
-                addMessagesTable.Rows[e.RowIndex].SetField("Cycle Send", "false");
+                addMessagesTable.Rows[e.RowIndex].SetField("Cycle Send", false);
                 addMessagesTable.Rows[e.RowIndex].SetField("SigleSend", "单击发送");
                 CAN_Data.Message message = new CAN_Data.Message();
                 message.messgeId = 0x000;
@@ -1742,7 +1409,7 @@ namespace PCAN_Client
                 newRow3["Data6"] = "*";
                 newRow3["Data7"] = "*";
                 newRow3["SendCnt"] = 0;
-                newRow3["Cycle Send"] = "*";
+                newRow3["Cycle Send"] = DBNull.Value; // bool列不能用"*"
                 newRow3["SigleSend"] = "*";
                 addMessagesTable.Rows.Add(newRow3);
             }
@@ -1807,21 +1474,14 @@ namespace PCAN_Client
                 }
                 else if (columnName.Equals("Cycle Send"))
                 {
-                    if (cellValue.Equals("True"))
+                    // 占位行（"双击添加"）的Cycle Send为DBNull，不响应
+                    if (row.IsNull("Cycle Send")) return;
+                    // Cycle Send为bool复选框列，直接取反（修复原"true"/"True"大小写脆弱比较）
+                    bool cycleEnabled = row.Field<bool>("Cycle Send");
+                    addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField("Cycle Send", !cycleEnabled);
+                    if (null != msg)
                     {
-                        addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField("Cycle Send", "False");
-                        if (null != msg)
-                        {
-                            SetCANMessageSendENable(ref msg, false, true);
-                        }
-                    }
-                    else
-                    {
-                        addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField("Cycle Send", "True");
-                        if (null != msg)
-                        {
-                            SetCANMessageSendENable(ref msg, true, true);
-                        }
+                        SetCANMessageSendENable(ref msg, !cycleEnabled, true);
                     }
                 }
             }
