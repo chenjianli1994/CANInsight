@@ -64,6 +64,8 @@ namespace PCAN_Client
         int SelectMessageIndex = 0;
         // 在CanSend类中添加成员变量以跟踪当前活动的下拉框
         private ComboBox _currentComboBox;
+        // 布局分栏（树|信号表），Shown时设置初始分栏位置
+        private SplitContainer _layoutSplit;
 
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
         public CanSend()
@@ -220,7 +222,13 @@ namespace PCAN_Client
             // 先加 Fill 再加 Top：Top 先停靠，Fill 占剩余
             this.Controls.Add(layout);
             this.Controls.Add(topPanel);
-            split.SplitterDistance = 280;
+            _layoutSplit = split;
+            // 分栏位置延迟到窗体显示后设置（构造期控件未完成布局，直接设置会越界）
+            this.Shown += (s, e) =>
+            {
+                if (_layoutSplit.Width > _layoutSplit.Panel1MinSize + _layoutSplit.Panel2MinSize)
+                    _layoutSplit.SplitterDistance = 280;
+            };
 
             // 信号表/发送列表列宽按比例填充（消除右侧空白与列宽矛盾设置）
             dataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
