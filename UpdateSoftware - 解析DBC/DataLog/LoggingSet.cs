@@ -39,6 +39,7 @@ namespace PCAN_Client.DataLog
 
         private void LoggingSet_Load(object sender, EventArgs e)
         {
+            UiTheme.StyleForm(this);
             if (Properties.Settings.Default.SaveFileType.Equals("ASC"))
             {
                 radioButton1.Checked = true;

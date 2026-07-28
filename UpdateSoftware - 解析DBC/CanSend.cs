@@ -174,6 +174,9 @@ namespace PCAN_Client
             UiTheme.StyleGrid(dataGridView3);
             UiTheme.StyleButton(saveCfgButton, "save");
             UiTheme.StyleButton(readCfgButton, "folder");
+            // 加宽并右对齐排列，避免图标+文字被裁剪（原74px宽放不下）
+            saveCfgButton.SetBounds(692, 8, 98, 26);
+            readCfgButton.SetBounds(798, 8, 98, 26);
             UiTheme.SetGridHeaders(dataGridView1,
                 ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
             UiTheme.SetGridHeaders(dataGridView2,

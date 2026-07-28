@@ -204,6 +204,7 @@ namespace PCAN_Client.DataLog
 
         private void Logging_Load(object sender, EventArgs e)
         {
+            UiTheme.StyleForm(this);
             if (LoggingSet.saveExcelFlag)
             {
                 timer2.Interval = (int)LoggingSet.saveExcelTime;
