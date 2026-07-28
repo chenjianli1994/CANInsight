@@ -157,7 +157,7 @@ namespace PCAN_Client
 
         // 工具栏控件
         internal ToolStrip _toolbarPanel;
-        internal ToolStrip _topActionsStrip;
+        internal ToolStrip _connectionStrip;
         internal ToolStripButton _btnScroll;
         internal ToolStripButton _btnPause;
         internal ToolStripButton _btnClear;
@@ -1568,6 +1568,65 @@ namespace PCAN_Client
             main = this;
         }
 
+        /// <summary>
+        /// 创建顶部连接工具栏：与绘图页面完全一致的ToolStrip风格（图标20x20、系统渲染、默认字体）。
+        /// 原Designer控件（下拉框/连接按钮/单选钮）通过ToolStripControlHost托管迁入，全部事件逻辑不变。
+        /// </summary>
+        private void CreateConnectionStrip()
+        {
+            // 隐藏旧的顶部区域容器（子控件被托管进ToolStrip）
+            groupBox1.Visible = false;
+            groupBox2.Visible = false;
+            groupBox3.Visible = false;
+            button3.Visible = false;
+            SendMsg.Visible = false;
+            button6.Visible = false;
+            button7.Visible = false;
+
+            // 连接按钮略加高，避免小按钮局促
+            button1.Size = new Size(64, 23);
+            button5.Size = new Size(64, 23);
+
+            _connectionStrip = new ToolStrip
+            {
+                GripStyle = ToolStripGripStyle.Hidden,
+                ImageScalingSize = new Size(20, 20),
+                RenderMode = ToolStripRenderMode.System,
+                Padding = new Padding(8, 6, 8, 6),
+                Dock = DockStyle.Top,
+                AutoSize = true
+            };
+
+            _connectionStrip.Items.Add(new ToolStripLabel("PCAN"));
+            _connectionStrip.Items.Add(new ToolStripControlHost(comboBox1));
+            _connectionStrip.Items.Add(new ToolStripControlHost(button1));
+            _connectionStrip.Items.Add(new ToolStripSeparator());
+            _connectionStrip.Items.Add(new ToolStripLabel("CANoe"));
+            _connectionStrip.Items.Add(new ToolStripControlHost(comboBox_CanoeChannel));
+            _connectionStrip.Items.Add(new ToolStripControlHost(button5));
+            _connectionStrip.Items.Add(new ToolStripSeparator());
+            _connectionStrip.Items.Add(new ToolStripControlHost(radioButtonCANFD));
+            _connectionStrip.Items.Add(new ToolStripControlHost(radioButtonCAN));
+
+            // 右侧功能按钮（右对齐，从右往左依次添加）
+            var itemConvert = new ToolStripButton("数据转换", ToolbarIcons.Get("folder"));
+            itemConvert.Alignment = ToolStripItemAlignment.Right;
+            itemConvert.Click += button7_Click;
+            var itemChart = new ToolStripButton("曲线绘制", ToolbarIcons.Get("chart"));
+            itemChart.Alignment = ToolStripItemAlignment.Right;
+            itemChart.Click += button6_Click;
+            var itemSend = new ToolStripButton("发送报文", ToolbarIcons.Get("swap"));
+            itemSend.Alignment = ToolStripItemAlignment.Right;
+            itemSend.Click += SendMsg_Click;
+            var itemSave = new ToolStripButton("存储数据", ToolbarIcons.Get("save"));
+            itemSave.Alignment = ToolStripItemAlignment.Right;
+            itemSave.Click += button3_Click;
+            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, itemSave });
+
+            this.Controls.Add(_connectionStrip);
+            _connectionStrip.BringToFront();
+        }
+
         /// <summary>创建报文显示工具栏（与绘图窗口一致的ToolStrip无边框风格）</summary>
         private void CreateMessageToolbar()
         {
@@ -1835,40 +1894,10 @@ namespace PCAN_Client
             this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             this.Text = "CANInsight  " + BaseParamter.softVersion;
 
-            // 浅色现代风：窗体字体 + 连接按钮无边框风格
-            UiTheme.StyleForm(this);
-            UiTheme.StyleButton(button1);
-            UiTheme.StyleButton(button5);
-
-            // 顶部功能按钮：与绘图窗口一致的ToolStrip无边框风格（锚定右上）
-            button3.Visible = false;
-            SendMsg.Visible = false;
-            button6.Visible = false;
-            button7.Visible = false;
-            _topActionsStrip = new ToolStrip
-            {
-                GripStyle = ToolStripGripStyle.Hidden,
-                ImageScalingSize = new Size(20, 20),
-                RenderMode = ToolStripRenderMode.System,
-                Padding = new Padding(4, 2, 4, 2),
-                Font = UiTheme.UiFont,
-                Dock = DockStyle.None,
-                AutoSize = true
-            };
-            var itemSave = new ToolStripButton("存储数据", ToolbarIcons.Get("save"));
-            itemSave.Click += button3_Click;
-            var itemSend = new ToolStripButton("发送报文", ToolbarIcons.Get("swap"));
-            itemSend.Click += SendMsg_Click;
-            var itemChart = new ToolStripButton("曲线绘制", ToolbarIcons.Get("chart"));
-            itemChart.Click += button6_Click;
-            var itemConvert = new ToolStripButton("数据转换", ToolbarIcons.Get("folder"));
-            itemConvert.Click += button7_Click;
-            _topActionsStrip.Items.AddRange(new ToolStripItem[] { itemSave, itemSend, itemChart, itemConvert });
-            this.Controls.Add(_topActionsStrip);
-            _topActionsStrip.Top = 8;
-            _topActionsStrip.Left = this.ClientSize.Width - _topActionsStrip.PreferredSize.Width - 12;
-            _topActionsStrip.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _topActionsStrip.BringToFront();
+            // 顶部区域：与绘图页面一致的ToolStrip工具栏（原控件托管迁入，逻辑不变）
+            CreateConnectionStrip();
+            // 防止窗口过窄挤压工具栏
+            this.MinimumSize = new Size(1024, 500);
 
             // 绘图主页面已由Program入口预建并显示(秒开优化),此处直接接管;
             // 未预建时(兼容路径)现场创建,保证绘图窗口关闭时退出程序
@@ -2659,9 +2688,9 @@ namespace PCAN_Client
         {
             if (_dgvMessages == null || _dgvMessages.IsDisposed) return;
 
-            // 计算DGV可用的宽度和高度（留出右边距和下边距）
+            // 计算DGV可用的宽度和高度（顶部工具栏高度动态获取，留出报文工具条位置）
             int dgvLeft = 9;
-            int dgvTop = 162; // 设计器中的初始Top
+            int dgvTop = (_connectionStrip != null && !_connectionStrip.IsDisposed ? _connectionStrip.Bottom : 128) + 34;
             int marginRight = 6;
             int marginBottom = 8;
 
