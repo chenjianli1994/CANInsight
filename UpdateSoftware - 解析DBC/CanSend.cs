@@ -68,6 +68,7 @@ namespace PCAN_Client
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
         /// <summary>正在手动连发中的发送列表行索引（防止重复点击）</summary>
         private readonly HashSet<int> _manualSendingRows = new HashSet<int>();
+
         public CanSend()
         {
             InitializeComponent();

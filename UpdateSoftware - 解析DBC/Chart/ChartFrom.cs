@@ -2894,11 +2894,20 @@ namespace PCAN_Client
         private void _btnShowMainForm_Click(object sender, EventArgs e)
         {
             if (Main.main == null) return;
+            // Main以最小化方式启动从未真正绘制过，首次恢复Normal时整个窗体走首次布局+绘制，
+            // 半成品窗口会闪现；先隐藏起来同步完成完整绘制，再一次性呈现完整窗口
+            bool firstShow = (Main.main.WindowState == FormWindowState.Minimized);
+            if (firstShow) Main.main.Opacity = 0;
             Main.main.Show();
             if (Main.main.WindowState == FormWindowState.Minimized)
                 Main.main.WindowState = FormWindowState.Normal;
             Main.main.BringToFront();
             Main.main.Activate();
+            if (firstShow)
+            {
+                Main.main.Refresh();   // 同步完成首次完整绘制（此时不可见）
+                Main.main.Opacity = 1; // 绘制完成后直接呈现完整窗口
+            }
         }
 
         private void _channelGrid_CellClick(object sender, DataGridViewCellEventArgs e)
