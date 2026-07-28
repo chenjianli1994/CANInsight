@@ -91,17 +91,21 @@ namespace PCAN_Client.CAN_Data
 
             return "[ 0x" + content + "] ";
         }
-        public void CANDataDeal(uint ID, ushort len, byte[] data, ulong us)
+        public void CANDataDeal(uint ID, ushort len, byte[] data, ulong us, byte channel = 1)
         {
             int index = 0;
             int index2 = 0;
             string rawValue = "";
-            if (BaseParamter.dbcHelper.dbcFile.messages.Count == 0)
+            // 按逻辑通道路由到对应通道的DBC解析实例（多通道同ID各自解析，互不串扰）；
+            // 该通道未配置DBC时回退全局聚合视图（保持单通道兼容行为）
+            DbcHelper routedHelper = BaseParamter.GetDbcHelperByChannel(channel) ?? this;
+            DbcFile routedDbc = routedHelper.dbcFile;
+            if (routedDbc.messages.Count == 0)
             {
                 return;
             }
             //_messageDictLock.EnterReadLock();
-            if (!dbcFile.messageDict.ContainsKey(ID))
+            if (!routedDbc.messageDict.ContainsKey(ID))
             {
                 return;
             }
@@ -109,7 +113,7 @@ namespace PCAN_Client.CAN_Data
             try
             {
                 // 直接通过字典查找 Message，无需遍历
-                if (dbcFile.messageDict.TryGetValue(ID, out Message message) &&
+                if (routedDbc.messageDict.TryGetValue(ID, out Message message) &&
                     len >= message.messageSize)
                 {
                     var parser = new CanSignalParser();
@@ -600,8 +604,8 @@ namespace PCAN_Client.CAN_Data
                 }
             }
         }
-        // 发送方法
-        public void SendCanMessage(uint messageId)
+        // 发送方法（channel为逻辑发送通道号，按通道配置路由到对应物理通道）
+        public void SendCanMessage(uint messageId, byte channel = 1)
         {
             var messageDef = dbcFile.messages.FirstOrDefault(m => m.messgeId == messageId);
             if (messageDef == null) return;
@@ -635,13 +639,13 @@ namespace PCAN_Client.CAN_Data
                     messageDef.sendBuf[7] = (byte)(checkSum ^ 0xFF);
                 }
             }
-            CAN_API.CAN_API.CanTransmit(messageId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf);
+            CAN_API.CAN_API.CanTransmit(messageId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf, channel);
             messageDef.sendCnt++;
         }
 
-        public void SendCanMessage(Message msg)
+        public void SendCanMessage(Message msg, byte channel = 1)
         {
-            CAN_API.CAN_API.CanTransmit(msg.messgeId, (ushort)msg.sendBuf.Length, msg.sendBuf);
+            CAN_API.CAN_API.CanTransmit(msg.messgeId, (ushort)msg.sendBuf.Length, msg.sendBuf, channel);
             msg.sendCnt++;
         }
     }

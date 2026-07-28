@@ -309,6 +309,17 @@ namespace PCAN_Client.DataLog
                 Console.WriteLine($"Excel初始化完成，准备写入数据...");
             }
 
+            /// <summary>已配置通道数>1时表头加通道前缀（多通道同ID/同名列可区分）</summary>
+            private static bool MultiChannelMode
+            {
+                get
+                {
+                    int configured = 0;
+                    foreach (var ch in BaseParamter.BusChannels) if (ch.IsConfigured) configured++;
+                    return configured > 1;
+                }
+            }
+
             private void SetHeaders()
             {
                 try
@@ -317,12 +328,14 @@ namespace PCAN_Client.DataLog
                     // 使用UTF-8编码，并写入BOM以支持Excel正确显示中文
                     _csvWriter = new StreamWriter(new FileStream(filePathTemp, FileMode.Append, FileAccess.Write, FileShare.Read), Encoding.UTF8);
                     _csvWriter.Write("采集时间,");
+                    bool multiCh = MultiChannelMode;
                     foreach (var msg in BaseParamter.dbcHelper.dbcFile.messages)
                     {
+                        string prefix = multiCh ? $"CH{BaseParamter.GetChannelOfMessage(msg)} " : "";
                         foreach (var signal in msg.signals)
                         {
                             // 在写入表头之前，先写入枚举关系作为注释
-                            _csvWriter.Write($"{msg.messageName} -> {signal.signalName}({signal.Comment}),");
+                            _csvWriter.Write($"{prefix}{msg.messageName} -> {signal.signalName}({signal.Comment}),");
                         }
                     }
                     _csvWriter.WriteLine();

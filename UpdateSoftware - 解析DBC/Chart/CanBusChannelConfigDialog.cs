@@ -23,6 +23,7 @@ namespace PCAN_Client
         // DataGridView列定义
         private const string ColName = "colName";
         private const string ColBlfChannel = "colBlfChannel";
+        private const string ColHwChannel = "colHwChannel";
         private const string ColDbcPath = "colDbcPath";
         private const string ColBrowse = "colBrowse";
 
@@ -47,7 +48,7 @@ namespace PCAN_Client
         private void InitializeComponents()
         {
             this.Text = "CAN通道配置";
-            this.Size = new Size(700, 500);
+            this.Size = new Size(790, 500);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -56,9 +57,9 @@ namespace PCAN_Client
             // 标题标签
             _lblTitle = new Label
             {
-                Text = "配置CAN解析通道（每路CAN总线对应一个通道，可配置独立的DBC文件）",
+                Text = "配置CAN解析通道（每路CAN总线对应一个通道，可配置独立的DBC文件；硬件通道=PCAN USBBUS序号/CANoe通道号，与BLF通道号一致时留0）",
                 Location = new Point(12, 12),
-                Size = new Size(660, 23),
+                Size = new Size(750, 23),
                 Font = new Font("Microsoft YaHei", 9F)
             };
             this.Controls.Add(_lblTitle);
@@ -67,7 +68,7 @@ namespace PCAN_Client
             _dgvChannels = new DataGridView
             {
                 Location = new Point(12, 40),
-                Size = new Size(660, 360),
+                Size = new Size(750, 360),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
@@ -82,7 +83,7 @@ namespace PCAN_Client
             {
                 Name = ColName,
                 HeaderText = "通道名称",
-                FillWeight = 25,
+                FillWeight = 20,
                 MaxInputLength = 20
             };
             _dgvChannels.Columns.Add(colName);
@@ -92,17 +93,27 @@ namespace PCAN_Client
             {
                 Name = ColBlfChannel,
                 HeaderText = "BLF通道号",
-                FillWeight = 15,
+                FillWeight = 12,
                 MaxInputLength = 3
             };
             _dgvChannels.Columns.Add(colBlfChannel);
+
+            // 列：硬件通道号（实时收发映射：PCAN USBBUS序号/CANoe通道号，0=跟随BLF通道号）
+            var colHwChannel = new DataGridViewTextBoxColumn
+            {
+                Name = ColHwChannel,
+                HeaderText = "硬件通道",
+                FillWeight = 12,
+                MaxInputLength = 3
+            };
+            _dgvChannels.Columns.Add(colHwChannel);
 
             // 列：DBC文件路径
             var colDbcPath = new DataGridViewTextBoxColumn
             {
                 Name = ColDbcPath,
                 HeaderText = "DBC文件路径",
-                FillWeight = 50
+                FillWeight = 46
             };
             _dgvChannels.Columns.Add(colDbcPath);
 
@@ -125,7 +136,7 @@ namespace PCAN_Client
             var btnPanel = new Panel
             {
                 Location = new Point(12, 410),
-                Size = new Size(660, 40)
+                Size = new Size(750, 40)
             };
             this.Controls.Add(btnPanel);
 
@@ -150,7 +161,7 @@ namespace PCAN_Client
             _btnOk = new Button
             {
                 Text = "确定",
-                Location = new Point(470, 5),
+                Location = new Point(560, 5),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.None
             };
@@ -160,7 +171,7 @@ namespace PCAN_Client
             _btnCancel = new Button
             {
                 Text = "取消",
-                Location = new Point(560, 5),
+                Location = new Point(650, 5),
                 Size = new Size(80, 30),
                 DialogResult = DialogResult.Cancel
             };
@@ -177,6 +188,7 @@ namespace PCAN_Client
                 int rowIndex = _dgvChannels.Rows.Add();
                 _dgvChannels.Rows[rowIndex].Cells[ColName].Value = ch.Name;
                 _dgvChannels.Rows[rowIndex].Cells[ColBlfChannel].Value = ch.BlfChannelId.ToString();
+                _dgvChannels.Rows[rowIndex].Cells[ColHwChannel].Value = ch.HwChannel.ToString();
                 _dgvChannels.Rows[rowIndex].Cells[ColDbcPath].Value = ch.DbcFilePath;
             }
         }
@@ -186,6 +198,7 @@ namespace PCAN_Client
             int rowIndex = _dgvChannels.Rows.Add();
             _dgvChannels.Rows[rowIndex].Cells[ColName].Value = $"CAN{_dgvChannels.Rows.Count}";
             _dgvChannels.Rows[rowIndex].Cells[ColBlfChannel].Value = "0";
+            _dgvChannels.Rows[rowIndex].Cells[ColHwChannel].Value = "0"; // 0=跟随BLF通道号
             _dgvChannels.Rows[rowIndex].Cells[ColDbcPath].Value = "";
             _dgvChannels.Rows[rowIndex].Cells[ColBrowse].Value = "浏览...";
         }
@@ -225,13 +238,23 @@ namespace PCAN_Client
 
         private void DgvChannels_CellValidating(object sender, DataGridViewCellValidatingEventArgs e)
         {
-            // 验证BLF通道号必须是数字
+            // 验证BLF通道号/硬件通道号必须是数字
             if (e.ColumnIndex == _dgvChannels.Columns[ColBlfChannel].Index)
             {
                 string value = e.FormattedValue?.ToString() ?? "";
                 if (!byte.TryParse(value, out byte result))
                 {
                     MessageBox.Show("BLF通道号必须是0-255之间的数字", "验证错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    e.Cancel = true;
+                }
+            }
+            else if (e.ColumnIndex == _dgvChannels.Columns[ColHwChannel].Index)
+            {
+                string value = e.FormattedValue?.ToString() ?? "";
+                if (!byte.TryParse(value, out byte result))
+                {
+                    MessageBox.Show("硬件通道必须是0-255之间的数字（0=跟随BLF通道号）", "验证错误",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     e.Cancel = true;
                 }
@@ -248,6 +271,7 @@ namespace PCAN_Client
                 var row = _dgvChannels.Rows[i];
                 string name = row.Cells[ColName].Value?.ToString() ?? "";
                 string blfChannelStr = row.Cells[ColBlfChannel].Value?.ToString() ?? "";
+                string hwChannelStr = row.Cells[ColHwChannel].Value?.ToString() ?? "";
                 string dbcPath = row.Cells[ColDbcPath].Value?.ToString() ?? "";
 
                 if (string.IsNullOrWhiteSpace(name))
@@ -264,7 +288,15 @@ namespace PCAN_Client
                     return;
                 }
 
+                if (!byte.TryParse(hwChannelStr, out byte hwChannel))
+                {
+                    MessageBox.Show($"第{i + 1}行：硬件通道格式错误（0=跟随BLF通道号）", "验证错误",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
                 var channel = new CanBusChannel(name, blfChannelId, dbcPath);
+                channel.HwChannel = hwChannel;
 
                 // 如果配置了DBC路径，尝试加载
                 if (!string.IsNullOrWhiteSpace(dbcPath))

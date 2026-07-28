@@ -92,7 +92,8 @@ namespace PCAN_Client
 
         // === VirtualMode 数据源 ===
         internal List<CanMsgDisplayInfo> _displayList = new List<CanMsgDisplayInfo>();
-        internal Dictionary<uint, int> _msgIndexMap = new Dictionary<uint, int>();
+        // key为复合键 MsgKey(MsgId,Channel)：多通道同ID分行显示
+        internal Dictionary<long, int> _msgIndexMap = new Dictionary<long, int>();
         internal DataGridView _dgvMessages;
         internal System.Windows.Forms.TextBox _txtIdFilter;
         private HashSet<uint> _filterIds = new HashSet<uint>();
@@ -113,7 +114,7 @@ namespace PCAN_Client
             public int FlatIndex;         // 在 _flatRows 中的索引
         }
         internal List<FlatRowInfo> _flatRows = new List<FlatRowInfo>();
-        internal HashSet<uint> _expandedIds = new HashSet<uint>();   // Fixed模式：按MsgId展开
+        internal HashSet<long> _expandedIds = new HashSet<long>();   // Fixed模式：按复合键MsgKey(MsgId,Channel)展开
         internal HashSet<int> _expandedScrollFrames = new HashSet<int>(); // Scroll模式：按帧索引展开
 
         // === Scroll模式：每帧记录列表 ===
@@ -122,8 +123,8 @@ namespace PCAN_Client
         private const int SCROLL_TRIM_COUNT = 1000000;  // 每次裁剪量
         // Scroll自动跟随模式（未暂停）：只显示最新SCROLL_LIVE_FRAMES帧；暂停后显示全部帧
         private const int SCROLL_LIVE_FRAMES = 20;
-        // MsgId → (Description, Node) 缓存，避免每帧查DBC
-        private readonly Dictionary<uint, (string desc, string node)> _msgMetaCache = new Dictionary<uint, (string, string)>();
+        // 复合键MsgKey(MsgId,Channel) → (Description, Node) 缓存，避免每帧查DBC
+        private readonly Dictionary<long, (string desc, string node)> _msgMetaCache = new Dictionary<long, (string, string)>();
 
         // === 结构变化标志：为true时下次刷新需重建_flatRows ===
         private bool _flatRowsDirty = true;
@@ -201,6 +202,31 @@ namespace PCAN_Client
             return false;
         }
 
+        /// <summary>报文列表复合键：逻辑通道号(高32位) + CAN ID(低32位)，多通道同ID分行显示</summary>
+        internal static long MsgKey(uint msgId, byte channel) => ((long)channel << 32) | msgId;
+
+        /// <summary>
+        /// 按逻辑通道查找报文定义：优先该通道自己的DBC（多通道同ID各自定义），
+        /// 通道未配置DBC或未定义该报文时回退全局聚合视图
+        /// </summary>
+        internal static bool TryFindDbcMessage(uint canId, byte channel, out CAN_Data.Message dbcMsg)
+        {
+            dbcMsg = null;
+            var helper = BaseParamter.GetDbcHelperByChannel(channel) ?? BaseParamter.dbcHelper;
+            if (helper?.dbcFile?.messageDict != null &&
+                helper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+            {
+                return true;
+            }
+            if (!ReferenceEquals(helper, BaseParamter.dbcHelper) &&
+                BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
+                BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+            {
+                return true;
+            }
+            return false;
+        }
+
         /// <summary>
         /// 检查报文ID是否在通道DBC聚合视图中有定义
         /// </summary>
@@ -212,26 +238,29 @@ namespace PCAN_Client
 
         /// <summary>记录CAN报文（CAN接收线程调用，极轻量）</summary>
         /// <param name="triggerRefresh">是否触发界面刷新；批量导入时传false，最后手动刷新</param>
-        internal void RecordCanMessage(TPCANMsg msg, ulong timestampUs, bool isTx, bool triggerRefresh = true)
+        /// <param name="channel">逻辑通道号（多通道同ID分行显示，各自独立统计）</param>
+        internal void RecordCanMessage(TPCANMsg msg, ulong timestampUs, bool isTx, bool triggerRefresh = true, byte channel = 1)
         {
             int idx;
             CanMsgDisplayInfo info;
+            long msgKey = MsgKey(msg.ID, channel);
             lock (_displayList)
             {
-                if (!_msgIndexMap.TryGetValue(msg.ID, out idx))
+                if (!_msgIndexMap.TryGetValue(msgKey, out idx))
                 {
-                    info = new CanMsgDisplayInfo { MsgId = msg.ID, LastTimestampUs = timestampUs };
-                    if (TryFindDbcMessage(msg.ID, out var dbcMsg))
+                    info = new CanMsgDisplayInfo { MsgId = msg.ID, Channel = channel, LastTimestampUs = timestampUs };
+                    if (TryFindDbcMessage(msg.ID, channel, out var dbcMsg))
                     {
                         info.Description = dbcMsg.messageName;
                         info.Node = dbcMsg.transmitter;
                         info.CycleTimeMs = (int)dbcMsg.cycleTime;
                     }
-                    // 按MsgId升序插入
+                    // 按(MsgId,Channel)升序插入：同ID多通道相邻
                     int insertIdx = _displayList.Count;
                     for (int i = 0; i < _displayList.Count; i++)
                     {
-                        if (_displayList[i].MsgId > msg.ID)
+                        if (_displayList[i].MsgId > msg.ID ||
+                            (_displayList[i].MsgId == msg.ID && _displayList[i].Channel > channel))
                         {
                             insertIdx = i;
                             break;
@@ -240,7 +269,7 @@ namespace PCAN_Client
                     _displayList.Insert(insertIdx, info);
                     // 更新插入点之后所有元素的索引映射
                     for (int i = insertIdx; i < _displayList.Count; i++)
-                        _msgIndexMap[_displayList[i].MsgId] = i;
+                        _msgIndexMap[MsgKey(_displayList[i].MsgId, _displayList[i].Channel)] = i;
                     _flatRowsDirty = true;
                 }
                 else
@@ -314,7 +343,7 @@ namespace PCAN_Client
 
                     // 首次数据变化时分配 SigChanged/PrevSignalValues
                     if (info.SigChanged == null &&
-                        TryFindDbcMessage(info.MsgId, out var initMsg))
+                        TryFindDbcMessage(info.MsgId, channel, out var initMsg))
                     {
                         int cnt = initMsg.signals.Count;
                         info.SigChanged = new int[cnt];
@@ -323,7 +352,7 @@ namespace PCAN_Client
 
                     // 有DBC时：通过比较信号物理解码值精确判断变化
                     if (info.SigChanged != null &&
-                        TryFindDbcMessage(info.MsgId, out var sigChangeMsg))
+                        TryFindDbcMessage(info.MsgId, channel, out var sigChangeMsg))
                     {
                         for (int s = 0; s < info.SigChanged.Length && s < sigChangeMsg.signals.Count; s++)
                         {
@@ -383,10 +412,10 @@ namespace PCAN_Client
             if (_scrollMode)
             {
                 // 预先查DBC缓存Description/Node，供CellValueNeeded绘制用
-                if (!_msgMetaCache.TryGetValue(msg.ID, out _))
+                if (!_msgMetaCache.TryGetValue(msgKey, out _))
                 {
                     string desc, node;
-                    if (TryFindDbcMessage(msg.ID, out var dbcMsg2))
+                    if (TryFindDbcMessage(msg.ID, channel, out var dbcMsg2))
                     {
                         desc = dbcMsg2.messageName;
                         node = dbcMsg2.transmitter;
@@ -396,7 +425,7 @@ namespace PCAN_Client
                         desc = "";
                         node = "";
                     }
-                    _msgMetaCache[msg.ID] = (desc, node);
+                    _msgMetaCache[msgKey] = (desc, node);
                 }
                 byte[] dataCopy = new byte[msg.LEN];
                 Array.Copy(msg.DATA, dataCopy, msg.LEN);
@@ -409,7 +438,7 @@ namespace PCAN_Client
                         Len = msg.LEN,
                         Data = dataCopy,
                         IsTx = isTx,
-                        Channel = info.Channel
+                        Channel = channel
                     });
                     // 控制内存：增量裁剪
                     if (_scrollFrames.Count > MAX_SCROLL_FRAMES)
@@ -494,28 +523,31 @@ namespace PCAN_Client
 
             lock (_displayList)
             {
-                // 确保所有MsgId在_displayList中存在
+                // 确保所有(通道,MsgId)在_displayList中存在
                 foreach (var rawMsg in messages)
                 {
-                    if (!_msgIndexMap.ContainsKey(rawMsg.CanId))
+                    byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1; // ASC/BIN无通道信息时归入通道1
+                    long key = MsgKey(rawMsg.CanId, ch);
+                    if (!_msgIndexMap.ContainsKey(key))
                     {
-                        var info = new CanMsgDisplayInfo { MsgId = rawMsg.CanId };
-                        if (TryFindDbcMessage(rawMsg.CanId, out var dbcMsg))
+                        var info = new CanMsgDisplayInfo { MsgId = rawMsg.CanId, Channel = ch };
+                        if (TryFindDbcMessage(rawMsg.CanId, ch, out var dbcMsg))
                         {
                             info.Description = dbcMsg.messageName;
                             info.Node = dbcMsg.transmitter;
                             info.CycleTimeMs = (int)dbcMsg.cycleTime;
                         }
-                        // 按MsgId升序插入
+                        // 按(MsgId,Channel)升序插入
                         int insertIdx = _displayList.Count;
                         for (int i = 0; i < _displayList.Count; i++)
                         {
-                            if (_displayList[i].MsgId > rawMsg.CanId)
+                            if (_displayList[i].MsgId > rawMsg.CanId ||
+                                (_displayList[i].MsgId == rawMsg.CanId && _displayList[i].Channel > ch))
                             { insertIdx = i; break; }
                         }
                         _displayList.Insert(insertIdx, info);
                         for (int i = insertIdx; i < _displayList.Count; i++)
-                            _msgIndexMap[_displayList[i].MsgId] = i;
+                            _msgIndexMap[MsgKey(_displayList[i].MsgId, _displayList[i].Channel)] = i;
                     }
                 }
             }
@@ -527,11 +559,13 @@ namespace PCAN_Client
                 {
                     foreach (var rawMsg in messages)
                     {
+                        byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                        long key = MsgKey(rawMsg.CanId, ch);
                         // 预缓存Description/Node
-                        if (!_msgMetaCache.TryGetValue(rawMsg.CanId, out _))
+                        if (!_msgMetaCache.TryGetValue(key, out _))
                         {
                             string desc, node;
-                            if (TryFindDbcMessage(rawMsg.CanId, out var dbcMsg2))
+                            if (TryFindDbcMessage(rawMsg.CanId, ch, out var dbcMsg2))
                             {
                                 desc = dbcMsg2.messageName;
                                 node = dbcMsg2.transmitter;
@@ -541,7 +575,7 @@ namespace PCAN_Client
                                 desc = "";
                                 node = "";
                             }
-                            _msgMetaCache[rawMsg.CanId] = (desc, node);
+                            _msgMetaCache[key] = (desc, node);
                         }
                         ulong tsUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
                         byte[] dataCopy = new byte[rawMsg.Data.Length];
@@ -564,16 +598,17 @@ namespace PCAN_Client
                 }
             }
 
-            // 计算各 ID 的统计信息（用于 Fixed 模式显示）
+            // 计算各 (通道,ID) 的统计信息（用于 Fixed 模式显示）
             lock (_displayList)
             {
-                var lastTsPerId = new Dictionary<uint, ulong>();
+                var lastTsPerId = new Dictionary<long, ulong>();
                 foreach (var rawMsg in messages)
                 {
-                    if (!_msgIndexMap.TryGetValue(rawMsg.CanId, out int idx)) continue;
+                    byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                    long key = MsgKey(rawMsg.CanId, ch);
+                    if (!_msgIndexMap.TryGetValue(key, out int idx)) continue;
                     var info = _displayList[idx];
                     info.Count++;
-                    if (rawMsg.Channel > 0) info.Channel = rawMsg.Channel;
                     ulong tsUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
                     info.Timestamp = rawMsg.TimeStampSeconds;
 
@@ -599,7 +634,7 @@ namespace PCAN_Client
                     }
 
                     // 间隔统计
-                    if (lastTsPerId.TryGetValue(rawMsg.CanId, out ulong lastTs) && lastTs > 0)
+                    if (lastTsPerId.TryGetValue(key, out ulong lastTs) && lastTs > 0)
                     {
                         long gapUs = (long)(tsUs - lastTs);
                         if (gapUs > 0)
@@ -612,7 +647,7 @@ namespace PCAN_Client
                             }
                         }
                     }
-                    lastTsPerId[rawMsg.CanId] = tsUs;
+                    lastTsPerId[key] = tsUs;
                     info.LastTimestampUs = tsUs; // 同步到_displayList，供后续 RecordCanMessage 使用
                 }
             }
@@ -630,13 +665,15 @@ namespace PCAN_Client
 
             ClearForPlayback();
 
-            // 预缓存所有MsgId的描述/节点信息
+            // 预缓存所有(通道,MsgId)的描述/节点信息
             foreach (var rawMsg in frames)
             {
-                if (!_msgMetaCache.ContainsKey(rawMsg.CanId))
+                byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                long key = MsgKey(rawMsg.CanId, ch);
+                if (!_msgMetaCache.ContainsKey(key))
                 {
                     string desc, node;
-                    if (BaseParamter.dbcHelper?.dbcFile?.messageDict.TryGetValue(rawMsg.CanId, out var dbcMsg) == true)
+                    if (TryFindDbcMessage(rawMsg.CanId, ch, out var dbcMsg))
                     {
                         desc = dbcMsg.messageName;
                         node = dbcMsg.transmitter;
@@ -646,7 +683,7 @@ namespace PCAN_Client
                         desc = "";
                         node = "";
                     }
-                    _msgMetaCache[rawMsg.CanId] = (desc, node);
+                    _msgMetaCache[key] = (desc, node);
                 }
             }
 
@@ -760,7 +797,7 @@ namespace PCAN_Client
                                 _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                                 if (_expandedScrollFrames.Contains(i))
                                 {
-                                    if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
+                                    if (TryFindDbcMessage(frame.MsgId, frame.Channel, out var dbcMsg))
                                     {
                                         for (int sigIdx = 0; sigIdx < dbcMsg.signals.Count; sigIdx++)
                                          _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx, FlatIndex = _flatRows.Count });
@@ -795,7 +832,7 @@ namespace PCAN_Client
                                 _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                                 if (_expandedScrollFrames.Contains(i))
                                 {
-                                    if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
+                                    if (TryFindDbcMessage(frame.MsgId, frame.Channel, out var dbcMsg))
                                     {
                                         for (int s = 0; s < dbcMsg.signals.Count; s++)
                                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = s, FlatIndex = _flatRows.Count });
@@ -824,9 +861,9 @@ namespace PCAN_Client
                         var fi = new FlatRowInfo { Type = FlatRowType.Message, MsgIndex = i, FlatIndex = _flatRows.Count };
                         _flatRows.Add(fi);
 
-                        if (_expandedIds.Contains(msg.MsgId))
+                        if (_expandedIds.Contains(MsgKey(msg.MsgId, msg.Channel)))
                         {
-                            if (TryFindDbcMessage(msg.MsgId, out var dbcMsg))
+                            if (TryFindDbcMessage(msg.MsgId, msg.Channel, out var dbcMsg))
                             {
                                 for (int s = 0; s < dbcMsg.signals.Count; s++)
                                     _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, MsgIndex = i, SigIndex = s, FlatIndex = _flatRows.Count });
@@ -933,7 +970,7 @@ namespace PCAN_Client
                         case "colDesc":
                             {
                                 // 从缓存查Description
-                                if (_msgMetaCache.TryGetValue(frame.MsgId, out var meta))
+                                if (_msgMetaCache.TryGetValue(MsgKey(frame.MsgId, frame.Channel), out var meta))
                                     e.Value = meta.desc;
                                 else
                                     e.Value = "";
@@ -1011,29 +1048,32 @@ namespace PCAN_Client
             }
             else // Signal
              {
-                 // 获取信号所属MsgId和Node
+                 // 获取信号所属MsgId/通道/Node
                  uint sigMsgId;
+                 byte sigChannel;
                  string sigNode;
                  if (flat.ScrollFrameIndex >= 0)
                  {
-                     // Scroll模式信号行：从帧记录取MsgId
+                     // Scroll模式信号行：从帧记录取MsgId与通道
                      lock (_scrollFrames)
                      {
                          if (flat.ScrollFrameIndex >= _scrollFrames.Count) return;
                          var frame = _scrollFrames[flat.ScrollFrameIndex];
                          sigMsgId = frame.MsgId;
+                         sigChannel = frame.Channel;
                      }
                      // Node从缓存查
-                     sigNode = _msgMetaCache.TryGetValue(sigMsgId, out var meta) ? meta.node : "";
+                     sigNode = _msgMetaCache.TryGetValue(MsgKey(sigMsgId, sigChannel), out var meta) ? meta.node : "";
                  }
                  else
                  {
                      if (flat.MsgIndex < 0 || flat.MsgIndex >= _displayList.Count) return;
                      sigMsgId = _displayList[flat.MsgIndex].MsgId;
+                     sigChannel = _displayList[flat.MsgIndex].Channel;
                      sigNode = _displayList[flat.MsgIndex].Node;
                  }
 
-                 if (TryFindDbcMessage(sigMsgId, out var dbcMsg))
+                 if (TryFindDbcMessage(sigMsgId, sigChannel, out var dbcMsg))
                  {
                      if (flat.SigIndex >= 0 && flat.SigIndex < dbcMsg.signals.Count)
                      {
@@ -1297,25 +1337,28 @@ namespace PCAN_Client
                 var colFilter = _dgvMessages.Columns["colFilter"];
                 if (colFilter != null && e.ColumnIndex == colFilter.Index && flat.Type == FlatRowType.Message)
                 {
-                    // 获取 MsgId
+                    // 获取 MsgId 与通道
                     uint fMsgId;
+                    byte fChannel;
                     if (flat.ScrollFrameIndex >= 0)
                     {
                         lock (_scrollFrames)
                         {
                             if (_scrollFrames == null || flat.ScrollFrameIndex >= _scrollFrames.Count) return;
                             fMsgId = _scrollFrames[flat.ScrollFrameIndex].MsgId;
+                            fChannel = _scrollFrames[flat.ScrollFrameIndex].Channel;
                         }
                     }
                     else
                     {
                         if (flat.MsgIndex < 0 || flat.MsgIndex >= _displayList.Count) return;
                         fMsgId = _displayList[flat.MsgIndex].MsgId;
+                        fChannel = _displayList[flat.MsgIndex].Channel;
                     }
 
                     // 检查是否有 DBC 信号
                     bool hasSignals = false;
-                    if (TryFindDbcMessage(fMsgId, out var dbcChk))
+                    if (TryFindDbcMessage(fMsgId, fChannel, out var dbcChk))
                         hasSignals = dbcChk.signals.Count > 0;
 
                     if (!hasSignals) return; // 无信号不绘制
@@ -1330,7 +1373,7 @@ namespace PCAN_Client
 
                     bool isExpanded = flat.ScrollFrameIndex >= 0
                         ? _expandedScrollFrames.Contains(flat.ScrollFrameIndex)
-                        : _expandedIds.Contains(fMsgId);
+                        : _expandedIds.Contains(MsgKey(fMsgId, fChannel));
                     string btnText = isExpanded ? "−" : "+";
                     using (Font btnFont = new Font("Arial", 10f, FontStyle.Bold))
                     using (Brush btnBrush = new SolidBrush(Color.FromArgb(60, 60, 60)))
@@ -1370,8 +1413,9 @@ namespace PCAN_Client
             var flat = _flatRows[e.RowIndex];
             if (flat.Type != FlatRowType.Message) return;
 
-            // 获取 MsgId
+            // 获取 MsgId 与通道
             uint msgId;
+            byte channel;
             if (flat.ScrollFrameIndex >= 0)
             {
                 // Scroll模式：从帧记录中取MsgId
@@ -1379,17 +1423,19 @@ namespace PCAN_Client
                 {
                     if (flat.ScrollFrameIndex >= _scrollFrames.Count) return;
                     msgId = _scrollFrames[flat.ScrollFrameIndex].MsgId;
+                    channel = _scrollFrames[flat.ScrollFrameIndex].Channel;
                 }
             }
             else
             {
                 if (flat.MsgIndex < 0 || flat.MsgIndex >= _displayList.Count) return;
                 msgId = _displayList[flat.MsgIndex].MsgId;
+                channel = _displayList[flat.MsgIndex].Channel;
             }
 
             // 检查是否有 DBC 信号
             bool hasSignals = false;
-            if (TryFindDbcMessage(msgId, out var dbcChk))
+            if (TryFindDbcMessage(msgId, channel, out var dbcChk))
                 hasSignals = dbcChk.signals.Count > 0;
             if (!hasSignals) return;
 
@@ -1405,11 +1451,12 @@ namespace PCAN_Client
             }
             else
             {
-                wasExpanded = _expandedIds.Contains(msgId);
+                long key = MsgKey(msgId, channel);
+                wasExpanded = _expandedIds.Contains(key);
                 if (wasExpanded)
-                    _expandedIds.Remove(msgId);
+                    _expandedIds.Remove(key);
                 else
-                    _expandedIds.Add(msgId);
+                    _expandedIds.Add(key);
             }
 
             if (flat.ScrollFrameIndex >= 0)
@@ -1502,8 +1549,12 @@ namespace PCAN_Client
                 // 恢复默认排序（Fixed模式按MsgId，Scroll模式按时间）
                 if (!_scrollMode)
                 {
-                    // Fixed模式：按MsgId重新排序
-                    _displayList.Sort((a, b) => a.MsgId.CompareTo(b.MsgId));
+                    // Fixed模式：按(MsgId,Channel)重新排序（同ID多通道相邻）
+                    _displayList.Sort((a, b) =>
+                    {
+                        int c = a.MsgId.CompareTo(b.MsgId);
+                        return c != 0 ? c : a.Channel.CompareTo(b.Channel);
+                    });
                     RebuildMsgIndexMap();
                 }
                 else
@@ -1542,13 +1593,13 @@ namespace PCAN_Client
             _dgvMessages.Invalidate(); // 强制重绘以更新排序图标
         }
 
-        /// <summary>重建MsgId到索引的映射</summary>
+        /// <summary>重建(通道,MsgId)复合键到索引的映射</summary>
         private void RebuildMsgIndexMap()
         {
             _msgIndexMap.Clear();
             for (int i = 0; i < _displayList.Count; i++)
             {
-                _msgIndexMap[_displayList[i].MsgId] = i;
+                _msgIndexMap[MsgKey(_displayList[i].MsgId, _displayList[i].Channel)] = i;
             }
         }
 
@@ -1700,7 +1751,7 @@ namespace PCAN_Client
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
                             {
-                                if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
+                                if (TryFindDbcMessage(frame.MsgId, frame.Channel, out var dbcMsg))
                                 {
                                     for (int sigIdx2 = 0; sigIdx2 < dbcMsg.signals.Count; sigIdx2++)
                                         _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx2, FlatIndex = _flatRows.Count });
@@ -1732,7 +1783,7 @@ namespace PCAN_Client
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
                             {
-                                if (TryFindDbcMessage(frame.MsgId, out var dbcMsg))
+                                if (TryFindDbcMessage(frame.MsgId, frame.Channel, out var dbcMsg))
                                 {
                                     for (int sigIdx3 = 0; sigIdx3 < dbcMsg.signals.Count; sigIdx3++)
                                         _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Signal, ScrollFrameIndex = i, SigIndex = sigIdx3, FlatIndex = _flatRows.Count });

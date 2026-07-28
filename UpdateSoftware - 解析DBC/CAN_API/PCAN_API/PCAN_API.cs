@@ -85,6 +85,14 @@ namespace PCAN_Client.PCAN_API
             PCAN_DeviceChannel = PCAN_DeviceChannelBuf[channel];
         }
 
+        /// <summary>当前连接的物理通道（PCAN_USBBUSn）对应的逻辑通道号（经通道配置的硬件通道映射）</summary>
+        private byte GetCurrentLogicChannel()
+        {
+            int idx = Array.IndexOf(PCAN_DeviceChannelBuf, PCAN_DeviceChannel);
+            byte hw = (byte)(idx >= 0 ? idx + 1 : 1);
+            return BaseParamter.GetBlfChannelByHw(hw);
+        }
+
         public void PCAN_ChannelUninitialize()
         {
             multiMessageCANScheduler.Stop();
@@ -258,7 +266,8 @@ namespace PCAN_Client.PCAN_API
             // 数据长度超过64字节，默认使用最大DLC值
             return 15;
         }
-        internal TPCANStatus PCAN_SendData(TPCANMsg tPCANMsg)
+        /// <summary>发送数据。channel为逻辑通道号（二期多句柄后按通道路由；当前单连接模型下仍走已连接句柄）</summary>
+        internal TPCANStatus PCAN_SendData(TPCANMsg tPCANMsg, byte channel = 1)
         {
             if (CanFDFlag)
             {
@@ -302,7 +311,7 @@ namespace PCAN_Client.PCAN_API
                         time_us = (long)TimestampBuffer;
                         lock (CAN_API.CAN_API._receiveCanDataLock)
                         {
-                            CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE,(ulong)time_us);
+                            CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE,(ulong)time_us, GetCurrentLogicChannel());
                         }
                     }
                     else
@@ -310,7 +319,7 @@ namespace PCAN_Client.PCAN_API
                         time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
                         lock (CAN_API.CAN_API._receiveCanDataLock)
                         {
-                            CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA,msg.MSGTYPE, (ulong)time_us);
+                            CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA,msg.MSGTYPE, (ulong)time_us, GetCurrentLogicChannel());
                         }
                     }
                 }
@@ -381,7 +390,7 @@ namespace PCAN_Client.PCAN_API
                                 time_us = (long)TimestampBuffer;
                                 lock (CAN_API.CAN_API._receiveCanDataLock)
                                 {
-                                    CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us);
+                                    CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us, Main.main.pCAN_API.GetCurrentLogicChannel());
                                 }
                             }
                             else
@@ -389,7 +398,7 @@ namespace PCAN_Client.PCAN_API
                                 time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
                                 lock (CAN_API.CAN_API._receiveCanDataLock)
                                 {
-                                    CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE,(ulong)time_us);
+                                    CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE,(ulong)time_us, Main.main.pCAN_API.GetCurrentLogicChannel());
                                 }
                             }
                         }

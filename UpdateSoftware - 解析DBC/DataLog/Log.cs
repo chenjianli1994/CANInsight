@@ -142,7 +142,8 @@ namespace PCAN_Client.DataLog
                     lastTimeUs = (uint)msg.Timestamp;
                     var binWriter = new List<byte>();
                     binWriter.Add((byte)(copyLen + 6));
-                    binWriter.Add((byte)(msg.CanId >> 8));
+                    // ID高字节的高5位携带通道号（ID≤0x7FF只用低3位）：旧文件无通道信息时读出0→归一化为通道1，向后兼容
+                    binWriter.Add((byte)((msg.Channel << 3) | ((msg.CanId >> 8) & 0x07)));
                     binWriter.Add((byte)(msg.CanId & 0xFF));
                     binWriter.Add((byte)(delta >> 16));
                     binWriter.Add((byte)(delta >> 8));

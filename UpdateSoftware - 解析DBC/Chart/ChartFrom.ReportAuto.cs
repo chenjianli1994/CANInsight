@@ -389,6 +389,7 @@ namespace PCAN_Client
                     // 原路径不存在则尝试exe目录/工况模板目录下的同名文件;都找不到置空(通道标记未配置,不残留他机路径)
                     string dbcPath = ResolvePortableDbcPath(bcConfig.DbcFilePath, type.Group);
                     var bc = new CanBusChannel(bcConfig.Name, bcConfig.BlfChannelId, dbcPath);
+                    bc.HwChannel = bcConfig.HwChannel; // 旧工况JSON无此字段时为0，自动跟随逻辑通道号
                     // 尝试加载DBC文件
                     if (!string.IsNullOrEmpty(dbcPath))
                     {
@@ -766,7 +767,7 @@ namespace PCAN_Client
                 type.BusChannels = new List<BusChannelConfig>();
                 foreach (var bc in _busChannels)
                 {
-                    type.BusChannels.Add(new BusChannelConfig(bc.Name, bc.BlfChannelId, bc.DbcFilePath));
+                    type.BusChannels.Add(new BusChannelConfig(bc.Name, bc.BlfChannelId, bc.DbcFilePath) { HwChannel = bc.HwChannel });
                 }
             }
             else

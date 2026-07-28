@@ -16,13 +16,15 @@ namespace PCAN_Client.DataLog
             public readonly uint CanId;
             public readonly ushort DataLen;
             public readonly byte[] Data;
+            public readonly byte Channel;
 
-            public CanFrame(ulong timeUs, uint canId, ushort dataLen, byte[] data)
+            public CanFrame(ulong timeUs, uint canId, ushort dataLen, byte[] data, byte channel = 1)
             {
                 TimeUs = timeUs;
                 CanId = canId;
                 DataLen = dataLen;
                 Data = data;
+                Channel = channel;
             }
         }
 
@@ -75,7 +77,10 @@ namespace PCAN_Client.DataLog
 
                     byte canIdHigh = reader.ReadByte();
                     byte canIdLow = reader.ReadByte();
-                    uint canId = (uint)((canIdHigh << 8) | canIdLow);
+                    // ID高字节的高5位为通道号（旧文件无通道信息读出0→归一化为1），低3位+低字节为CAN ID
+                    uint canId = (uint)(((canIdHigh & 0x07) << 8) | canIdLow);
+                    byte channel = (byte)(canIdHigh >> 3);
+                    if (channel == 0) channel = 1;
 
                     byte t0 = reader.ReadByte();
                     byte t1 = reader.ReadByte();
@@ -84,7 +89,7 @@ namespace PCAN_Client.DataLog
                     nowTimeUs += deltaUs;
 
                     byte[] data = reader.ReadBytes(dataLength);
-                    onFrame(new CanFrame(nowTimeUs, canId, (ushort)dataLength, data));
+                    onFrame(new CanFrame(nowTimeUs, canId, (ushort)dataLength, data, channel));
 
                     if (onProgress != null)
                     {

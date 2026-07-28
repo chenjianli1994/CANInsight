@@ -188,9 +188,9 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 记录实时接收的原始CAN报文（用于保存BLF）
+        /// 记录实时接收的原始CAN报文（用于保存BLF），channel为逻辑通道号（写入BLF mChannel）
         /// </summary>
-        internal static void RecordRealtimeRawMessage(uint canId, byte[] data)
+        internal static void RecordRealtimeRawMessage(uint canId, byte[] data, byte channel = 1)
         {
             if (Main.chartFromShow == null || Main.chartFromShow._isFileMode || !Main.chartFromShow.RunStatus)
                 return;
@@ -203,7 +203,8 @@ namespace PCAN_Client
                 {
                     CanId = canId,
                     Data = dataCopy,
-                    TimeStampSeconds = (float)timestamp
+                    TimeStampSeconds = (float)timestamp,
+                    Channel = channel
                 });
             }
         }
@@ -2044,7 +2045,8 @@ namespace PCAN_Client
                 tMsg.LEN = (byte)rawMsg.Data.Length;
                 tMsg.DATA = rawMsg.Data;
                 ulong tUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
-                Main.main.RecordCanMessage(tMsg, tUs, false);
+                // 回放帧带BLF通道号：报文列表同ID按通道分行、各自通道DBC解析
+                Main.main.RecordCanMessage(tMsg, tUs, false, true, rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1);
 
                 // 流式模式：记录最新的5w帧原始报文
                 if (_streamingMode)
@@ -3867,7 +3869,9 @@ namespace PCAN_Client
                     int copyLen = Math.Min(rawMsg.Data.Length, 8);
                     Array.Copy(rawMsg.Data, data, copyLen);
 
-                    messageList.Add(new CAN_Data.blf.CANMessage(0, rawMsg.CanId, data, rawMsg.TimeStampSeconds));
+                    // rawMsg.Channel为1-based（实时逻辑通道/BLF mChannel），writeBLF内部+1写出，故传入-1保持原通道号
+                    uint saveChannel = rawMsg.Channel > 0 ? (uint)(rawMsg.Channel - 1) : 0;
+                    messageList.Add(new CAN_Data.blf.CANMessage(saveChannel, rawMsg.CanId, data, rawMsg.TimeStampSeconds));
                 }
 
                 CAN_Data.blf.BinlogReadWrite.writeBLF(dialog.FileName, messageList);

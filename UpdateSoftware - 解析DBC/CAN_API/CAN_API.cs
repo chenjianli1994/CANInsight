@@ -39,7 +39,7 @@ namespace PCAN_Client.CAN_API
 
         public static object _receiveCanDataLock = new object();
 
-        internal static Boolean CanTransmit(uint ID, ushort len, byte[] data)
+        internal static Boolean CanTransmit(uint ID, ushort len, byte[] data, byte channel = 1)
         {
             Boolean result = false;
             TPCANMsg tPCANMsg = new TPCANMsg();
@@ -49,7 +49,7 @@ namespace PCAN_Client.CAN_API
                 tPCANMsg.DATA = data;
                 tPCANMsg.ID = ID;
                 tPCANMsg.LEN = (byte)len;
-                if (TPCANStatus.PCAN_ERROR_OK == Main.main.pCAN_API.PCAN_SendData(tPCANMsg))
+                if (TPCANStatus.PCAN_ERROR_OK == Main.main.pCAN_API.PCAN_SendData(tPCANMsg, channel))
                 {
                     result = true;
                 }
@@ -61,13 +61,13 @@ namespace PCAN_Client.CAN_API
                 lock (_receiveCanDataLock)
                 {
                     PendingTxId = ID;
-                    CanReceive(ID, len, data, (((ID > 0x7FF) ? TPCANMessageType.PCAN_MESSAGE_EXTENDED : TPCANMessageType.PCAN_MESSAGE_STANDARD)), 0);
+                    CanReceive(ID, len, data, (((ID > 0x7FF) ? TPCANMessageType.PCAN_MESSAGE_EXTENDED : TPCANMessageType.PCAN_MESSAGE_STANDARD)), 0, channel);
                     PendingTxId = 0xFFFFFFFF;
                 }
             }
             else if (Main.canoeOpenFlag)
             {
-                if (Main.main.canoe_API.CanoeCanTransmit(ID, len, data))
+                if (Main.main.canoe_API.CanoeCanTransmit(ID, len, data, channel))
                 {
                     result = true;
                 }
@@ -90,7 +90,7 @@ namespace PCAN_Client.CAN_API
             return result;
         }
 
-        internal static void CanReceive(uint ID, ushort len, byte[] data, TPCANMessageType MSGTYPE, ulong timestamp2)
+        internal static void CanReceive(uint ID, ushort len, byte[] data, TPCANMessageType MSGTYPE, ulong timestamp2, byte channel = 1)
         {
             ulong time_us;
             TPCANMsg msg = new TPCANMsg();
@@ -104,13 +104,13 @@ namespace PCAN_Client.CAN_API
             timestamp2 = (ulong)(stopwatch.ElapsedTicks / 10);
             if (!logFileConvertToCsvFlag)
             {
-                BaseParamter.dbcHelper.CANDataDeal(ID, len, data, timestamp2);
+                BaseParamter.dbcHelper.CANDataDeal(ID, len, data, timestamp2, channel);
             }
-            // 记录实时CAN原始报文（用于ChartFrom保存BLF）
-            ChartFrom.RecordRealtimeRawMessage(ID, data);
+            // 记录实时CAN原始报文（用于ChartFrom保存BLF），带真实逻辑通道号
+            ChartFrom.RecordRealtimeRawMessage(ID, data, channel);
             if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
             {
-                Log.AddCanMessageToWrite(ID, data, timestamp2);
+                Log.AddCanMessageToWrite(ID, data, timestamp2, channel);
             }
             if (0 == startTime)
             {
@@ -130,7 +130,7 @@ namespace PCAN_Client.CAN_API
 
                 // 更新报文显示记录
                 bool isTx = (PendingTxId == ID);
-                Main.main.RecordCanMessage(msg, timestamp2, isTx);
+                Main.main.RecordCanMessage(msg, timestamp2, isTx, true, channel);
 
                 {
                     time_us = timestamp2;
@@ -138,7 +138,7 @@ namespace PCAN_Client.CAN_API
                     // 批量缓冲数据
                     lock (_bufferLock)
                     {
-                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last);
+                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, channel);
                     }
 
                     time_us_last = time_us;
@@ -258,7 +258,7 @@ namespace PCAN_Client.CAN_API
             }
         }
         private static void FormatAndAppendMessage(StringBuilder str, StringBuilder ascString,
-            TPCANMsg msg, ulong time_us, ulong time_us_last)
+            TPCANMsg msg, ulong time_us, ulong time_us_last, byte channel = 1)
         {
             ulong timeDiff = time_us - time_us_last;
 
@@ -267,10 +267,10 @@ namespace PCAN_Client.CAN_API
             string dataHex = string.Join(" ", msg.DATA.Take(msg.LEN).Select(b => b.ToString("X2")));
             string period = $"{timeDiff / 1000}.{timeDiff % 1000}ms";
 
-            // 分别格式化输出
+            // 分别格式化输出（ASC通道列写真实逻辑通道号）
             if(Logging.SaveFlag && (0 == LoggingSet.SaveFileType_int))
             {
-                ascString.AppendLine($"{timestamp} 1 {msg.ID:X2}             Rx    d {msg.LEN} {dataHex}");
+                ascString.AppendLine($"{timestamp} {channel} {msg.ID:X2}             Rx    d {msg.LEN} {dataHex}");
             }
             str.AppendLine($"ID:0x{msg.ID:X2} 数据： {dataHex}  周期： {period}");
         }

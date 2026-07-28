@@ -530,24 +530,25 @@ namespace PCAN_Client.DataLog
                     if (retval == 1)
                     {
                         double timestampMicroseconds = 0;
+                        byte msgChannel = 1; // BLF mChannel（1-based）
 
                         // 处理不同的对象类型
                         switch (headerBase.mObjectType)
                         {
                             case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE:
-                                timestampMicroseconds = ProcessCANMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas);
+                                timestampMicroseconds = ProcessCANMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
                                 break;
 
                             case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE2:
-                                timestampMicroseconds = ProcessCANMessage2(fileHandle, headerBase, ref canid, ref dataLen, ref datas);
+                                timestampMicroseconds = ProcessCANMessage2(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
                                 break;
 
                             case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE:
-                                timestampMicroseconds = ProcessCANFDMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas);
+                                timestampMicroseconds = ProcessCANFDMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
                                 break;
 
                             case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64:
-                                timestampMicroseconds = ProcessCANFDMessage64(fileHandle, headerBase, ref canid, ref dataLen, ref datas);
+                                timestampMicroseconds = ProcessCANFDMessage64(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
                                 break;
 
                             case (uint)BLFObjectType.BL_OBJ_TYPE_APP_TEXT:
@@ -597,13 +598,15 @@ namespace PCAN_Client.DataLog
 
                             lastTimeMicroseconds = currentTimeMicroseconds;
 
+                            if (msgChannel == 0) msgChannel = 1; // 容错：BLF通道号应1-based
+
                             if (saveExcelFlag)
                             {
-                                // 使用时间差（微秒）处理DBC数据
-                                BaseParamter.dbcHelper.CANDataDeal(canid, (ushort)dataLen, datas, (ulong)deltaTimeMicroseconds);
+                                // 使用时间差（微秒）处理DBC数据（按通道选择对应DBC解析）
+                                BaseParamter.dbcHelper.CANDataDeal(canid, (ushort)dataLen, datas, (ulong)deltaTimeMicroseconds, msgChannel);
                             }
 
-                            // 生成ASC格式输出
+                            // 生成ASC格式输出（通道列写BLF实际通道号）
                             if (saveAscFlag && ascWriter != null)
                             {
                                 string timestamp = ConvertMicrosecondsToTimestampString(currentTimeMicroseconds);
@@ -615,7 +618,7 @@ namespace PCAN_Client.DataLog
                                     dataHexBuilder.Append(datas[i].ToString("X2"));
                                 }
 
-                                batchBuilder.AppendLine($"{timestamp} 1 {canid:X2}             Rx    d {dataLen} {dataHexBuilder}");
+                                batchBuilder.AppendLine($"{timestamp} {msgChannel} {canid:X2}             Rx    d {dataLen} {dataHexBuilder}");
 
                                 if (messageCount % BATCH_SIZE == 0)
                                 {
@@ -674,8 +677,8 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        // 处理不同类型的方法
-        private double ProcessCANMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas)
+        // 处理不同类型的方法（channel输出BLF mChannel通道号）
+        private double ProcessCANMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
         {
             int structSize = Marshal.SizeOf<VBLCANMessage>();
             IntPtr pMsg = Marshal.AllocHGlobal(structSize);
@@ -691,6 +694,7 @@ namespace PCAN_Client.DataLog
                 double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
 
                 canid = retMsg.mID;
+                channel = (byte)retMsg.mChannel;
                 dataLen = Math.Min((uint)retMsg.mData.Length, 8);
                 Array.Resize(ref datas, (int)dataLen);
                 Array.Copy(retMsg.mData, 0, datas, 0, (int)dataLen);
@@ -703,7 +707,7 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        private double ProcessCANMessage2(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas)
+        private double ProcessCANMessage2(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
         {
             int structSize = Marshal.SizeOf<VBLCANMessage2>();
             IntPtr pMsg = Marshal.AllocHGlobal(structSize);
@@ -718,6 +722,7 @@ namespace PCAN_Client.DataLog
                 double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
 
                 canid = retMsg.mID;
+                channel = (byte)retMsg.mChannel;
                 dataLen = Math.Min((uint)retMsg.mDLC, 8);
                 if (dataLen > 8) dataLen = 8;
                 Array.Resize(ref datas, (int)dataLen);
@@ -731,7 +736,7 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        private double ProcessCANFDMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas)
+        private double ProcessCANFDMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
         {
             int structSize = Marshal.SizeOf<VBLCANFDMessage>();
             IntPtr pMsg = Marshal.AllocHGlobal(structSize);
@@ -746,6 +751,7 @@ namespace PCAN_Client.DataLog
                 double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
 
                 canid = retMsg.mID;
+                channel = (byte)retMsg.mChannel;
                 dataLen = retMsg.mValidDataBytes;
                 if (dataLen > 16) dataLen = 16;
                 Array.Resize(ref datas, (int)dataLen);
@@ -759,7 +765,7 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        private double ProcessCANFDMessage64(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas)
+        private double ProcessCANFDMessage64(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
         {
             int structSize = Marshal.SizeOf<VBLCANFDMessage64>();
             IntPtr pMsg = Marshal.AllocHGlobal(structSize);
@@ -774,6 +780,7 @@ namespace PCAN_Client.DataLog
                 double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
 
                 canid = retMsg.mID;
+                channel = (byte)retMsg.mChannel;
                 dataLen = retMsg.mValidDataBytes;
                 if (dataLen > 64) dataLen = 64;
                 Array.Resize(ref datas, (int)dataLen);
@@ -1018,6 +1025,10 @@ namespace PCAN_Client.DataLog
 
             NowTimeUs = (ulong)(timestampSeconds * 1000000.0);
 
+            // 解析通道号（第2列，ASC标准格式 "时间 通道 ID Rx d ..."）
+            byte msgChannel = 1;
+            if (!byte.TryParse(parts[1], out msgChannel) || msgChannel == 0) msgChannel = 1;
+
             // 解析CAN ID
             if (!uint.TryParse(parts[2], System.Globalization.NumberStyles.HexNumber,
                 System.Globalization.CultureInfo.InvariantCulture, out uint canId))
@@ -1063,8 +1074,8 @@ namespace PCAN_Client.DataLog
             if (!dataValid)
                 return;
 
-            // 处理CAN数据
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs);
+            // 处理CAN数据（按ASC通道列路由对应DBC解析）
+            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
 
             messageCount++;
 
@@ -1097,6 +1108,10 @@ namespace PCAN_Client.DataLog
                 return;
 
             NowTimeUs = (ulong)(timestampSeconds * 1000000.0);
+
+            // 解析通道号（CANFD格式第3列 "时间 CANFD 通道 Rx ..."）
+            byte msgChannel = 1;
+            if (!byte.TryParse(parts[2], out msgChannel) || msgChannel == 0) msgChannel = 1;
 
             // 解析CAN ID (第5个字段)
             if (!uint.TryParse(parts[4], System.Globalization.NumberStyles.HexNumber,
@@ -1133,8 +1148,8 @@ namespace PCAN_Client.DataLog
             if (!dataValid)
                 return;
 
-            // 处理CAN数据
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs);
+            // 处理CAN数据（按ASC通道列路由对应DBC解析）
+            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
             if(canId == 0x5a0)
             {
                 Console.WriteLine($"ID:{canId:X2} len:{dataLength} { string.Join(" ", datas.Select(b => b.ToString("X2")))}" );
@@ -1302,8 +1317,11 @@ namespace PCAN_Client.DataLog
 
                             if (binFileStream.Position + 5 + dataLength > binFileStream.Length) break;
 
-                            // 读取CAN ID - 优化读取方式
-                            uint canId = (uint)(reader.ReadByte() << 8 | reader.ReadByte());
+                            // 读取CAN ID（高字节高5位为通道号，旧文件读出0→归一化为1）
+                            byte idHigh = reader.ReadByte();
+                            byte msgChannel = (byte)(idHigh >> 3);
+                            if (msgChannel == 0) msgChannel = 1;
+                            uint canId = (uint)(((idHigh & 0x07) << 8) | reader.ReadByte());
 
                             // 读取时间戳 - 优化计算
                             ulong us = (ulong)reader.ReadByte() << 16 |
@@ -1316,7 +1334,7 @@ namespace PCAN_Client.DataLog
                             byte[] datas = reader.ReadBytes(dataLength);
                             if (saveExcelFlag)
                             {
-                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs);
+                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
                             }
 
                             messageCount++;
@@ -1334,8 +1352,8 @@ namespace PCAN_Client.DataLog
                                 dataHexBuilder.Append(datas[i].ToString("X2"));
                             }
 
-                            // 添加到批量构建器
-                            batchBuilder.AppendLine($"{timestamp} 1 {canId:X2}             Rx    d {dataLength} {dataHexBuilder}");
+                            // 添加到批量构建器（通道列写实际通道号）
+                            batchBuilder.AppendLine($"{timestamp} {msgChannel} {canId:X2}             Rx    d {dataLength} {dataHexBuilder}");
 
                             // 批量写入，减少IO操作
                             if (messageCount % BATCH_SIZE == 0)
@@ -1443,8 +1461,11 @@ namespace PCAN_Client.DataLog
 
                             if (binFileStream.Position + 5 + dataLength > binFileStream.Length) break;
 
-                            // 读取CAN ID - 优化读取方式
-                            uint canId = (uint)(reader.ReadByte() << 8 | reader.ReadByte());
+                            // 读取CAN ID（高字节高5位为通道号，旧文件读出0→归一化为1）
+                            byte idHigh = reader.ReadByte();
+                            byte msgChannel = (byte)(idHigh >> 3);
+                            if (msgChannel == 0) msgChannel = 1;
+                            uint canId = (uint)(((idHigh & 0x07) << 8) | reader.ReadByte());
 
                             // 读取时间戳 - 优化计算
                             ulong us = (ulong)reader.ReadByte() << 16 |
@@ -1457,7 +1478,7 @@ namespace PCAN_Client.DataLog
                             byte[] datas = reader.ReadBytes(dataLength);
                             if (saveExcelFlag)
                             {
-                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs);
+                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
                             }
 
                             messageCount++;

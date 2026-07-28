@@ -239,7 +239,8 @@ namespace PCAN_Client.Canoe_API
             }
         }
 
-        public Boolean CanoeCanTransmit(uint ID, ushort len, byte[] data)
+        /// <summary>发送数据。channel为逻辑通道号（二期多通道mask后按通道路由；当前单通道mask模型下仍走appChannelMask）</summary>
+        public Boolean CanoeCanTransmit(uint ID, ushort len, byte[] data, byte channel = 1)
         {
             XLDefine.XL_Status status;
 
@@ -505,9 +506,11 @@ namespace PCAN_Client.Canoe_API
                                             : TPCANMessageType.PCAN_MESSAGE_STANDARD;
                                         if (msgType == TPCANMessageType.PCAN_MESSAGE_STANDARD && datas.ID > 0x7FF)
                                             msgType = TPCANMessageType.PCAN_MESSAGE_EXTENDED;
+                                        // XL事件channelIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号
+                                        byte logicCh = BaseParamter.GetBlfChannelByHw((byte)(xLcanRxEvent.channelIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time);
+                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
                                         }
                                     }
                                     else
@@ -543,9 +546,11 @@ namespace PCAN_Client.Canoe_API
                                         TPCANMessageType msgType = ((datas.ID & 0x80000000) != 0 || datas.ID > 0x7FF)
                                             ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
                                             : TPCANMessageType.PCAN_MESSAGE_STANDARD;
+                                        // XL事件chanIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号
+                                        byte logicCh = BaseParamter.GetBlfChannelByHw((byte)(Main.main.canoe_API.xlEvent.chanIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time);
+                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
                                         }
                                     }
                                     else
