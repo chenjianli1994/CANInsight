@@ -66,6 +66,8 @@ namespace PCAN_Client
         private ComboBox _currentComboBox;
 
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
+        /// <summary>正在手动连发中的发送列表行索引（防止重复点击）</summary>
+        private readonly HashSet<int> _manualSendingRows = new HashSet<int>();
         public CanSend()
         {
             InitializeComponent();
@@ -106,6 +108,8 @@ namespace PCAN_Client
             }
             // 追加"数据(hex)"列：发送原始数据的16进制表示，可直接编辑
             messagesTable.Columns.Add("RawData", typeof(string));
+            // 追加"手动次数"列：手动发送的帧数（按报文周期连发），默认1
+            messagesTable.Columns.Add("ManualSendCnt", typeof(string));
             // 绑定DataTable到DataGridView
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
@@ -226,7 +230,7 @@ namespace PCAN_Client
                 ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
             UiTheme.SetGridHeaders(dataGridView2,
                 ("MessageID", "报文ID"), ("MessageName", "报文名称"), ("CycleTime(ms)", "周期(ms)"),
-                ("SendCnt", "发送次数"), ("Enable", "使能"));
+                ("SendCnt", "发送次数"), ("Enable", "使能"), ("ManualSendCnt", "手动次数"));
             UiTheme.SetGridHeaders(dataGridView3,
                 ("MessageID", "报文ID"), ("CycleTime(ms)", "周期(ms)"), ("SendCnt", "发送次数"),
                 ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"));
@@ -293,9 +297,33 @@ namespace PCAN_Client
                 if (dataGridView2.Columns["colSingleSend"] != null &&
                     dataGridView2.Columns["colSingleSend"].Index == dataGridView2SelectColumnIndex)
                 {
-                    // 单次发送一帧，并给出绿色闪烁反馈
+                    // 手动发送：按"手动次数"N、以报文周期为间隔连发N帧（默认1）；发送中忽略重复点击
+                    if (_manualSendingRows.Contains(dataGridView2SelectRowIndex)) return;
+                    int times = 1;
+                    if (int.TryParse(messagesTable.Rows[dataGridView2SelectRowIndex]["ManualSendCnt"]?.ToString(), out int n) && n >= 1)
+                        times = n;
+                    // 第1帧立即发送并刷新显示（SendCnt/RawData后续帧由timer1兜底刷新）
                     BaseParamter.dbcHelper.SendCanMessage(Nowmessage.messgeId);
                     messagesTable.Rows[dataGridView2SelectRowIndex].SetField("SendCnt", Nowmessage.sendCnt.ToString());
+                    messagesTable.Rows[dataGridView2SelectRowIndex].SetField("RawData", FormatSendBufHex(Nowmessage));
+                    if (times > 1)
+                    {
+                        int rowIndex = dataGridView2SelectRowIndex;
+                        var msg = Nowmessage;
+                        _manualSendingRows.Add(rowIndex);
+                        Task.Run(() =>
+                        {
+                            try
+                            {
+                                for (int i = 1; i < times; i++)
+                                {
+                                    Thread.Sleep((int)Math.Max(1, msg.cycleTime)); // 帧间隔=报文周期
+                                    BaseParamter.dbcHelper.SendCanMessage(msg.messgeId);
+                                }
+                            }
+                            finally { _manualSendingRows.Remove(rowIndex); }
+                        });
+                    }
                     var flashCell = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex];
                     flashCell.Style.BackColor = Color.LightGreen;
                     Task.Delay(200).ContinueWith(_ =>
@@ -350,6 +378,13 @@ namespace PCAN_Client
         /// </summary>
         private void RebuildMessagesTable()
         {
+            // 重建前暂存各报文的手动发送次数，重建后恢复（未设置过的默认1）
+            var manualCntMap = new Dictionary<string, string>();
+            foreach (DataRow r in messagesTable.Rows)
+            {
+                if (r["MessageName"] is string n)
+                    manualCntMap[n] = r["ManualSendCnt"]?.ToString();
+            }
             messagesTable.Rows.Clear();
             foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
             {
@@ -362,6 +397,7 @@ namespace PCAN_Client
                     newRow["SendCnt"] = message.sendCnt.ToString();
                     newRow["Enable"] = message.enableFlag;
                     newRow["RawData"] = FormatSendBufHex(message);
+                    newRow["ManualSendCnt"] = manualCntMap.TryGetValue(message.messageName, out string mc) ? mc : "1";
                     messagesTable.Rows.Add(newRow);
                     if (message.enableFlag)
                     {
@@ -372,14 +408,20 @@ namespace PCAN_Client
             }
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
-            // 列宽按内容分配：周期/使能/单次发送窄，宽度留给数据列
+            // 列宽按内容分配：周期/使能/手动次数/手动发送窄，宽度留给数据列
             SetColumnFill("MessageID", 55, true);
             SetColumnFill("MessageName", 105, true);
             SetColumnFill("CycleTime(ms)", 42, false);
             SetColumnFill("SendCnt", 48, true);
             SetColumnFill("Enable", 32, true);
             SetColumnFill("RawData", 200, false);
+            SetColumnFill("ManualSendCnt", 40, false);
             SetColumnFill("colSingleSend", 46, true);
+            // 显示顺序：手动次数列紧随RawData，手动发送按钮列最后
+            if (dataGridView2.Columns["ManualSendCnt"] != null)
+                dataGridView2.Columns["ManualSendCnt"].DisplayIndex = 6;
+            if (dataGridView2.Columns["colSingleSend"] != null)
+                dataGridView2.Columns["colSingleSend"].DisplayIndex = 7;
             dataGridView2.Refresh();
         }
 
@@ -391,13 +433,29 @@ namespace PCAN_Client
             col.ReadOnly = readOnly;
         }
 
+        /// <summary>信号值变更后立即编码sendBuf并刷新发送列表RawData显示（不影响发送：发送时updateFlag仍会重编码并逐帧算CRC/RollingCounter）</summary>
+        private void RefreshRawDataPreview(int msgIndex)
+        {
+            var msg = BaseParamter.dbcHelper.dbcFile.messages[msgIndex];
+            try { msg.sendBuf = CAN_Data.CanMessageBuilder.EncodeSignals(msg.signals, Math.Max(8, (int)msg.messageSize)); }
+            catch { }
+            foreach (DataRow row in messagesTable.Rows)
+            {
+                if (row["MessageName"]?.ToString() == msg.messageName)
+                {
+                    row.SetField("RawData", FormatSendBufHex(msg));
+                    break;
+                }
+            }
+        }
+
         /// <summary>发送原始数据的16进制表示（字节间空格）；未编码过时按信号值实时编码预览</summary>
         private static string FormatSendBufHex(CAN_Data.Message msg)
         {
             byte[] buf = msg.sendBuf;
             if (buf == null)
             {
-                try { buf = CAN_Data.CanMessageBuilder.EncodeSignals(msg.signals); }
+                try { buf = CAN_Data.CanMessageBuilder.EncodeSignals(msg.signals, Math.Max(8, (int)msg.messageSize)); }
                 catch { return ""; }
             }
             return string.Join(" ", buf.Select(b => b.ToString("X2")));
@@ -519,7 +577,8 @@ namespace PCAN_Client
                     newRow["Value"] = signal.enumDefinitions?.ContainsKey(signal.cmdValue) == true ?
                             signal.enumDefinitions[signal.cmdValue] :
                             signal.cmdValue.ToString("F1");
-                    newRow["RawValue"] = CanMessageBuilder.ConvertToRawValue(signal.cmdValue, signal);
+                    // 原始值按(long)截断取整并以0x前缀16进制显示，与EncodeSignals实际编码值一致（所见即所发）
+                    newRow["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(signal.cmdValue, signal)).ToString("X");
 
                     dataTable.Rows.Add(newRow);
                 }
@@ -554,9 +613,9 @@ namespace PCAN_Client
             else
             {
                 BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg = true;
-                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].enableFlag = true;
+                // 添加到发送列表默认不勾选使能（不注册周期调度），由用户勾选Enable后才启动周期发送
+                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].enableFlag = false;
                 BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].NextSendTime = 0;
-                multiMessageCANScheduler.AddMessage(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messgeId, BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].cycleTime);
                 treeView1.Nodes[1].Nodes[SelectMessageIndex].Text = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messageName + "(发送)";
             }
             tabControl1.SelectedIndex = 0;
@@ -591,6 +650,19 @@ namespace PCAN_Client
                         row.SetField("CycleTime(ms)", msg.cycleTime.ToString());
                     }
                 }
+                else if (colName == "ManualSendCnt")
+                {
+                    // 手动发送次数：>=1的整数，非法回滚为1
+                    if (int.TryParse(cellValue, out int manualCnt) && manualCnt >= 1)
+                    {
+                        row.SetField("ManualSendCnt", manualCnt.ToString());
+                    }
+                    else
+                    {
+                        MessageBox.Show($"无效的发送次数: {cellValue}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        row.SetField("ManualSendCnt", "1");
+                    }
+                }
                 else if (colName == "RawData")
                 {
                     // 原始数据hex编辑：空格分隔的1~8个字节（可带0x前缀），非法回滚
@@ -603,7 +675,7 @@ namespace PCAN_Client
                     }
                     else
                     {
-                        MessageBox.Show($"无效的16进制数据: {cellValue}\n格式示例: 11 22 33 44 55 66 77 88", "提示",
+                        MessageBox.Show($"无效的16进制数据: {cellValue}\n格式示例: 11 22 33 44 55 66 77 88（不超过报文字节数）", "提示",
                             MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         row.SetField("RawData", FormatSendBufHex(msg));
                     }
@@ -612,14 +684,16 @@ namespace PCAN_Client
             catch { }
         }
 
-        /// <summary>解析空格分隔的hex字节串（1~8个，可带0x前缀）；baseBuf非空时未提供的字节沿用原值</summary>
+        /// <summary>解析空格分隔的hex字节串（1~报文字节数个，可带0x前缀）；baseBuf非空时未提供的字节沿用原值</summary>
         private static bool TryParseHexBytes(string text, byte[] baseBuf, out byte[] result)
         {
-            result = new byte[8];
-            if (baseBuf != null) Array.Copy(baseBuf, result, Math.Min(baseBuf.Length, 8));
+            // 容量跟随报文实际编码长度（经典CAN为8，CAN FD长报文可达64）
+            int capacity = Math.Max(8, baseBuf?.Length ?? 8);
+            result = new byte[capacity];
+            if (baseBuf != null) Array.Copy(baseBuf, result, Math.Min(baseBuf.Length, capacity));
 
             var parts = text.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0 || parts.Length > 8) return false;
+            if (parts.Length == 0 || parts.Length > capacity) return false;
 
             for (int i = 0; i < parts.Length; i++)
             {
@@ -666,7 +740,9 @@ namespace PCAN_Client
                     signal.cmdValue = num;
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].updateFlag = true;
                     dataTable.Rows[e.RowIndex]["Value"] = num.ToString("F1");
-                    dataTable.Rows[e.RowIndex]["RawValue"] = CanMessageBuilder.ConvertToRawValue(num, signal).ToString("F1");
+                    // 原始值按(long)截断取整并以0x前缀16进制显示，与EncodeSignals实际编码值一致（所见即所发）
+                    dataTable.Rows[e.RowIndex]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(num, signal)).ToString("X");
+                    RefreshRawDataPreview(SelectMessageIndex); // 原始数据列实时跟随信号值
                 }
                 else
                 {
@@ -717,9 +793,11 @@ namespace PCAN_Client
                 {
                     var selected = (KeyValuePair<double, string>)_currentComboBox.SelectedItem;
                     dataTable.Rows[currentRowIndex]["Value"] = selected.Value;
-                    dataTable.Rows[currentRowIndex]["RawValue"] = CanMessageBuilder.ConvertToRawValue(selected.Key, signal).ToString("F1");
+                    // 原始值按(long)截断取整并以0x前缀16进制显示，与EncodeSignals实际编码值一致（所见即所发）
+                    dataTable.Rows[currentRowIndex]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(selected.Key, signal)).ToString("X");
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].signals[currentRowIndex].cmdValue = selected.Key;
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].updateFlag = true;
+                    RefreshRawDataPreview(SelectMessageIndex); // 原始数据列实时跟随信号值
 
                     dataGridView1.Controls.Remove(_currentComboBox);
                     _currentComboBox.Dispose();
@@ -985,12 +1063,15 @@ namespace PCAN_Client
                         // 直接比较数值而不是字符串，避免不必要的更新
                         if (msg.sendCnt.ToString() != row["SendCnt"]?.ToString())
                         {
-                            dataGridView2.Rows[index].Cells[(int)dataGridView2ColumnEnum.SendCnt].Value = msg.sendCnt.ToString();
-                            string hex = FormatSendBufHex(msg);
-                            if (row["RawData"]?.ToString() != hex)
-                            {
-                                dataGridView2.Rows[index].Cells["RawData"].Value = hex;
-                            }
+                            // 必须按列名索引：colSingleSend按钮列占位Index 0（句柄创建前Add导致），
+                            // 用枚举硬编码索引会错位写到CycleTime(ms)列
+                            dataGridView2.Rows[index].Cells["SendCnt"].Value = msg.sendCnt.ToString();
+                        }
+                        // RawData独立检测：sendCnt不变时（如仅编辑信号值）也能及时跟随sendBuf刷新
+                        string hex = FormatSendBufHex(msg);
+                        if (row["RawData"]?.ToString() != hex)
+                        {
+                            dataGridView2.Rows[index].Cells["RawData"].Value = hex;
                         }
                     }
                     index++;
@@ -1330,14 +1411,14 @@ namespace PCAN_Client
             }
         }
 
-        /// <summary>确保发送列表存在"单次发送"按钮列（重新绑定DataSource后调用）</summary>
+        /// <summary>确保发送列表存在"手动发送"按钮列（重新绑定DataSource后调用）</summary>
         private void EnsureSingleSendColumn()
         {
             if (dataGridView2.Columns["colSingleSend"] != null) return;
             var col = new DataGridViewButtonColumn
             {
                 Name = "colSingleSend",
-                HeaderText = "单次发送",
+                HeaderText = "手动发送",
                 Text = "发送",
                 UseColumnTextForButtonValue = true,
                 FillWeight = 55

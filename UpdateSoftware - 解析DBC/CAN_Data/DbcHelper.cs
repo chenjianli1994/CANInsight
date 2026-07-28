@@ -608,7 +608,8 @@ namespace PCAN_Client.CAN_Data
 
             if (messageDef.updateFlag || null == messageDef.sendBuf)
             {
-                messageDef.sendBuf = CanMessageBuilder.EncodeSignals(messageDef.signals);
+                // 按报文实际长度编码：经典CAN(≤8)保持8字节，CAN FD长报文(如32/64)扩展到messageSize
+                messageDef.sendBuf = CanMessageBuilder.EncodeSignals(messageDef.signals, Math.Max(8, (int)messageDef.messageSize));
                 // 编码后复位：信号值未变化时后续周期帧复用编码结果（CRC/RollingCounter仍逐帧重算）
                 messageDef.updateFlag = false;
             }
@@ -869,9 +870,10 @@ namespace PCAN_Client.CAN_Data
         /// <summary>
         /// 将Signal对象的cmdValue编码为CAN数据帧[7,8](@ref)
         /// </summary>
-        public static byte[] EncodeSignals(List<Signal> signals)
+        /// <param name="dataLen">数据帧字节数：经典CAN为8，CAN FD长报文按报文实际长度（如32/64）</param>
+        public static byte[] EncodeSignals(List<Signal> signals, int dataLen = 8)
         {
-            byte[] data = new byte[8];
+            byte[] data = new byte[dataLen];
             int muxValue = -1;
 
             // 优先处理复用选择信号
