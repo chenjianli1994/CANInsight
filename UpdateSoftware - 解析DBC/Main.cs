@@ -2211,6 +2211,29 @@ namespace PCAN_Client
                         }
                         // 连接前清空数据（不改变scroll/fixed模式）
                         ClearDataOnly();
+
+                        // 多通道模式：通道配置中绑定了硬件通道时，批量连接所有配置的通道（优先于下拉单选）
+                        if (BaseParamter.BusChannels.Count > 0)
+                        {
+                            int connected = pCAN_API.ConnectMulti(CanFDFlag);
+                            if (connected > 0)
+                            {
+                                button1.Text = "已连接";
+                                pcanOpenFlag = true;
+                            }
+                            else
+                            {
+                                button1.Text = "连接";
+                                pcanOpenFlag = false;
+                                if (ShowFlag)
+                                {
+                                    MessageBox.Show("多通道连接失败：所有配置通道均连接失败（请检查硬件通道绑定与设备）");
+                                }
+                            }
+                            return;
+                        }
+
+                        // 单通道兼容路径：未配置通道时按下拉框单选连接
                         int channel;
                         string[] pcanChannel = comboBox1.Text.Split('_', '(');
                         if (3 == pcanChannel.Length)
@@ -2442,6 +2465,34 @@ namespace PCAN_Client
                         }
                         // 连接前清空数据（不改变scroll/fixed模式）
                         ClearDataOnly();
+
+                        // 多通道模式：通道配置中绑定了硬件通道时，组合mask一次打开所有配置通道（优先于下拉单选）
+                        if (BaseParamter.BusChannels.Count > 0)
+                        {
+                            ulong mask = 0;
+                            foreach (var ch in BaseParamter.BusChannels)
+                            {
+                                byte hw = ch.EffectiveHwChannel;
+                                if (hw >= 1 && hw <= 64) mask |= (1UL << (hw - 1));
+                            }
+                            if (mask != 0 && canoe_API.CANOE_Open(mask, CanFDFlag))
+                            {
+                                button5.Text = "已连接";
+                                canoeOpenFlag = true;
+                            }
+                            else
+                            {
+                                button5.Text = "连接";
+                                canoeOpenFlag = false;
+                                if (ShowFlag)
+                                {
+                                    MessageBox.Show("多通道连接失败（请检查硬件通道绑定与设备）");
+                                }
+                            }
+                            return;
+                        }
+
+                        // 单通道兼容路径：未配置通道时按下拉框单选连接
                         for (int i = 0; i < driverConfig.channelCount; i++)
                         {
                             if (driverConfig.channel[i].name.Contains(comboBox_CanoeChannel.Text))

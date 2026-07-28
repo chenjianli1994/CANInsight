@@ -239,10 +239,16 @@ namespace PCAN_Client.Canoe_API
             }
         }
 
-        /// <summary>发送数据。channel为逻辑通道号（二期多通道mask后按通道路由；当前单通道mask模型下仍走appChannelMask）</summary>
+        /// <summary>发送数据。channel为逻辑通道号：按通道配置的硬件通道绑定计算发送mask；无匹配时回退appChannelMask（单通道兼容）</summary>
         public Boolean CanoeCanTransmit(uint ID, ushort len, byte[] data, byte channel = 1)
         {
             XLDefine.XL_Status status;
+
+            // 逻辑通道号 → 硬件通道 → 发送mask（该通道未单独配置硬件绑定时hw=channel）
+            byte hw = channel;
+            int chIdx = BaseParamter.GetChannelIndexByBlfId(channel);
+            if (chIdx >= 0) hw = BaseParamter.BusChannels[chIdx].EffectiveHwChannel;
+            ulong txMask = (hw >= 1 && hw <= 64) ? (1UL << (hw - 1)) : appChannelMask;
 
             if (CanFDFlag)
             {
@@ -250,7 +256,7 @@ namespace PCAN_Client.Canoe_API
                 XLClass.XLcanTxEvent xLcanTxEvent = new XLClass.XLcanTxEvent
                 {
                     tag = XLDefine.XL_CANFD_TX_EventTags.XL_CAN_EV_TAG_TX_MSG,
-                    channelIndex = (byte)appChannelMask,
+                    channelIndex = (byte)(hw - 1),
                     tagData = new XLClass.XL_CAN_TX_MSG
                     {
                         canId = ID,
@@ -260,7 +266,7 @@ namespace PCAN_Client.Canoe_API
                     }
                 };
                 Array.Copy(data, 0, xLcanTxEvent.tagData.data, 0, len);
-                status = xlDriver.XL_CanTransmitEx(portHandle, appChannelMask, ref msgCnt, xLcanTxEvent);
+                status = xlDriver.XL_CanTransmitEx(portHandle, txMask, ref msgCnt, xLcanTxEvent);
             }
             else
             {
@@ -279,7 +285,7 @@ namespace PCAN_Client.Canoe_API
                     }
                 };
                 Array.Copy(data, 0, txEvent.tagData.can_Msg.data, 0, len);
-                status = xlDriver.XL_CanTransmit(portHandle, appChannelMask, txEvent);
+                status = xlDriver.XL_CanTransmit(portHandle, txMask, txEvent);
             }
             //XLClass.xl_event txEvent = new XLClass.xl_event
             //{

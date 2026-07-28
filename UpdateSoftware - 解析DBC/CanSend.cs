@@ -109,8 +109,12 @@ namespace PCAN_Client
             }
             // 追加"数据(hex)"列：发送原始数据的16进制表示，可直接编辑
             messagesTable.Columns.Add("RawData", typeof(string));
+            // 追加"发送通道"列：逻辑通道号（0=自动跟随来源DBC通道），可直接编辑
+            messagesTable.Columns.Add("TxChannel", typeof(string));
             // 追加"手动次数"列：手动发送的帧数（按报文周期连发），默认1
             messagesTable.Columns.Add("ManualSendCnt", typeof(string));
+            // 隐藏列：报文来源DBC通道（多通道同名报文区分用）
+            messagesTable.Columns.Add("SrcChannel", typeof(string));
             // 绑定DataTable到DataGridView
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
@@ -136,6 +140,8 @@ namespace PCAN_Client
                 }
                 dataGridView2Column++;
             }
+            // 追加"发送通道"列：逻辑通道号（0/1=通道1）
+            addMessagesTable.Columns.Add("TxChannel", typeof(string));
             // 绑定DataTable到DataGridView
             dataGridView3.Columns.Clear();
             dataGridView3.DataSource = addMessagesTable;
@@ -231,15 +237,21 @@ namespace PCAN_Client
                 ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
             UiTheme.SetGridHeaders(dataGridView2,
                 ("MessageID", "报文ID"), ("MessageName", "报文名称"), ("CycleTime(ms)", "周期(ms)"),
-                ("SendCnt", "发送次数"), ("Enable", "使能"), ("ManualSendCnt", "手动次数"));
+                ("SendCnt", "发送次数"), ("Enable", "使能"), ("TxChannel", "发送通道"), ("ManualSendCnt", "手动次数"));
             UiTheme.SetGridHeaders(dataGridView3,
                 ("MessageID", "报文ID"), ("CycleTime(ms)", "周期(ms)"), ("SendCnt", "发送次数"),
-                ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"));
+                ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"), ("TxChannel", "发送通道"));
 
             // 首次打开时初始化/布局/列生成较慢（JIT+句柄创建），窗体就绪前不显示，避免半成品窗口闪烁
             this.DoubleBuffered = true;
             this.Opacity = 0;
             this.Shown += (s, e) => { this.Opacity = 1; };
+        }
+
+        /// <summary>解析报文实际发送通道（TxChannel=0时自动跟随来源DBC通道）</summary>
+        internal static byte ResolveTxChannel(CAN_Data.Message msg)
+        {
+            return msg.TxChannel > 0 ? msg.TxChannel : BaseParamter.GetChannelOfMessage(msg);
         }
 
         public void SetCANMessageSendENable(ref CAN_Data.Message message ,bool status, bool customFlag)
@@ -249,12 +261,12 @@ namespace PCAN_Client
                 if (true == status)
                 {
                     message.enableFlag = true;
-                    multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
+                    multiMessageCANScheduler.AddMessage(message, message.cycleTime);
                 }
                 else
                 {
                     message.enableFlag = false;
-                    multiMessageCANScheduler.RemoveMessage(message.messgeId);
+                    multiMessageCANScheduler.RemoveMessage(ResolveTxChannel(message), message.messgeId);
                 }
             }
             else
@@ -267,7 +279,7 @@ namespace PCAN_Client
                 else
                 {
                     message.enableFlag = false;
-                    multiMessageCANScheduler.RemoveMessageCustom(message.messgeId);
+                    multiMessageCANScheduler.RemoveMessageCustom(message.TxChannel > 0 ? message.TxChannel : (byte)1, message.messgeId);
                 }
             }
         }
@@ -286,10 +298,12 @@ namespace PCAN_Client
                 var Nowmessage = BaseParamter.dbcHelper.dbcFile.messages[0];
                 int NowSelectMessageIndex = 0;
 
-                /* 找到对应的报文 */
+                /* 找到对应的报文（多通道同名报文按来源通道进一步区分） */
+                string srcCh = row["SrcChannel"]?.ToString();
                 foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
                 {
-                    if (message.messageName.Equals(row[(int)dataGridView2ColumnEnum.MessageName]))
+                    if (message.messageName.Equals(row[(int)dataGridView2ColumnEnum.MessageName]) &&
+                        (string.IsNullOrEmpty(srcCh) || BaseParamter.GetChannelOfMessage(message).ToString() == srcCh))
                     {
                         Nowmessage = message;
                         break;
@@ -308,8 +322,8 @@ namespace PCAN_Client
                     int times = 1;
                     if (int.TryParse(messagesTable.Rows[dataGridView2SelectRowIndex]["ManualSendCnt"]?.ToString(), out int n) && n >= 1)
                         times = n;
-                    // 第1帧立即发送并刷新显示（SendCnt/RawData后续帧由timer1兜底刷新）
-                    BaseParamter.dbcHelper.SendCanMessage(Nowmessage.messgeId);
+                    // 第1帧立即发送并刷新显示（SendCnt/RawData后续帧由timer1兜底刷新）；按报文TxChannel路由发送通道
+                    BaseParamter.dbcHelper.SendCanMessage(Nowmessage, ResolveTxChannel(Nowmessage));
                     messagesTable.Rows[dataGridView2SelectRowIndex].SetField("SendCnt", Nowmessage.sendCnt.ToString());
                     messagesTable.Rows[dataGridView2SelectRowIndex].SetField("RawData", FormatSendBufHex(Nowmessage));
                     if (times > 1)
@@ -324,7 +338,7 @@ namespace PCAN_Client
                                 for (int i = 1; i < times; i++)
                                 {
                                     Thread.Sleep((int)Math.Max(1, msg.cycleTime)); // 帧间隔=报文周期
-                                    BaseParamter.dbcHelper.SendCanMessage(msg.messgeId);
+                                    BaseParamter.dbcHelper.SendCanMessage(msg, ResolveTxChannel(msg));
                                 }
                             }
                             finally { _manualSendingRows.Remove(rowIndex); }
@@ -384,18 +398,23 @@ namespace PCAN_Client
         /// </summary>
         private void RebuildMessagesTable()
         {
-            // 重建前暂存各报文的手动发送次数，重建后恢复（未设置过的默认1）
+            // 重建前暂存各报文的手动发送次数，重建后恢复（key=名称+来源通道，多通道同名区分）
+            // 注：TxChannel存在Message对象上，Rebuild不清对象无需恢复（切勿用行显示值回写，否则"自动"被固化）
             var manualCntMap = new Dictionary<string, string>();
             foreach (DataRow r in messagesTable.Rows)
             {
                 if (r["MessageName"] is string n)
-                    manualCntMap[n] = r["ManualSendCnt"]?.ToString();
+                {
+                    manualCntMap[n + "|" + r["SrcChannel"]?.ToString()] = r["ManualSendCnt"]?.ToString();
+                }
             }
             messagesTable.Rows.Clear();
             foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
             {
                 if (message.sendFalg)
                 {
+                    byte srcCh = BaseParamter.GetChannelOfMessage(message);
+                    string mapKey = message.messageName + "|" + srcCh;
                     var newRow = messagesTable.NewRow();
                     newRow["MessageID"] = "0x" + message.messgeId.ToString("X2");
                     newRow["MessageName"] = message.messageName;
@@ -403,31 +422,40 @@ namespace PCAN_Client
                     newRow["SendCnt"] = message.sendCnt.ToString();
                     newRow["Enable"] = message.enableFlag;
                     newRow["RawData"] = FormatSendBufHex(message);
-                    newRow["ManualSendCnt"] = manualCntMap.TryGetValue(message.messageName, out string mc) ? mc : "1";
+                    newRow["SrcChannel"] = srcCh.ToString();
+                    // 发送通道列：显示实际生效值（TxChannel=0自动时显示来源通道）
+                    newRow["TxChannel"] = ResolveTxChannel(message).ToString();
+                    newRow["ManualSendCnt"] = manualCntMap.TryGetValue(mapKey, out string mc) ? mc : "1";
                     messagesTable.Rows.Add(newRow);
                     if (message.enableFlag)
                     {
-                        multiMessageCANScheduler.AddMessage(message.messgeId, message.cycleTime);
+                        multiMessageCANScheduler.AddMessage(message, message.cycleTime);
                     }
                 }
                 message.NextSendTime = 0;
             }
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
-            // 列宽按内容分配：周期/使能/手动次数/手动发送窄，宽度留给数据列
+            // 列宽按内容分配：周期/使能/发送通道/手动次数/手动发送窄，宽度留给数据列
             SetColumnFill("MessageID", 55, true);
             SetColumnFill("MessageName", 105, true);
             SetColumnFill("CycleTime(ms)", 42, false);
             SetColumnFill("SendCnt", 48, true);
             SetColumnFill("Enable", 32, true);
-            SetColumnFill("RawData", 200, false);
+            SetColumnFill("RawData", 190, false);
+            SetColumnFill("TxChannel", 36, false);
             SetColumnFill("ManualSendCnt", 40, false);
             SetColumnFill("colSingleSend", 46, true);
-            // 显示顺序：手动次数列紧随RawData，手动发送按钮列最后
+            // 隐藏来源通道列（仅用于多通道同名报文区分）
+            if (dataGridView2.Columns["SrcChannel"] != null)
+                dataGridView2.Columns["SrcChannel"].Visible = false;
+            // 显示顺序：发送通道/手动次数紧随RawData，手动发送按钮列最后
+            if (dataGridView2.Columns["TxChannel"] != null)
+                dataGridView2.Columns["TxChannel"].DisplayIndex = 6;
             if (dataGridView2.Columns["ManualSendCnt"] != null)
-                dataGridView2.Columns["ManualSendCnt"].DisplayIndex = 6;
+                dataGridView2.Columns["ManualSendCnt"].DisplayIndex = 7;
             if (dataGridView2.Columns["colSingleSend"] != null)
-                dataGridView2.Columns["colSingleSend"].DisplayIndex = 7;
+                dataGridView2.Columns["colSingleSend"].DisplayIndex = 8;
             dataGridView2.Refresh();
         }
 
@@ -492,6 +520,12 @@ namespace PCAN_Client
             dataGridView3.Columns[10].ReadOnly = true;
             dataGridView3.Columns[11].ReadOnly = true;
             dataGridView3.Columns[12].ReadOnly = true;
+            // 发送通道列：紧跟周期列显示
+            if (dataGridView3.Columns["TxChannel"] != null)
+            {
+                dataGridView3.Columns["TxChannel"].Width = 50;
+                dataGridView3.Columns["TxChannel"].DisplayIndex = 2;
+            }
             dataGridView3.Refresh();
             addMessagesTableInit();
 
@@ -613,7 +647,8 @@ namespace PCAN_Client
             if(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg)
             {
                 BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg = false;
-                multiMessageCANScheduler.RemoveMessage(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messgeId);
+                multiMessageCANScheduler.RemoveMessage(ResolveTxChannel(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex]),
+                    BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messgeId);
                 treeView1.Nodes[1].Nodes[SelectMessageIndex].Text = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messageName;
             }
             else
@@ -629,6 +664,20 @@ namespace PCAN_Client
             RebuildMessagesTable();
         }
 
+        /// <summary>按(名称,来源通道)在聚合视图中定位报文（多通道同名报文区分）</summary>
+        private static CAN_Data.Message FindMessageByRow(DataRow row)
+        {
+            string name = row["MessageName"]?.ToString();
+            string srcCh = row["SrcChannel"]?.ToString();
+            foreach (var m in BaseParamter.dbcHelper.dbcFile.messages)
+            {
+                if (m.messageName == name &&
+                    (string.IsNullOrEmpty(srcCh) || BaseParamter.GetChannelOfMessage(m).ToString() == srcCh))
+                    return m;
+            }
+            return null;
+        }
+
         private void dataGridView2_CellEndEdit(object sender, DataGridViewCellEventArgs e)
         {
             try
@@ -637,7 +686,7 @@ namespace PCAN_Client
                 DataRow row = messagesTable.Rows[e.RowIndex];
                 string colName = dataGridView2.Columns[e.ColumnIndex].Name;
                 string cellValue = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString() ?? "";
-                var msg = BaseParamter.dbcHelper.GetMessageByMsgName(row["MessageName"]?.ToString());
+                var msg = FindMessageByRow(row);
                 if (msg == null) return;
 
                 if (colName == "CycleTime(ms)")
@@ -648,12 +697,34 @@ namespace PCAN_Client
                         cycleTime = (cycleTime <= 0) ? 1 : cycleTime;
                         row.SetField("CycleTime(ms)", cycleTime);
                         msg.cycleTime = (uint)cycleTime;
-                        multiMessageCANScheduler.UpdateMessageInterval(msg.messgeId, (uint)cycleTime);
+                        multiMessageCANScheduler.UpdateMessageInterval(ResolveTxChannel(msg), msg.messgeId, (uint)cycleTime);
                     }
                     else
                     {
                         MessageBox.Show($"无效的周期数值: {cellValue}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         row.SetField("CycleTime(ms)", msg.cycleTime.ToString());
+                    }
+                }
+                else if (colName == "TxChannel")
+                {
+                    // 发送通道编辑：0=自动跟随来源DBC通道，1~16=固定逻辑通道；非法回滚
+                    if (int.TryParse(cellValue, out int txCh) && txCh >= 0 && txCh <= 16)
+                    {
+                        byte oldCh = ResolveTxChannel(msg);
+                        msg.TxChannel = (byte)txCh;
+                        // 调度器按新通道重新注册（使能中的报文）
+                        if (msg.enableFlag)
+                        {
+                            multiMessageCANScheduler.RemoveMessage(oldCh, msg.messgeId);
+                            multiMessageCANScheduler.AddMessage(msg, msg.cycleTime);
+                        }
+                        row.SetField("TxChannel", ResolveTxChannel(msg).ToString());
+                    }
+                    else
+                    {
+                        MessageBox.Show($"无效的发送通道: {cellValue}\n0=自动（跟随报文所属DBC通道），1~16=固定通道", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        row.SetField("TxChannel", ResolveTxChannel(msg).ToString());
                     }
                 }
                 else if (colName == "ManualSendCnt")
@@ -864,6 +935,7 @@ namespace PCAN_Client
             public uint CycleMs { get; set; }
             public byte[] Data { get; set; }
             public bool CycleEnabled { get; set; }
+            public byte TxChannel { get; set; } // 逻辑发送通道（0=自动/通道1，兼容旧配置）
         }
 
         private void saveCfgButton_Click(object sender, EventArgs e)
@@ -883,7 +955,8 @@ namespace PCAN_Client
                     Id = m.messgeId,
                     CycleMs = m.cycleTime,
                     Data = m.sendBuf?.ToArray(),
-                    CycleEnabled = m.enableFlag
+                    CycleEnabled = m.enableFlag,
+                    TxChannel = m.TxChannel
                 }).ToList()
             };
 
@@ -929,26 +1002,27 @@ namespace PCAN_Client
                         TypeNameHandling = TypeNameHandling.Auto
                     });
 
-                // 按报文ID把配置中的发送设置应用到当前通道DBC聚合视图
+                // 按报文ID把配置中的发送设置应用到当前通道DBC聚合视图（多通道同ID全部恢复）
                 if (config.DbcData?.messages != null)
                 {
                     foreach (var cfgMsg in config.DbcData.messages)
                     {
-                        if (!BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(cfgMsg.messgeId, out var curMsg))
-                            continue;
-
-                        curMsg.sendFalg = cfgMsg.sendFalg;
-                        curMsg.enableFlag = cfgMsg.enableFlag;
-                        curMsg.cycleTime = cfgMsg.cycleTime;
-                        curMsg.NextSendTime = 0;
-
-                        // 按信号名恢复命令值
-                        if (cfgMsg.signals != null)
+                        foreach (var curMsg in BaseParamter.dbcHelper.dbcFile.messages.Where(m => m.messgeId == cfgMsg.messgeId))
                         {
-                            foreach (var cfgSig in cfgMsg.signals)
+                            curMsg.sendFalg = cfgMsg.sendFalg;
+                            curMsg.enableFlag = cfgMsg.enableFlag;
+                            curMsg.cycleTime = cfgMsg.cycleTime;
+                            curMsg.TxChannel = cfgMsg.TxChannel; // 旧配置无此字段=0=自动跟随来源通道
+                            curMsg.NextSendTime = 0;
+
+                            // 按信号名恢复命令值
+                            if (cfgMsg.signals != null)
                             {
-                                var curSig = curMsg.signals.FirstOrDefault(s => s.signalName == cfgSig.signalName);
-                                if (curSig != null) curSig.cmdValue = cfgSig.cmdValue;
+                                foreach (var cfgSig in cfgMsg.signals)
+                                {
+                                    var curSig = curMsg.signals.FirstOrDefault(s => s.signalName == cfgSig.signalName);
+                                    if (curSig != null) curSig.cmdValue = cfgSig.cmdValue;
+                                }
                             }
                         }
                     }
@@ -973,7 +1047,8 @@ namespace PCAN_Client
                             cycleTime = c.CycleMs,
                             sendBuf = buf,
                             sendFalg = true,
-                            enableFlag = c.CycleEnabled // addMessagesTableInit中按此状态注册调度
+                            enableFlag = c.CycleEnabled, // addMessagesTableInit中按此状态注册调度
+                            TxChannel = c.TxChannel // 旧配置无此字段=0=通道1
                         });
                     }
                 }
@@ -1063,7 +1138,7 @@ namespace PCAN_Client
                 int index = 0;
                 foreach (DataRow row in messagesTable.Rows)
                 {
-                    var msg = BaseParamter.dbcHelper.GetMessageByMsgName((string)row["MessageName"]);
+                    var msg = FindMessageByRow(row);
                     if (msg != null)
                     {
                         // 直接比较数值而不是字符串，避免不必要的更新
@@ -1118,6 +1193,8 @@ namespace PCAN_Client
                 public long IntervalMs { get; set; }
                 public long NextTriggerTime { get; set; }
                 public uint CanId => Message.messgeId;
+                /// <summary>实际发送通道（注册/重建调度时解析缓存，避免排序时反复遍历通道配置）</summary>
+                public byte Channel { get; set; }
                 public int CompareTo(CANMessageSchedule other)
                 {
                     return NextTriggerTime.CompareTo(other.NextTriggerTime);
@@ -1147,7 +1224,9 @@ namespace PCAN_Client
                         int timeCompare = x.NextTriggerTime.CompareTo(y.NextTriggerTime);
                         if (timeCompare != 0) return timeCompare;
 
-                        // 如果触发时间相同，使用CanId作为次要排序条件
+                        // 触发时间相同，按(通道,CanId)做次要排序（多通道同ID可共存）
+                        int chCompare = x.Channel.CompareTo(y.Channel);
+                        if (chCompare != 0) return chCompare;
                         return x.CanId.CompareTo(y.CanId);
                     }
                 }
@@ -1182,8 +1261,9 @@ namespace PCAN_Client
 
             private readonly CANMessageScheduleQueue _priorityQueue;
             private readonly CANMessageScheduleQueue _priorityQueueCustom;
-            private readonly Dictionary<uint, CANMessageSchedule> _scheduleLookup;
-            private readonly Dictionary<uint, CANMessageSchedule> _scheduleLookupCustom;
+            // key为复合键 MsgKey(canId, channel)：多通道同ID报文各自独立调度
+            private readonly Dictionary<long, CANMessageSchedule> _scheduleLookup;
+            private readonly Dictionary<long, CANMessageSchedule> _scheduleLookupCustom;
             private readonly List<CAN_Data.Message> _sendBuffer;
             private readonly List<CAN_Data.Message> _sendBufferCustom;
             private readonly object _lock = new object();
@@ -1192,32 +1272,34 @@ namespace PCAN_Client
             public MultiMessageCANScheduler()
             {
                 _priorityQueue = new CANMessageScheduleQueue();
-                _scheduleLookup = new Dictionary<uint, CANMessageSchedule>();
+                _scheduleLookup = new Dictionary<long, CANMessageSchedule>();
                 _sendBuffer = new List<CAN_Data.Message>();
 
                 _priorityQueueCustom = new CANMessageScheduleQueue();
-                _scheduleLookupCustom = new Dictionary<uint, CANMessageSchedule>();
+                _scheduleLookupCustom = new Dictionary<long, CANMessageSchedule>();
                 _sendBufferCustom = new List<CAN_Data.Message>();
             }
 
-            public void AddMessage(uint canId, uint intervalMs)
+            /// <summary>注册DBC报文周期调度（直接传Message引用，避免多通道同ID时GetMessageById歧义）</summary>
+            public void AddMessage(CAN_Data.Message msg, uint intervalMs)
             {
+                if (msg == null) return;
                 intervalMs = (intervalMs <= 0) ? 1 : intervalMs;
+                byte ch = msg.TxChannel > 0 ? msg.TxChannel : BaseParamter.GetChannelOfMessage(msg);
+                long key = Main.MsgKey(msg.messgeId, ch);
                 lock (_lock)
                 {
                     var schedule = new CANMessageSchedule
                     {
-                        Message = BaseParamter.dbcHelper.GetMessageById(canId),
+                        Message = msg,
                         IntervalMs = intervalMs,
-                        NextTriggerTime = GetCurrentTime()
+                        NextTriggerTime = GetCurrentTime(),
+                        Channel = ch
                     };
-                    if(null != schedule.Message)
+                    if (!_scheduleLookup.ContainsKey(key))
                     {
-                        if (!_scheduleLookup.ContainsKey(canId))
-                        {
-                            _scheduleLookup[canId] = schedule;
-                            _priorityQueue.Enqueue(schedule);
-                        }
+                        _scheduleLookup[key] = schedule;
+                        _priorityQueue.Enqueue(schedule);
                     }
                 }
             }
@@ -1225,47 +1307,52 @@ namespace PCAN_Client
             public void AddMessageCustom(ref CAN_Data.Message msg, uint intervalMs)
             {
                 intervalMs = (intervalMs <= 0) ? 1 : intervalMs;
+                byte ch = msg.TxChannel > 0 ? msg.TxChannel : (byte)1;
+                long key = Main.MsgKey(msg.messgeId, ch);
                 lock (_lock)
                 {
                     var schedule = new CANMessageSchedule
                     {
                         Message = msg,
                         IntervalMs = intervalMs,
-                        NextTriggerTime = GetCurrentTime()
+                        NextTriggerTime = GetCurrentTime(),
+                        Channel = ch
                     };
                     if (null != schedule.Message)
                     {
-                        if (!_scheduleLookupCustom.ContainsKey(msg.messgeId))
+                        if (!_scheduleLookupCustom.ContainsKey(key))
                         {
-                            _scheduleLookupCustom[msg.messgeId] = schedule;
+                            _scheduleLookupCustom[key] = schedule;
                             _priorityQueueCustom.Enqueue(schedule);
                         }
                     }
                 }
             }
 
-            public void RemoveMessage(uint canId)
+            public void RemoveMessage(byte channel, uint canId)
             {
+                long key = Main.MsgKey(canId, channel);
                 lock (_lock)
                 {
-                    if (_scheduleLookup.ContainsKey(canId))
+                    if (_scheduleLookup.ContainsKey(key))
                     {
-                        _scheduleLookup.Remove(canId);
+                        _scheduleLookup.Remove(key);
                     }
                 }
             }
-            public void RemoveMessageCustom(uint canId)
+            public void RemoveMessageCustom(byte channel, uint canId)
             {
+                long key = Main.MsgKey(canId, channel);
                 lock (_lock)
                 {
-                    if (_scheduleLookupCustom.TryGetValue(canId, out var schedule))
+                    if (_scheduleLookupCustom.TryGetValue(key, out var schedule))
                     {
                         // 从队列中移除该调度项
                         _priorityQueueCustom.Remove(schedule);
                     }
-                    if (_scheduleLookupCustom.ContainsKey(canId))
+                    if (_scheduleLookupCustom.ContainsKey(key))
                     {
-                        _scheduleLookupCustom.Remove(canId);
+                        _scheduleLookupCustom.Remove(key);
                     }
                 }
             }
@@ -1292,7 +1379,7 @@ namespace PCAN_Client
                         var nextSchedule = _priorityQueue.Peek();
 
                         // 检查该消息是否已被移除
-                        if (!_scheduleLookup.ContainsKey(nextSchedule.CanId))
+                        if (!_scheduleLookup.ContainsKey(Main.MsgKey(nextSchedule.CanId, nextSchedule.Channel)))
                         {
                             _priorityQueue.Dequeue(); // 移除已删除的消息
                             continue;
@@ -1319,7 +1406,7 @@ namespace PCAN_Client
                         var nextSchedule = _priorityQueueCustom.Peek();
 
                         // 检查该消息是否已被移除
-                        if (!_scheduleLookupCustom.ContainsKey(nextSchedule.CanId))
+                        if (!_scheduleLookupCustom.ContainsKey(Main.MsgKey(nextSchedule.CanId, nextSchedule.Channel)))
                         {
                             _priorityQueueCustom.Dequeue(); // 移除已删除的消息
                             continue;
@@ -1342,13 +1429,14 @@ namespace PCAN_Client
                 // 批量发送
                 if (_sendBuffer.Count > 0)
                 {
-                    // 批量发送所有到期的CAN报文
+                    // 批量发送所有到期的CAN报文（按各自TxChannel路由到对应物理通道）
                     foreach (var msg in _sendBuffer)
                     {
                         msg.NextSendTime = Main.canSend.sw.ElapsedMilliseconds + msg.cycleTime;
                         msg.aliveCount++;
                         msg.aliveCount &= 0x0F;
-                        BaseParamter.dbcHelper.SendCanMessage(msg.messgeId);
+                        byte txCh = msg.TxChannel > 0 ? msg.TxChannel : BaseParamter.GetChannelOfMessage(msg);
+                        BaseParamter.dbcHelper.SendCanMessage(msg.messgeId, txCh);
                     }
                     _sendBuffer.Clear();
                 }
@@ -1362,17 +1450,19 @@ namespace PCAN_Client
                         msg.NextSendTime = Main.canSend.sw.ElapsedMilliseconds + msg.cycleTime;
                         msg.aliveCount++;
                         msg.aliveCount &= 0x0F;
-                        BaseParamter.dbcHelper.SendCanMessage(msg);
+                        byte txCh = msg.TxChannel > 0 ? msg.TxChannel : (byte)1;
+                        BaseParamter.dbcHelper.SendCanMessage(msg, txCh);
                     }
                     _sendBufferCustom.Clear();
                 }
             }
 
-            public void UpdateMessageInterval(uint canId, uint newIntervalMs)
+            public void UpdateMessageInterval(byte channel, uint canId, uint newIntervalMs)
             {
+                long key = Main.MsgKey(canId, channel);
                 lock (_lock)
                 {
-                    if (_scheduleLookup.TryGetValue(canId, out var schedule))
+                    if (_scheduleLookup.TryGetValue(key, out var schedule))
                     {
                         // 更新间隔时间
                         newIntervalMs = (newIntervalMs <= 0) ? 1 : newIntervalMs;
@@ -1384,11 +1474,12 @@ namespace PCAN_Client
                 }
             }
 
-            public void UpdateMessageIntervalCustom(uint canId, uint newIntervalMs)
+            public void UpdateMessageIntervalCustom(byte channel, uint canId, uint newIntervalMs)
             {
+                long key = Main.MsgKey(canId, channel);
                 lock (_lock)
                 {
-                    if (_scheduleLookupCustom.TryGetValue(canId, out var schedule))
+                    if (_scheduleLookupCustom.TryGetValue(key, out var schedule))
                     {
                         // 更新间隔时间
                         newIntervalMs = (newIntervalMs <= 0) ? 1 : newIntervalMs;
@@ -1438,6 +1529,7 @@ namespace PCAN_Client
             var row = addMessagesTable.Rows[rowIndex];
             row.SetField("MessageID", $"0x{msg.messgeId:X3}");
             row.SetField("CycleTime(ms)", msg.cycleTime.ToString());
+            row.SetField("TxChannel", (msg.TxChannel > 0 ? msg.TxChannel : (byte)1).ToString());
             for (int j = 0; j < 8; j++)
             {
                 row.SetField($"Data{j}", j < msg.sendBuf.Length ? $"0x{msg.sendBuf[j]:X2}" : "*");
@@ -1456,6 +1548,7 @@ namespace PCAN_Client
                 newRow3 = addMessagesTable.NewRow();
                 newRow3["MessageID"] = $"0x{msg.messgeId.ToString("X3")}";
                 newRow3["CycleTime(ms)"] = msg.cycleTime.ToString();
+                newRow3["TxChannel"] = (msg.TxChannel > 0 ? msg.TxChannel : (byte)1).ToString();
                 for (int j = 0; j < msg.sendBuf.Length; j++)
                 {
                     newRow3[$"Data{j}"] = $"0x{msg.sendBuf[j].ToString("X2")}";
@@ -1479,6 +1572,7 @@ namespace PCAN_Client
             newRow3 = addMessagesTable.NewRow();
             newRow3["MessageID"] = "双击添加";
             newRow3["CycleTime(ms)"] = "*";
+            newRow3["TxChannel"] = "*";
             newRow3["Data0"] = "*";
             newRow3["Data1"] = "*";
             newRow3["Data2"] = "*";
@@ -1506,6 +1600,7 @@ namespace PCAN_Client
             {
                 addMessagesTable.Rows[e.RowIndex].SetField("MessageID", "0x000");
                 addMessagesTable.Rows[e.RowIndex].SetField("CycleTime(ms)", "1000");
+                addMessagesTable.Rows[e.RowIndex].SetField("TxChannel", "1");
                 addMessagesTable.Rows[e.RowIndex].SetField("Data0", "0x00");
                 addMessagesTable.Rows[e.RowIndex].SetField("Data1", "0x00");
                 addMessagesTable.Rows[e.RowIndex].SetField("Data2", "0x00");
@@ -1528,6 +1623,7 @@ namespace PCAN_Client
                 DataRow newRow3 = addMessagesTable.NewRow();
                 newRow3["MessageID"] = "双击添加";
                 newRow3["CycleTime(ms)"] = "*";
+                newRow3["TxChannel"] = "*";
                 newRow3["Data0"] = "*";
                 newRow3["Data1"] = "*";
                 newRow3["Data2"] = "*";
@@ -1575,8 +1671,8 @@ namespace PCAN_Client
                     {
                         if (msg != null)
                         {
-                            // 发送单条报文
-                            BaseParamter.dbcHelper.SendCanMessage(msg);
+                            // 发送单条报文（按发送通道路由）
+                            BaseParamter.dbcHelper.SendCanMessage(msg, msg.TxChannel > 0 ? msg.TxChannel : (byte)1);
 
                             // 更新界面显示
                             addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField("SendCnt", msg.sendCnt.ToString());
@@ -1663,7 +1759,7 @@ namespace PCAN_Client
                     case "MessageID":
                         if (msg.messgeId != value)
                         {
-                            multiMessageCANScheduler.RemoveMessageCustom(msg.messgeId);
+                            multiMessageCANScheduler.RemoveMessageCustom(msg.TxChannel > 0 ? msg.TxChannel : (byte)1, msg.messgeId);
                             msg.messgeId = (uint)value;
                             // 设置显示为十六进制
                             addMessagesTable.Rows[e.RowIndex].SetField(columnName, $"0x{value:X3}");
@@ -1683,7 +1779,22 @@ namespace PCAN_Client
                         msg.cycleTime = (uint)value;
 
                         // 重要：更新调度器中的间隔时间并重新计算触发时间
-                        multiMessageCANScheduler.UpdateMessageIntervalCustom(msg.messgeId, (uint)value);
+                        multiMessageCANScheduler.UpdateMessageIntervalCustom(msg.TxChannel > 0 ? msg.TxChannel : (byte)1, msg.messgeId, (uint)value);
+                        break;
+                    case "TxChannel":
+                        // 发送通道：0/1=通道1，最大16；使能中的报文按新通道重新注册调度
+                        value = (value < 0) ? 0 : value;
+                        value = (value > 16) ? 16 : value;
+                        {
+                            byte oldCh = msg.TxChannel > 0 ? msg.TxChannel : (byte)1;
+                            msg.TxChannel = (byte)value;
+                            if (msg.enableFlag)
+                            {
+                                multiMessageCANScheduler.RemoveMessageCustom(oldCh, msg.messgeId);
+                                multiMessageCANScheduler.AddMessageCustom(ref msg, msg.cycleTime);
+                            }
+                            addMessagesTable.Rows[e.RowIndex].SetField(columnName, (msg.TxChannel > 0 ? msg.TxChannel : (byte)1).ToString());
+                        }
                         break;
                     default:
                         // Data0~Data7

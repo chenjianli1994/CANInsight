@@ -607,46 +607,45 @@ namespace PCAN_Client.CAN_Data
         // 发送方法（channel为逻辑发送通道号，按通道配置路由到对应物理通道）
         public void SendCanMessage(uint messageId, byte channel = 1)
         {
-            var messageDef = dbcFile.messages.FirstOrDefault(m => m.messgeId == messageId);
-            if (messageDef == null) return;
-
-            if (messageDef.updateFlag || null == messageDef.sendBuf)
-            {
-                // 按报文实际长度编码：经典CAN(≤8)保持8字节，CAN FD长报文(如32/64)扩展到messageSize
-                messageDef.sendBuf = CanMessageBuilder.EncodeSignals(messageDef.signals, Math.Max(8, (int)messageDef.messageSize));
-                // 编码后复位：信号值未变化时后续周期帧复用编码结果（CRC/RollingCounter仍逐帧重算）
-                messageDef.updateFlag = false;
-            }
-            else
-            {
-                /* empty */
-            }
-            if(1 == CrcCheckStatus)
-            {
-                util.FrameCrcCal.messageCrcCal(messageId, (int)messageDef.messageSize, ref messageDef.sendBuf, messageDef.aliveCount);
-            }
-            else if (2 == CrcCheckStatus)
-            {
-                if((0x3BA == messageDef.messgeId) ||
-                   (0x3BB == messageDef.messgeId) ||
-                   (0x3BD == messageDef.messgeId))
-                {
-                    byte checkSum = 0;
-                    for (int i = 0; i < 7; i++)
-                    {
-                        checkSum = (byte)(checkSum + messageDef.sendBuf[i]);
-                    }
-                    messageDef.sendBuf[7] = (byte)(checkSum ^ 0xFF);
-                }
-            }
-            CAN_API.CAN_API.CanTransmit(messageId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf, channel);
-            messageDef.sendCnt++;
+            SendCanMessage(dbcFile.messages.FirstOrDefault(m => m.messgeId == messageId), channel);
         }
 
-        public void SendCanMessage(Message msg, byte channel = 1)
+        /// <summary>发送报文（直接传Message引用，多通道同ID时避免按ID查找歧义；含信号编码与CRC/校验逐帧重算）</summary>
+        public void SendCanMessage(Message messageDef, byte channel = 1)
         {
-            CAN_API.CAN_API.CanTransmit(msg.messgeId, (ushort)msg.sendBuf.Length, msg.sendBuf, channel);
-            msg.sendCnt++;
+            if (messageDef == null) return;
+
+            // DBC报文（有信号定义）才做编码与CRC；自定义报文sendBuf由用户直接编辑，不可覆盖
+            if (messageDef.signals != null && messageDef.signals.Count > 0)
+            {
+                if (messageDef.updateFlag || null == messageDef.sendBuf)
+                {
+                    // 按报文实际长度编码：经典CAN(≤8)保持8字节，CAN FD长报文(如32/64)扩展到messageSize
+                    messageDef.sendBuf = CanMessageBuilder.EncodeSignals(messageDef.signals, Math.Max(8, (int)messageDef.messageSize));
+                    // 编码后复位：信号值未变化时后续周期帧复用编码结果（CRC/RollingCounter仍逐帧重算）
+                    messageDef.updateFlag = false;
+                }
+                if (1 == CrcCheckStatus)
+                {
+                    util.FrameCrcCal.messageCrcCal(messageDef.messgeId, (int)messageDef.messageSize, ref messageDef.sendBuf, messageDef.aliveCount);
+                }
+                else if (2 == CrcCheckStatus)
+                {
+                    if ((0x3BA == messageDef.messgeId) ||
+                       (0x3BB == messageDef.messgeId) ||
+                       (0x3BD == messageDef.messgeId))
+                    {
+                        byte checkSum = 0;
+                        for (int i = 0; i < 7; i++)
+                        {
+                            checkSum = (byte)(checkSum + messageDef.sendBuf[i]);
+                        }
+                        messageDef.sendBuf[7] = (byte)(checkSum ^ 0xFF);
+                    }
+                }
+            }
+            CAN_API.CAN_API.CanTransmit(messageDef.messgeId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf, channel);
+            messageDef.sendCnt++;
         }
     }
 
@@ -682,6 +681,7 @@ namespace PCAN_Client.CAN_Data
         public bool updateFlag = true;
         public byte[] sendBuf = null;
         public MsgReceive msgReceive = null;
+        public byte TxChannel = 1; // 逻辑发送通道号（按通道配置路由到物理通道，默认1）
     }
 
     public class Signal
