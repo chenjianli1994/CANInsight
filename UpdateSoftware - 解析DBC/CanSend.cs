@@ -234,6 +234,11 @@ namespace PCAN_Client
             UiTheme.SetGridHeaders(dataGridView3,
                 ("MessageID", "报文ID"), ("CycleTime(ms)", "周期(ms)"), ("SendCnt", "发送次数"),
                 ("Cycle Send", "周期发送"), ("SigleSend", "单次发送"));
+
+            // 首次打开时初始化/布局/列生成较慢（JIT+句柄创建），窗体就绪前不显示，避免半成品窗口闪烁
+            this.DoubleBuffered = true;
+            this.Opacity = 0;
+            this.Shown += (s, e) => { this.Opacity = 1; };
         }
 
         public void SetCANMessageSendENable(ref CAN_Data.Message message ,bool status, bool customFlag)
