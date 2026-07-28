@@ -64,8 +64,6 @@ namespace PCAN_Client
         int SelectMessageIndex = 0;
         // 在CanSend类中添加成员变量以跟踪当前活动的下拉框
         private ComboBox _currentComboBox;
-        // 布局分栏（树|信号表），Shown时设置初始分栏位置
-        private SplitContainer _layoutSplit;
 
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
         public CanSend()
@@ -187,48 +185,37 @@ namespace PCAN_Client
             topPanel.Controls.Add(readCfgButton); // 先加入者靠最右
             topPanel.Controls.Add(saveCfgButton);
 
-            // 主体：上行=树|信号表（SplitContainer 30%/70%），下行=报文页签
-            var split = new SplitContainer
-            {
-                Dock = DockStyle.Fill,
-                SplitterWidth = 4,
-                Panel1MinSize = 150,
-                Panel2MinSize = 300
-            };
+            // 主体：TableLayoutPanel 分栏（上行=树30%|信号表70%，下行=报文页签跨两列）
+            // 不用SplitContainer，彻底避免SplitterDistance越界异常
             this.Controls.Remove(treeView1);
             this.Controls.Remove(dataGridView1);
             treeView1.Dock = DockStyle.Fill;
             dataGridView1.Dock = DockStyle.Fill;
-            split.Panel1.Controls.Add(treeView1);
-            split.Panel2.Controls.Add(dataGridView1);
 
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
+                ColumnCount = 2,
                 RowCount = 2,
                 Padding = new Padding(6, 0, 6, 6)
             };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30F));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
-            layout.Controls.Add(split, 0, 0);
+            layout.Controls.Add(treeView1, 0, 0);
+            layout.Controls.Add(dataGridView1, 1, 0);
 
             this.Controls.Remove(tabControl1);
             tabControl1.Dock = DockStyle.Fill;
             dataGridView2.Dock = DockStyle.Fill;
             dataGridView3.Dock = DockStyle.Fill;
             layout.Controls.Add(tabControl1, 0, 1);
+            layout.SetColumnSpan(tabControl1, 2);
 
             // 先加 Fill 再加 Top：Top 先停靠，Fill 占剩余
             this.Controls.Add(layout);
             this.Controls.Add(topPanel);
-            _layoutSplit = split;
-            // 分栏位置延迟到窗体显示后设置（构造期控件未完成布局，直接设置会越界）
-            this.Shown += (s, e) =>
-            {
-                if (_layoutSplit.Width > _layoutSplit.Panel1MinSize + _layoutSplit.Panel2MinSize)
-                    _layoutSplit.SplitterDistance = 280;
-            };
 
             // 信号表/发送列表列宽按比例填充（消除右侧空白与列宽矛盾设置）
             dataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
