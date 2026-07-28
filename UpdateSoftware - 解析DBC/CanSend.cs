@@ -174,9 +174,63 @@ namespace PCAN_Client
             UiTheme.StyleGrid(dataGridView3);
             UiTheme.StyleButton(saveCfgButton, "save");
             UiTheme.StyleButton(readCfgButton, "folder");
-            // 加宽并右对齐排列，避免图标+文字被裁剪（原74px宽放不下）
-            saveCfgButton.SetBounds(692, 8, 98, 26);
-            readCfgButton.SetBounds(798, 8, 98, 26);
+
+            // ===== 布局重做：窗口可缩放 + Dock 自适应 =====
+            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.MaximizeBox = true;
+            this.MinimumSize = new Size(902, 682);
+
+            // 顶部按钮行（配置按钮右对齐）
+            var topPanel = new Panel { Dock = DockStyle.Top, Height = 36 };
+            this.Controls.Remove(saveCfgButton);
+            this.Controls.Remove(readCfgButton);
+            readCfgButton.Dock = DockStyle.Right;
+            readCfgButton.Size = new Size(104, 28);
+            saveCfgButton.Dock = DockStyle.Right;
+            saveCfgButton.Size = new Size(104, 28);
+            topPanel.Controls.Add(readCfgButton); // 先加入者靠最右
+            topPanel.Controls.Add(saveCfgButton);
+
+            // 主体：上行=树|信号表（SplitContainer 30%/70%），下行=报文页签
+            var split = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                SplitterWidth = 4,
+                Panel1MinSize = 150,
+                Panel2MinSize = 300
+            };
+            this.Controls.Remove(treeView1);
+            this.Controls.Remove(dataGridView1);
+            treeView1.Dock = DockStyle.Fill;
+            dataGridView1.Dock = DockStyle.Fill;
+            split.Panel1.Controls.Add(treeView1);
+            split.Panel2.Controls.Add(dataGridView1);
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2,
+                Padding = new Padding(6, 0, 6, 6)
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
+            layout.Controls.Add(split, 0, 0);
+
+            this.Controls.Remove(tabControl1);
+            tabControl1.Dock = DockStyle.Fill;
+            dataGridView2.Dock = DockStyle.Fill;
+            dataGridView3.Dock = DockStyle.Fill;
+            layout.Controls.Add(tabControl1, 0, 1);
+
+            // 先加 Fill 再加 Top：Top 先停靠，Fill 占剩余
+            this.Controls.Add(layout);
+            this.Controls.Add(topPanel);
+            split.SplitterDistance = 280;
+
+            // 信号表/发送列表列宽按比例填充（消除右侧空白与列宽矛盾设置）
+            dataGridView1.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dataGridView2.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             UiTheme.SetGridHeaders(dataGridView1,
                 ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
             UiTheme.SetGridHeaders(dataGridView2,
