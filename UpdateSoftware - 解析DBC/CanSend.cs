@@ -115,6 +115,7 @@ namespace PCAN_Client
             // 绑定DataTable到DataGridView
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
 
             addMessagesTable = new DataTable();
             dataGridView3Column = 0;
@@ -391,7 +392,26 @@ namespace PCAN_Client
                     NowSelectMessageIndex++;
                 }
 
-                if (dataGridView2.Columns["Enable"].Index == dataGridView2SelectColumnIndex)
+                if (dataGridView2.Columns["colSingleSend"] != null &&
+                    dataGridView2.Columns["colSingleSend"].Index == dataGridView2SelectColumnIndex)
+                {
+                    // 单次发送一帧，并给出绿色闪烁反馈
+                    BaseParamter.dbcHelper.SendCanMessage(Nowmessage.messgeId);
+                    messagesTable.Rows[dataGridView2SelectRowIndex].SetField("SendCnt", Nowmessage.sendCnt.ToString());
+                    var flashCell = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex];
+                    flashCell.Style.BackColor = Color.LightGreen;
+                    Task.Delay(200).ContinueWith(_ =>
+                    {
+                        if (this.IsHandleCreated)
+                        {
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                flashCell.Style.BackColor = dataGridView2.DefaultCellStyle.BackColor;
+                            }));
+                        }
+                    });
+                }
+                else if (dataGridView2.Columns["Enable"].Index == dataGridView2SelectColumnIndex)
                 {
                     if (row[dataGridView2SelectColumnIndex].Equals("True"))
                     {
@@ -417,8 +437,8 @@ namespace PCAN_Client
                         BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = new DataTable();
                         foreach (DataGridViewColumn column in dataGridView1.Columns)
                         {
-                            // Check if the header text is found
-                            BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.HeaderText, typeof(string));
+                            // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
+                            BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.Name, typeof(string));
                             dataGridView1Column++;
                         }
                     }
@@ -456,6 +476,7 @@ namespace PCAN_Client
                 }
             }
             dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
             dataGridView2.Columns[0].Width = 100;
             dataGridView2.Columns[1].Width = 150;
             dataGridView2.Columns[2].Width = 150;
@@ -528,6 +549,7 @@ namespace PCAN_Client
                         message.NextSendTime = 0;
                     }
                     //dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
                     //dataGridView2.Columns[0].Width = 100;
                     //dataGridView2.Columns[0].Width = 150;
                     //dataGridView2.Columns[1].Width = 150;
@@ -679,6 +701,7 @@ namespace PCAN_Client
                 }
             }
             dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
             dataGridView2.Columns[0].Width = 100;
             dataGridView2.Columns[0].Width = 150;
             dataGridView2.Columns[1].Width = 150;
@@ -749,6 +772,14 @@ namespace PCAN_Client
                 // 非枚举类型，验证数值格式
                 if (double.TryParse(currentValue, out double num))
                 {
+                    // 范围校验：超出DBC定义的最小/最大值则拒绝并回滚
+                    if (num < signal.minimum || num > signal.maximum)
+                    {
+                        MessageBox.Show($"输入值 {num} 超出信号范围 [{signal.minimum}, {signal.maximum}]",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        dataGridView1.Rows[e.RowIndex].Cells[1].Value = dataTable.Rows[e.RowIndex]["Value"];
+                        return;
+                    }
                     // 更新信号值和RawValue
                     signal.cmdValue = num;
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].updateFlag = true;
@@ -806,6 +837,7 @@ namespace PCAN_Client
                     dataTable.Rows[currentRowIndex]["Value"] = selected.Value;
                     dataTable.Rows[currentRowIndex]["RawValue"] = CanMessageBuilder.ConvertToRawValue(selected.Key, signal).ToString("F1");
                     BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].signals[currentRowIndex].cmdValue = selected.Key;
+                    BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].updateFlag = true;
 
                     dataGridView1.Controls.Remove(_currentComboBox);
                     _currentComboBox.Dispose();
@@ -855,6 +887,17 @@ namespace PCAN_Client
         {
             public int SelectedMessageIndex { get; set; }
             public DbcFile DbcData { get; set; } // 直接保存DBC文件对象
+            public List<CustomMessageCfg> CustomMessages { get; set; } // 自定义报文（持久化，关窗不丢）
+        }
+
+        /// <summary>自定义报文的持久化形式</summary>
+        [Serializable]
+        public class CustomMessageCfg
+        {
+            public uint Id { get; set; }
+            public uint CycleMs { get; set; }
+            public byte[] Data { get; set; }
+            public bool CycleEnabled { get; set; }
         }
 
         private void saveCfgButton_Click(object sender, EventArgs e)
@@ -868,7 +911,14 @@ namespace PCAN_Client
             var config = new AppConfig
             {
                 SelectedMessageIndex = SelectMessageIndex,
-                DbcData = BaseParamter.dbcHelper.dbcFile // 直接保存内存中的DBC对象
+                DbcData = BaseParamter.dbcHelper.dbcFile, // 直接保存内存中的DBC对象
+                CustomMessages = customMessagesList.Select(m => new CustomMessageCfg
+                {
+                    Id = m.messgeId,
+                    CycleMs = m.cycleTime,
+                    Data = m.sendBuf?.ToArray(),
+                    CycleEnabled = m.enableFlag
+                }).ToList()
             };
 
 
@@ -942,6 +992,27 @@ namespace PCAN_Client
                     config.SelectedMessageIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
                     ? config.SelectedMessageIndex : 0;
 
+                // 恢复自定义报文（旧格式配置无此字段时跳过）
+                customMessagesList.Clear();
+                addMessagesTable.Rows.Clear();
+                if (config.CustomMessages != null)
+                {
+                    foreach (var c in config.CustomMessages)
+                    {
+                        var buf = new byte[8];
+                        if (c.Data != null) Array.Copy(c.Data, buf, Math.Min(c.Data.Length, 8));
+                        customMessagesList.Add(new CAN_Data.Message
+                        {
+                            messgeId = c.Id,
+                            cycleTime = c.CycleMs,
+                            sendBuf = buf,
+                            sendFalg = true,
+                            enableFlag = c.CycleEnabled // addMessagesTableInit中按此状态注册调度
+                        });
+                    }
+                }
+                addMessagesTableInit();
+
                 // 刷新UI
                 UpdateDbcTreeview();
                 messagesTable.Rows.Clear();
@@ -966,6 +1037,7 @@ namespace PCAN_Client
                     message.NextSendTime = 0;
                 }
                 dataGridView2.DataSource = messagesTable;
+            EnsureSingleSendColumn();
                 dataGridView2.Columns[0].Width = 100;
                 dataGridView2.Columns[0].Width = 150;
                 dataGridView2.Columns[1].Width = 150;
@@ -1550,6 +1622,36 @@ namespace PCAN_Client
             }
         }
 
+        /// <summary>确保发送列表存在"单次发送"按钮列（重新绑定DataSource后调用）</summary>
+        private void EnsureSingleSendColumn()
+        {
+            if (dataGridView2.Columns["colSingleSend"] != null) return;
+            var col = new DataGridViewButtonColumn
+            {
+                Name = "colSingleSend",
+                HeaderText = "单次发送",
+                Text = "发送",
+                UseColumnTextForButtonValue = true,
+                FillWeight = 55
+            };
+            dataGridView2.Columns.Add(col);
+        }
+
+        /// <summary>按报文对象重写自定义报文行显示（非法输入回滚/持久化恢复用）</summary>
+        private void RefreshCustomRow(int rowIndex, CAN_Data.Message msg)
+        {
+            var row = addMessagesTable.Rows[rowIndex];
+            row.SetField("MessageID", $"0x{msg.messgeId:X3}");
+            row.SetField("CycleTime(ms)", msg.cycleTime.ToString());
+            for (int j = 0; j < 8; j++)
+            {
+                row.SetField($"Data{j}", j < msg.sendBuf.Length ? $"0x{msg.sendBuf[j]:X2}" : "*");
+            }
+            row.SetField("SendCnt", msg.sendCnt.ToString());
+            row.SetField("Cycle Send", msg.enableFlag ? "True" : "False");
+            row.SetField("SigleSend", "单击发送");
+        }
+
         private void addMessagesTableInit()
         {
             DataRow newRow3;
@@ -1600,9 +1702,9 @@ namespace PCAN_Client
             // 检查行索引和列索引是否有效（避免点击表头触发事件）
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
 
-            // 获取列名
-            string columnName = dataGridView3.Columns[e.ColumnIndex].HeaderText; // 或使用 .Name 获取字段名
-                                                                                 // 获取当前单元格的值
+            // 获取列名（用Name英文键，HeaderText已中文化）
+            string columnName = dataGridView3.Columns[e.ColumnIndex].Name;
+            // 获取当前单元格的值
             string cellValue = dataGridView3.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
 
             if(columnName.Equals("MessageID")&& cellValue.Equals("双击添加"))
@@ -1655,9 +1757,9 @@ namespace PCAN_Client
                 // 检查行索引和列索引是否有效（避免点击表头触发事件）
                 if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
 
-                // 获取列名
-                string columnName = dataGridView3.Columns[e.ColumnIndex].HeaderText; // 或使用 .Name 获取字段名
-                                                                                     // 获取当前单元格的值
+                // 获取列名（用Name英文键，HeaderText已中文化）
+                string columnName = dataGridView3.Columns[e.ColumnIndex].Name;
+                // 获取当前单元格的值
                 string cellValue = dataGridView3.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString();
 
                 dataGridView3SelectRowIndex = e.RowIndex; /* 获取点击的行索引 */
@@ -1737,149 +1839,76 @@ namespace PCAN_Client
                 // 检查行索引和列索引是否有效（避免点击表头触发事件）
                 if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
 
-                // 获取列名
-                string columnName = dataGridView3.Columns[e.ColumnIndex].HeaderText; // 或使用 .Name 获取字段名
-                                                                                     // 获取当前单元格的值
+                // 获取列名（用Name英文键，HeaderText已中文化）
+                string columnName = dataGridView3.Columns[e.ColumnIndex].Name;
                 object cellValue = dataGridView3.Rows[e.RowIndex].Cells[e.ColumnIndex].Value;
 
                 int value = 0;
                 bool valueValid = false;
+                string strValue = cellValue?.ToString().Trim() ?? "";
 
-                // 空值校验
-                if (cellValue != null && cellValue != DBNull.Value)
+                if (strValue.Length > 0)
                 {
-                    string strValue = cellValue.ToString().Trim(); // 移除首尾空格
-
-                    // 类型转换校验
-                    try
-                    {
-                        // 检查字符串是否以"0x"或"0X"开头（不区分大小写）
-                        if (strValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                        {
-                            // 使用Convert.ToInt32进行十六进制转换[7,8](@ref)
-                            value = Convert.ToInt32(strValue, 16);
-                            valueValid = true;
-                        }
-                        else
-                        {
-                            // 使用int.TryParse进行十进制转换
-                            if (!int.TryParse(strValue, out value))
-                            {
-                                // 处理十进制转换失败的情况
-                                // MessageBox.Show($"无效的十进制数值格式: {strValue}");
-                                // 可以选择记录日志或设置默认值
-                                value = 0; // 确保value有一个已知状态
-                                valueValid = false;
-                            }
-                            else
-                            {
-                                valueValid = true;
-                            }
-                        }
-                        // 如果走到这里且没有进入else的转换失败分支，说明十六进制转换成功或十进制tryparse成功
-                        if (!(strValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && !valueValid))
-                        {
-                            // 对于十六进制情况，只要没抛异常就是成功
-                            // 对于十进制，tryparse成功会设置valueValid为true
-                            valueValid = true;
-                        }
-                    }
-                    catch (FormatException)
-                    {
-                        // 捕获转换格式错误（例如字符串包含非法字符）
-                        // MessageBox.Show($"无效的数值格式: {strValue}");
-                    }
-                    catch (OverflowException)
-                    {
-                        // 捕获数值溢出错误（例如转换后的整数超出int范围）
-                        // MessageBox.Show($"数值太大或太小，超出Int32范围: {strValue}");
-                    }
-                    catch (Exception ex)
-                    {
-                        // 捕获其他未预期的异常
-                        // MessageBox.Show($"转换过程中发生错误: {ex.Message}");
-                    }
+                    // 支持0x十六进制或十进制；非法输入不允许落库（修复原判定错误导致静默变0）
+                    if (strValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                        valueValid = int.TryParse(strValue.Substring(2),
+                            System.Globalization.NumberStyles.HexNumber,
+                            System.Globalization.CultureInfo.InvariantCulture, out value);
+                    else
+                        valueValid = int.TryParse(strValue, out value);
                 }
 
                 var msg = customMessagesList[e.RowIndex];
-                if (valueValid && null != msg)
+                if (!valueValid || null == msg)
                 {
-                    switch (columnName)
+                    // 非法输入：回滚显示为当前报文实际值并提示
+                    if (null != msg && strValue.Length > 0)
                     {
-                        case "MessageID":
-                            if(msg.messgeId != value)
-                            {
-                                multiMessageCANScheduler.RemoveMessageCustom(msg.messgeId);
-                                msg.messgeId = (uint)value;
-                                // 设置显示为十六进制
-                                addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X3}");
-                                if (msg.enableFlag)
-                                {
-                                    SetCANMessageSendENable(ref msg, true, true);
-                                }
-                                else
-                                {
-                                    SetCANMessageSendENable(ref msg, false, true);
-                                }
-                            }
-                            break;
-                        case "CycleTime(ms)":
-                            value = (value <= 0) ? 1 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, value);
-                            msg.cycleTime = (uint)value;
-
-                            // 重要：更新调度器中的间隔时间并重新计算触发时间
-                            multiMessageCANScheduler.UpdateMessageIntervalCustom(msg.messgeId, (uint)value);
-                            break;
-                        case "Data0":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[0] = (byte)value;
-                            break;
-                        case "Data1":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[1] = (byte)value;
-                            break;
-                        case "Data2":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[2] = (byte)value;
-                            break;
-                        case "Data3":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[3] = (byte)value;
-                            break;
-                        case "Data4":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[4] = (byte)value;
-                            break;
-                        case "Data5":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[5] = (byte)value;
-                            break;
-                        case "Data6":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[6] = (byte)value;
-                            break;
-                        case "Data7":
-                            value = (value < 0) ? 0 : value;
-                            value = (value > 255) ? 255 : value;
-                            addMessagesTable.Rows[dataGridView3SelectRowIndex].SetField(columnName, $"0x{value:X2}");
-                            msg.sendBuf[7] = (byte)value;
-                            break;
+                        MessageBox.Show($"无效的数值格式: {strValue}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        RefreshCustomRow(e.RowIndex, msg);
                     }
+                    return;
+                }
+
+                switch (columnName)
+                {
+                    case "MessageID":
+                        if (msg.messgeId != value)
+                        {
+                            multiMessageCANScheduler.RemoveMessageCustom(msg.messgeId);
+                            msg.messgeId = (uint)value;
+                            // 设置显示为十六进制
+                            addMessagesTable.Rows[e.RowIndex].SetField(columnName, $"0x{value:X3}");
+                            if (msg.enableFlag)
+                            {
+                                SetCANMessageSendENable(ref msg, true, true);
+                            }
+                            else
+                            {
+                                SetCANMessageSendENable(ref msg, false, true);
+                            }
+                        }
+                        break;
+                    case "CycleTime(ms)":
+                        value = (value <= 0) ? 1 : value;
+                        addMessagesTable.Rows[e.RowIndex].SetField(columnName, value);
+                        msg.cycleTime = (uint)value;
+
+                        // 重要：更新调度器中的间隔时间并重新计算触发时间
+                        multiMessageCANScheduler.UpdateMessageIntervalCustom(msg.messgeId, (uint)value);
+                        break;
+                    default:
+                        // Data0~Data7
+                        if (columnName.StartsWith("Data") && columnName.Length == 5 &&
+                            columnName[4] >= '0' && columnName[4] <= '7')
+                        {
+                            int byteIdx = columnName[4] - '0';
+                            value = (value < 0) ? 0 : value;
+                            value = (value > 255) ? 255 : value;
+                            addMessagesTable.Rows[e.RowIndex].SetField(columnName, $"0x{value:X2}");
+                            msg.sendBuf[byteIdx] = (byte)value;
+                        }
+                        break;
                 }
             }
             catch { }
