@@ -73,13 +73,12 @@ namespace PCAN_Client
             dataGridView2.CellClick += DataGridView2_CellClick;
             dataGridView1.Scroll += DataGridView1_Scroll; // 添加滚动事件监听
             dataTable = new DataTable();
-            dataGridView1Column = 0;
-            foreach (DataGridViewColumn column in dataGridView1.Columns)
-            {
-                // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
-                dataTable.Columns.Add(column.Name, typeof(string));
-                dataGridView1Column++;
-            }
+            dataGridView1Column = 3;
+            // 信号表列键固定为 SignalName/Value/RawValue（Designer列名CmdType/Physical与数据键不一致，
+            // 曾导致写行异常被静默吞掉、表格为空）
+            dataTable.Columns.Add("SignalName", typeof(string));
+            dataTable.Columns.Add("Value", typeof(string));
+            dataTable.Columns.Add("RawValue", typeof(string));
 
             dataGridView1.EditMode = DataGridViewEditMode.EditOnEnter; // 确保单击即可进入编辑
             // 绑定DataTable到DataGridView
@@ -105,10 +104,13 @@ namespace PCAN_Client
                 }
                 dataGridView2Column++;
             }
+            // 追加"数据(hex)"列：发送原始数据的16进制表示，可直接编辑
+            messagesTable.Columns.Add("RawData", typeof(string));
             // 绑定DataTable到DataGridView
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
+            dataGridView2.EditMode = DataGridViewEditMode.EditOnEnter; // 单击即可编辑周期/数据列
 
             addMessagesTable = new DataTable();
             dataGridView3Column = 0;
@@ -285,6 +287,9 @@ namespace PCAN_Client
                     NowSelectMessageIndex++;
                 }
 
+                // 点击任意单元格：上方信号表联动解析该报文
+                SwitchSignalTable(NowSelectMessageIndex);
+
                 if (dataGridView2.Columns["colSingleSend"] != null &&
                     dataGridView2.Columns["colSingleSend"].Index == dataGridView2SelectColumnIndex)
                 {
@@ -311,29 +316,32 @@ namespace PCAN_Client
                     messagesTable.Rows[dataGridView2SelectRowIndex].SetField("Enable", !enabled);
                     SetCANMessageSendENable(ref Nowmessage, !enabled, false);
                 }
-                else if (dataGridView2.Columns["MessageID"].Index == dataGridView2SelectColumnIndex ||
-                         dataGridView2.Columns["MessageName"].Index == dataGridView2SelectColumnIndex)
-                {
-                    if (dataTable.Rows.Count > 0)
-                    {
-                        BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = dataTable;
-                    }
-                    SelectMessageIndex = NowSelectMessageIndex;
-                    if (BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable == null)
-                    {
-                        BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = new DataTable();
-                        foreach (DataGridViewColumn column in dataGridView1.Columns)
-                        {
-                            // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
-                            BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.Name, typeof(string));
-                            dataGridView1Column++;
-                        }
-                    }
-                    dataTable = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable;
-                    UpdateDbcListview(SelectMessageIndex);
-                }
             }
             catch { }
+        }
+
+        /// <summary>切换上方信号表到指定报文（每个报文的信号编辑状态独立缓存）</summary>
+        private void SwitchSignalTable(int msgIndex)
+        {
+            if (msgIndex < 0 || msgIndex >= BaseParamter.dbcHelper.dbcFile.messages.Count) return;
+            if (SelectMessageIndex == msgIndex && dataTable.Rows.Count > 0) return; // 已是当前报文，避免覆盖编辑状态
+
+            if (dataTable.Rows.Count > 0 && SelectMessageIndex >= 0 &&
+                SelectMessageIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
+            {
+                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = dataTable;
+            }
+            SelectMessageIndex = msgIndex;
+            if (BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable == null)
+            {
+                var t = new DataTable();
+                t.Columns.Add("SignalName", typeof(string));
+                t.Columns.Add("Value", typeof(string));
+                t.Columns.Add("RawValue", typeof(string));
+                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = t;
+            }
+            dataTable = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable;
+            UpdateDbcListview(SelectMessageIndex);
         }
 
         /// <summary>
@@ -353,6 +361,7 @@ namespace PCAN_Client
                     newRow["CycleTime(ms)"] = message.cycleTime.ToString();
                     newRow["SendCnt"] = message.sendCnt.ToString();
                     newRow["Enable"] = message.enableFlag;
+                    newRow["RawData"] = FormatSendBufHex(message);
                     messagesTable.Rows.Add(newRow);
                     if (message.enableFlag)
                     {
@@ -363,15 +372,35 @@ namespace PCAN_Client
             }
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
-            // 仅周期列可编辑，其余只读
-            if (dataGridView2.Columns.Count >= 5)
-            {
-                dataGridView2.Columns[0].ReadOnly = true;
-                dataGridView2.Columns[1].ReadOnly = true;
-                dataGridView2.Columns[3].ReadOnly = true;
-                dataGridView2.Columns[4].ReadOnly = true;
-            }
+            // 列宽按内容分配：周期/使能/单次发送窄，宽度留给数据列
+            SetColumnFill("MessageID", 55, true);
+            SetColumnFill("MessageName", 105, true);
+            SetColumnFill("CycleTime(ms)", 42, false);
+            SetColumnFill("SendCnt", 48, true);
+            SetColumnFill("Enable", 32, true);
+            SetColumnFill("RawData", 200, false);
+            SetColumnFill("colSingleSend", 46, true);
             dataGridView2.Refresh();
+        }
+
+        private void SetColumnFill(string colName, float weight, bool readOnly)
+        {
+            var col = dataGridView2.Columns[colName];
+            if (col == null) return;
+            col.FillWeight = weight;
+            col.ReadOnly = readOnly;
+        }
+
+        /// <summary>发送原始数据的16进制表示（字节间空格）；未编码过时按信号值实时编码预览</summary>
+        private static string FormatSendBufHex(CAN_Data.Message msg)
+        {
+            byte[] buf = msg.sendBuf;
+            if (buf == null)
+            {
+                try { buf = CAN_Data.CanMessageBuilder.EncodeSignals(msg.signals); }
+                catch { return ""; }
+            }
+            return string.Join(" ", buf.Select(b => b.ToString("X2")));
         }
 
         private void CanSend_Load(object sender, EventArgs e)
@@ -497,9 +526,9 @@ namespace PCAN_Client
 
                 dataGridView1.DataSource = dataTable;
 
-                dataGridView1.Columns[0].Width = 200;
-                dataGridView1.Columns[1].Width = 150;
-                dataGridView1.Columns[2].Width = 75;
+                // 重新绑定后列被重建，需恢复中文列头（列名保持英文键不变）
+                UiTheme.SetGridHeaders(dataGridView1,
+                    ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
 
                 dataGridView1.Refresh();
             }catch (Exception ex) { }
@@ -510,23 +539,7 @@ namespace PCAN_Client
         {
             if ((e.Node.Parent != null) && (e.Node.Parent.Text == "Message"))
             {
-                if(dataTable.Rows.Count > 0)
-                {
-                    BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = dataTable;
-                }
-                SelectMessageIndex = e.Node.Index;
-                if(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable == null)
-                {
-                    BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable = new DataTable();
-                    foreach (DataGridViewColumn column in dataGridView1.Columns)
-                    {
-                        // 列名必须用Name（英文键），HeaderText已中文化仅用于显示
-                        BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable.Columns.Add(column.Name, typeof(string));
-                        dataGridView1Column++;
-                    }
-                }
-                dataTable = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].dataTable;
-                UpdateDbcListview(SelectMessageIndex);
+                SwitchSignalTable(e.Node.Index);
             }
         }
 
@@ -555,42 +568,70 @@ namespace PCAN_Client
         {
             try
             {
-                if (e.ColumnIndex == (int)dataGridView2ColumnEnum.CycleTime)
+                if (e.RowIndex < 0 || e.RowIndex >= messagesTable.Rows.Count) return;
+                DataRow row = messagesTable.Rows[e.RowIndex];
+                string colName = dataGridView2.Columns[e.ColumnIndex].Name;
+                string cellValue = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString() ?? "";
+                var msg = BaseParamter.dbcHelper.GetMessageByMsgName(row["MessageName"]?.ToString());
+                if (msg == null) return;
+
+                if (colName == "CycleTime(ms)")
                 {
-                    var Nowmessage = BaseParamter.dbcHelper.dbcFile.messages[0];
-                    DataRow row = messagesTable.Rows[e.RowIndex];
-                    /* 找到对应的报文 */
-                    foreach (var message in BaseParamter.dbcHelper.dbcFile.messages)
+                    // 周期编辑：合法则更新报文与调度器，非法回滚
+                    if (int.TryParse(cellValue, out int cycleTime))
                     {
-                        Console.WriteLine(message.messageName.ToString() + row[(int)dataGridView2ColumnEnum.MessageName]);
-                        if (message.messageName.Equals(row[(int)dataGridView2ColumnEnum.MessageName]))
-                        {
-                            Nowmessage = message;
-                            break;
-                        }
+                        cycleTime = (cycleTime <= 0) ? 1 : cycleTime;
+                        row.SetField("CycleTime(ms)", cycleTime);
+                        msg.cycleTime = (uint)cycleTime;
+                        multiMessageCANScheduler.UpdateMessageInterval(msg.messgeId, (uint)cycleTime);
                     }
-                    object cellValue = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex].Value;
-                    // 空值校验
-                    if (cellValue != null && cellValue != DBNull.Value)
+                    else
                     {
-                        // 类型转换校验
-                        if (int.TryParse(cellValue.ToString(), out int cycleTime))
-                        {
-                            // 更新 DataTable 和 Nowmessage
-                            cycleTime = (cycleTime <= 0) ? 1 : cycleTime;
-                            messagesTable.Rows[dataGridView2SelectRowIndex].SetField("CycleTime(ms)", cycleTime);
-                            Nowmessage.cycleTime = (uint)cycleTime;// 更新调度器中的间隔时间
-                            multiMessageCANScheduler.UpdateMessageInterval(Nowmessage.messgeId, (uint)cycleTime);
-                        }
-                        else
-                        {
-                            // 处理非数值类型（如日志、默认值）
-                            //MessageBox.Show($"无效的数值格式: {cellValue}");
-                        }
+                        MessageBox.Show($"无效的周期数值: {cellValue}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        row.SetField("CycleTime(ms)", msg.cycleTime.ToString());
+                    }
+                }
+                else if (colName == "RawData")
+                {
+                    // 原始数据hex编辑：空格分隔的1~8个字节（可带0x前缀），非法回滚
+                    if (TryParseHexBytes(cellValue, msg.sendBuf, out byte[] newBuf))
+                    {
+                        msg.sendBuf = newBuf;
+                        // 手动改原始数据后不再用信号编码覆盖（CRC/RollingCounter仍逐帧重算）
+                        msg.updateFlag = false;
+                        row.SetField("RawData", FormatSendBufHex(msg));
+                    }
+                    else
+                    {
+                        MessageBox.Show($"无效的16进制数据: {cellValue}\n格式示例: 11 22 33 44 55 66 77 88", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        row.SetField("RawData", FormatSendBufHex(msg));
                     }
                 }
             }
             catch { }
+        }
+
+        /// <summary>解析空格分隔的hex字节串（1~8个，可带0x前缀）；baseBuf非空时未提供的字节沿用原值</summary>
+        private static bool TryParseHexBytes(string text, byte[] baseBuf, out byte[] result)
+        {
+            result = new byte[8];
+            if (baseBuf != null) Array.Copy(baseBuf, result, Math.Min(baseBuf.Length, 8));
+
+            var parts = text.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0 || parts.Length > 8) return false;
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string t = parts[i];
+                if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) t = t.Substring(2);
+                if (t.Length == 0 || t.Length > 2) return false;
+                if (!byte.TryParse(t, System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture, out byte b))
+                    return false;
+                result[i] = b;
+            }
+            return true;
         }
 
         private void CanSend_FormClosed(object sender, FormClosedEventArgs e)
@@ -934,7 +975,7 @@ namespace PCAN_Client
             try
             {
                 timeout++;
-                // 更新DBC报文的发送计数
+                // 更新DBC报文的发送计数与原始数据hex（发送后含最新CRC/RollingCounter）
                 int index = 0;
                 foreach (DataRow row in messagesTable.Rows)
                 {
@@ -945,6 +986,11 @@ namespace PCAN_Client
                         if (msg.sendCnt.ToString() != row["SendCnt"]?.ToString())
                         {
                             dataGridView2.Rows[index].Cells[(int)dataGridView2ColumnEnum.SendCnt].Value = msg.sendCnt.ToString();
+                            string hex = FormatSendBufHex(msg);
+                            if (row["RawData"]?.ToString() != hex)
+                            {
+                                dataGridView2.Rows[index].Cells["RawData"].Value = hex;
+                            }
                         }
                     }
                     index++;
