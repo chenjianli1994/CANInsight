@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
-using System.Management;
 using System.Runtime.InteropServices;
 using System.Runtime.Remoting.Channels;
 using System.Threading;
@@ -21,7 +20,6 @@ namespace PCAN_Client.PCAN_API
     {
         private MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
 
-        internal static int PCAN_ChannelNum = 0;
         ushort PCAN_DeviceChannel = 255;
         /// <summary>多通道连接：逻辑通道号 → PCAN句柄（通道配置驱动的批量连接；为空时走PCAN_DeviceChannel单连接兼容路径）</summary>
         private readonly Dictionary<byte, ushort> _connectedChannels = new Dictionary<byte, ushort>();
@@ -57,30 +55,6 @@ namespace PCAN_Client.PCAN_API
             PCANBasic.PCAN_USBBUS15,
             PCANBasic.PCAN_USBBUS16,
         };
-
-        public static string PcanChannelNumRefresh()
-        {
-            try
-            {
-                PCAN_ChannelNum = 0;
-                // 查询所有即插即用设备// 查询USB设备信息
-                string query = "SELECT * FROM Win32_PnPEntity WHERE Description LIKE '%PCAN%'";
-                ManagementObjectSearcher searcher = new ManagementObjectSearcher(query);
-                PCAN_ChannelNum = searcher.Get().Count;
-                Console.WriteLine($"PCAN通道数量: {PCAN_ChannelNum} ");
-                //ManagementObjectCollection managementBaseObjects = searcher.Get();
-                //foreach (ManagementObject device in managementBaseObjects)
-                //{
-                //    // 检查设备是否是USB设备
-                //    if (device["Caption"] != null && device["Caption"].ToString().Contains("PCAN"))
-                //    {
-                //        PCAN_ChannelNum++;
-                //    }
-                //}
-            }
-            catch { }
-            return "OK";
-        }
 
         public void SetPcanChannel(int channel)
         {
@@ -158,34 +132,25 @@ namespace PCAN_Client.PCAN_API
         internal IEnumerable<KeyValuePair<byte, ushort>> ConnectedChannels => _connectedChannels;
         public List<string> GetPCAN_ChannelRefresh()
         {
-            TPCANStatus result;
-            int ChannelNum;
             List<string> PCAN_Channel = new List<string>();
 
             Delay.start();
-            if(0 == PCAN_ChannelNum)
+            // 直接探测全部16个USBBUS槽位：不依赖WMI计数（Description不一定含PCAN、驱动残留节点会虚报），
+            // 且USBBUS序号可能不连续（设备按插入顺序占用编号），空槽位跳过继续探测
+            for (int i = 0; i < PCAN_DeviceChannelBuf.Length; i++)
             {
-                PcanChannelNumRefresh();
-            }
-            else
-            {
-                /* empty */
-            }
-            ChannelNum = PCAN_ChannelNum;
-
-            for (int i = 0; i < ChannelNum; i++)
-            {
-                if(PCAN_DeviceChannelBuf[i] == PCAN_DeviceChannel)
+                ushort handle = PCAN_DeviceChannelBuf[i];
+                if (handle == PCAN_DeviceChannel || _connectedChannels.ContainsValue(handle))
                 {
                     PCAN_Channel.Add("USB_" + (i + 1) + "(已连接)");
                     continue;
                 }
-                result = PCANBasic.Initialize(PCAN_DeviceChannelBuf[i], ConnectBaud, (TPCANType)0, 0, 0);
+                TPCANStatus result = PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
                     // 初始化成功：通道存在且空闲（还原释放）
                     PCAN_Channel.Add("USB_" + (i + 1) + "(空闲)");
-                    PCANBasic.Uninitialize(PCAN_DeviceChannelBuf[i]);
+                    PCANBasic.Uninitialize(handle);
                 }
                 else if (TPCANStatus.PCAN_ERROR_HWINUSE == result)
                 {
@@ -194,8 +159,7 @@ namespace PCAN_Client.PCAN_API
                 }
                 else
                 {
-                    // ILLHW/INITIALIZE等：硬件不存在（WMI可能有驱动残留节点），后续序号不再探测
-                    break;
+                    // ILLHW/INITIALIZE等：该槽位无硬件，跳过继续探测后续序号
                 }
             }
             Delay.stop();

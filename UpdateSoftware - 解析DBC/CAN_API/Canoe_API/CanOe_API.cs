@@ -21,6 +21,9 @@ namespace PCAN_Client.Canoe_API
         public List<ulong> ChannelMaskList = new List<ulong>();
         public Boolean aliveFlag = false;
         public Boolean CanFDFlag = false;
+        // 发送链路死亡检测：连续发送失败计数（成功清零），通知主界面断开后置位防重复；CANOE_Open重连成功时复位
+        private int _consecutiveTxFailures = 0;
+        private bool _txLinkDeadNotified = false;
         public class conoeData
         {
             public byte[] data;
@@ -160,6 +163,9 @@ namespace PCAN_Client.Canoe_API
             }
 
             aliveFlag = true;
+            // 重连成功：重新武装发送链路死亡检测
+            _consecutiveTxFailures = 0;
+            _txLinkDeadNotified = false;
             //CanoeCanTransmit();
             //ReceiveCANFDMessage();
 #if false
@@ -305,11 +311,18 @@ namespace PCAN_Client.Canoe_API
             //status = xlDriver.XL_CanTransmit(portHandle, appChannelMask, txEvent);
             if (status == XLDefine.XL_Status.XL_SUCCESS)
             {
+                _consecutiveTxFailures = 0;
                 return true;
             }
             else
             {
                 Console.WriteLine(status);
+                // 连续发送失败（通常为硬件被拔出/驱动异常）→ 通知主界面断开并提示。总线无ACK不会导致XL_CanTransmit失败，不会误触发
+                if (aliveFlag && !_txLinkDeadNotified && ++_consecutiveTxFailures >= 10)
+                {
+                    _txLinkDeadNotified = true;
+                    Main.main.OnCanoeTxLinkDead();
+                }
                 return false;
             }
         }

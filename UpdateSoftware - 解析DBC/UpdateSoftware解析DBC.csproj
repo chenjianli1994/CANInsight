@@ -387,7 +387,6 @@
     <Compile Include="util\FrameCrcCal.cs" />
     <Compile Include="util\SelfUpdater.cs" />
     <Compile Include="util\UiTheme.cs" />
-    <Compile Include="util\USBEventWatch.cs" />
     <EmbeddedResource Include="CanSend.resx">
       <DependentUpon>CanSend.cs</DependentUpon>
     </EmbeddedResource>

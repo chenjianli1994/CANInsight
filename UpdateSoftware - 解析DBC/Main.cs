@@ -2148,9 +2148,8 @@ namespace PCAN_Client
             {
                 Task task = new Task(() =>
                 {
-                    GetPCAN_ComRefresh();
-                    GetCanoe_ComRefresh();
-                    util.USBEventWatch.StartWMIWatcher(GetPCAN_ComRefresh);
+                    try { GetPCAN_ComRefresh(); } catch { /* 单个设备枚举失败不影响另一个 */ }
+                    try { GetCanoe_ComRefresh(); } catch { }
                 });
                 task.Start();
             }
@@ -2288,7 +2287,8 @@ namespace PCAN_Client
                         }
                         else
                         {
-                            /* empty */
+                            // 下拉无有效通道（未识别到硬件，或插入后未点下拉刷新）：明确提示替代静默
+                            if (ShowFlag) MessageBox.Show("未识别到PCAN硬件通道");
                         }
                     }
                 }));
@@ -2402,53 +2402,61 @@ namespace PCAN_Client
             }
             driverConfig = canoe_API.FindAllChannel(10, CanFDFlag);
 
+            // 后台线程同步计算CAN通道识别结果：供热插拔重试即时判断，并供UI委托显示
+            _lastCanoeChannels = new List<string>();
+            for (int i = 0; i < driverConfig.channelCount; i++)
+            {
+                // 只统计CAN通道：排除虚拟通道与LIN等非CAN通道（如VN1640A第5路为LIN）
+                if (driverConfig.channel[i].name.Contains("Virtual Channel")) continue;
+                if ((driverConfig.channel[i].channelBusCapabilities & vxlapi_NET.XLDefine.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_CAN) == 0) continue;
+                _lastCanoeChannels.Add(driverConfig.channel[i].name);
+            }
+
             if (this.IsHandleCreated)
             {
                 this.BeginInvoke((EventHandler)(delegate
                 {
-                    comboBox_CanoeChannel.Items.Clear();
-                    for (int i = 0; i < driverConfig.channelCount; i++)
+                    // 单通道模式才逐通道试开填充下拉框（每路约1秒）；多通道模式下拉框隐藏，跳过试开避免卡UI
+                    if (BaseParamter.BusChannels.Count == 0)
                     {
-                        if (!driverConfig.channel[i].name.Contains("Virtual Channel"))
+                        comboBox_CanoeChannel.Items.Clear();
+                        for (int i = 0; i < driverConfig.channelCount; i++)
                         {
-                            if (canoe_API.CANOE_Open((ulong)(1 << ((int)driverConfig.channel[i].channelIndex)), CanFDFlag))
+                            if (!driverConfig.channel[i].name.Contains("Virtual Channel"))
                             {
-                                comboBox_CanoeChannel.Items.Add(driverConfig.channel[i].name);
-                                if (Main.driverConfig.channel[i].name.Contains(Properties.Settings.Default.CANoe_Channel))
+                                if (canoe_API.CANOE_Open((ulong)(1 << ((int)driverConfig.channel[i].channelIndex)), CanFDFlag))
                                 {
-                                    comboBox_CanoeChannel.SelectedIndex = comboBox_CanoeChannel.Items.Count - 1;
+                                    comboBox_CanoeChannel.Items.Add(driverConfig.channel[i].name);
+                                    if (Main.driverConfig.channel[i].name.Contains(Properties.Settings.Default.CANoe_Channel))
+                                    {
+                                        comboBox_CanoeChannel.SelectedIndex = comboBox_CanoeChannel.Items.Count - 1;
+                                    }
+                                    canoe_API.CANOE_Close();
                                 }
-                                canoe_API.CANOE_Close();
+                                else
+                                {
+                                    /* empty */
+                                }
+                            }
+                        }
+                        if (comboBox_CanoeChannel.Items.Count > 0)
+                        {
+                            if (!comboBox_CanoeChannel.Text.Contains(Properties.Settings.Default.CANoe_Channel))
+                            {
+                                comboBox_CanoeChannel.SelectedIndex = 0;
                             }
                             else
                             {
                                 /* empty */
                             }
                         }
-                    }
-                    if (comboBox_CanoeChannel.Items.Count > 0)
-                    {
-                        if (!comboBox_CanoeChannel.Text.Contains(Properties.Settings.Default.CANoe_Channel))
-                        {
-                            comboBox_CanoeChannel.SelectedIndex = 0;
-                        }
                         else
                         {
-                            /* empty */
+                            comboBox_CanoeChannel.Items.Add("未连接CANoe");
+                            comboBox_CanoeChannel.SelectedIndex = 0;
                         }
                     }
-                    else
-                    {
-                        comboBox_CanoeChannel.Items.Add("未连接CANoe");
-                        comboBox_CanoeChannel.SelectedIndex = 0;
-                    }
                     // 多通道模式（有通道配置）时禁用下拉单选——连接走映射对话框批量连接，下拉选择无意义
-                    _lastCanoeChannels = new List<string>();
-                    for (int i = 0; i < driverConfig.channelCount; i++)
-                    {
-                        if (!driverConfig.channel[i].name.Contains("Virtual Channel"))
-                            _lastCanoeChannels.Add(driverConfig.channel[i].name);
-                    }
                     UpdateChannelComboDisplay();
                 }));
             }
@@ -2506,6 +2514,9 @@ namespace PCAN_Client
                         // 连接前清空数据（不改变scroll/fixed模式）
                         ClearDataOnly();
 
+                        // 点击连接时主动查询硬件（XL API约10ms，替代原热插拔自动识别），保证driverConfig为最新
+                        GetCanoe_ComRefresh();
+
                         // 多通道模式：枚举识别到的硬件通道，弹映射对话框让用户指定硬件通道→逻辑通道，确认后按映射组合mask打开
                         if (BaseParamter.BusChannels.Count > 0)
                         {
@@ -2513,6 +2524,8 @@ namespace PCAN_Client
                             for (int i = 0; i < driverConfig.channelCount; i++)
                             {
                                 if (driverConfig.channel[i].name.Contains("Virtual Channel")) continue;
+                                // 排除LIN等非CAN通道，只提供可打开的CAN通道供映射
+                                if ((driverConfig.channel[i].channelBusCapabilities & vxlapi_NET.XLDefine.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_CAN) == 0) continue;
                                 hwList.Add(new ChannelMappingDialog.HwChannelInfo
                                 {
                                     Hw = (byte)(driverConfig.channel[i].channelIndex + 1), // XL通道索引0-based→硬件通道号1-based
@@ -2637,13 +2650,20 @@ namespace PCAN_Client
         private void SetSummaryLabel(ToolStripLabel lbl, List<string> channels, string device)
         {
             if (lbl == null) return;
-            lbl.Text = channels.Count > 0
-                ? $"已识别{channels.Count}路{device}"
-                : $"未识别到{device}设备";
+            if (channels.Count > 0)
+                lbl.Text = $"已识别{channels.Count}路{device}";
+            else
+                lbl.Text = $"未识别到{device}设备";
             lbl.Visible = true;
             lbl.ToolTipText = channels.Count > 0
                 ? string.Join("\r\n", channels)
                 : $"未识别到{device}设备，请检查硬件连接与驱动";
+            // 强制工具栏同步重绘：Text变化后某些场景ToolStrip未自动刷新到屏幕
+            if (_connectionStrip != null)
+            {
+                _connectionStrip.PerformLayout();
+                _connectionStrip.Refresh();
+            }
         }
 
         /// <summary>断开PCAN连接并更新UI（供ChartFrom调用）</summary>
@@ -2677,6 +2697,25 @@ namespace PCAN_Client
                         button5.Text = "连接";
                         canoeOpenFlag = false;
                         GetCanoe_ComRefresh();
+                    }
+                }));
+            }
+        }
+
+        /// <summary>CANoe发送链路死亡（连续发送失败，通常为硬件被拔出）：断开连接、刷新识别状态并提示（供CanOe_API调用）</summary>
+        internal void OnCanoeTxLinkDead()
+        {
+            if (this.IsHandleCreated)
+            {
+                this.BeginInvoke(new EventHandler(delegate
+                {
+                    if (button5.Text.Equals("已连接"))
+                    {
+                        canoe_API.CANOE_Close();
+                        button5.Text = "连接";
+                        canoeOpenFlag = false;
+                        GetCanoe_ComRefresh();
+                        MessageBox.Show("CANoe硬件连接已断开，请检查设备连接");
                     }
                 }));
             }
