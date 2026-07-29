@@ -244,10 +244,11 @@ namespace PCAN_Client.Canoe_API
         {
             XLDefine.XL_Status status;
 
-            // 逻辑通道号 → 硬件通道 → 发送mask（该通道未单独配置硬件绑定时hw=channel）
+            // 逻辑通道号 → 硬件通道 → 发送mask（越界或未配置时hw=channel）
             byte hw = channel;
-            int chIdx = BaseParamter.GetChannelIndexByBlfId(channel);
-            if (chIdx >= 0) hw = BaseParamter.BusChannels[chIdx].EffectiveHwChannel;
+            int chIdx = channel - 1;
+            if (chIdx >= 0 && chIdx < BaseParamter.BusChannels.Count)
+                hw = BaseParamter.GetEffectiveHwChannel(chIdx);
             ulong txMask = (hw >= 1 && hw <= 64) ? (1UL << (hw - 1)) : appChannelMask;
 
             if (CanFDFlag)
@@ -513,7 +514,7 @@ namespace PCAN_Client.Canoe_API
                                         if (msgType == TPCANMessageType.PCAN_MESSAGE_STANDARD && datas.ID > 0x7FF)
                                             msgType = TPCANMessageType.PCAN_MESSAGE_EXTENDED;
                                         // XL事件channelIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号
-                                        byte logicCh = BaseParamter.GetBlfChannelByHw((byte)(xLcanRxEvent.channelIndex + 1));
+                                        byte logicCh = BaseParamter.GetLogicChannelByHw((byte)(xLcanRxEvent.channelIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
                                             CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
@@ -553,7 +554,7 @@ namespace PCAN_Client.Canoe_API
                                             ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
                                             : TPCANMessageType.PCAN_MESSAGE_STANDARD;
                                         // XL事件chanIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号
-                                        byte logicCh = BaseParamter.GetBlfChannelByHw((byte)(Main.main.canoe_API.xlEvent.chanIndex + 1));
+                                        byte logicCh = BaseParamter.GetLogicChannelByHw((byte)(Main.main.canoe_API.xlEvent.chanIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
                                             CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);

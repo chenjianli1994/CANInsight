@@ -106,11 +106,13 @@ namespace PCAN_Client.CAN_API
             {
                 BaseParamter.dbcHelper.CANDataDeal(ID, len, data, timestamp2, channel);
             }
-            // 记录实时CAN原始报文（用于ChartFrom保存BLF），带真实逻辑通道号
-            ChartFrom.RecordRealtimeRawMessage(ID, data, channel);
+            // BLF/ASC落盘统一使用BLF通道号（逻辑通道号→BlfChannelId转换；回放时按BlfChannelId匹配解析）
+            byte blfCh = BaseParamter.GetBlfIdByLogicChannel(channel);
+            // 记录实时CAN原始报文（用于ChartFrom保存BLF）
+            ChartFrom.RecordRealtimeRawMessage(ID, data, blfCh);
             if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
             {
-                Log.AddCanMessageToWrite(ID, data, timestamp2, channel);
+                Log.AddCanMessageToWrite(ID, data, timestamp2, blfCh);
             }
             if (0 == startTime)
             {
@@ -135,10 +137,10 @@ namespace PCAN_Client.CAN_API
                 {
                     time_us = timestamp2;
 
-                    // 批量缓冲数据
+                    // 批量缓冲数据（ASC通道列写BLF通道号）
                     lock (_bufferLock)
                     {
-                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, channel);
+                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, blfCh);
                     }
 
                     time_us_last = time_us;

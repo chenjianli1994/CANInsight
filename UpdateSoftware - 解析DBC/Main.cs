@@ -526,7 +526,7 @@ namespace PCAN_Client
                 // 确保所有(通道,MsgId)在_displayList中存在
                 foreach (var rawMsg in messages)
                 {
-                    byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1; // ASC/BIN无通道信息时归入通道1
+                    byte ch = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1; // rawMsg.Channel为BLF通道号→逻辑通道号
                     long key = MsgKey(rawMsg.CanId, ch);
                     if (!_msgIndexMap.ContainsKey(key))
                     {
@@ -559,7 +559,7 @@ namespace PCAN_Client
                 {
                     foreach (var rawMsg in messages)
                     {
-                        byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                        byte ch = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1; // rawMsg.Channel为BLF通道号→逻辑通道号
                         long key = MsgKey(rawMsg.CanId, ch);
                         // 预缓存Description/Node
                         if (!_msgMetaCache.TryGetValue(key, out _))
@@ -604,7 +604,7 @@ namespace PCAN_Client
                 var lastTsPerId = new Dictionary<long, ulong>();
                 foreach (var rawMsg in messages)
                 {
-                    byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                    byte ch = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1; // rawMsg.Channel为BLF通道号→逻辑通道号
                     long key = MsgKey(rawMsg.CanId, ch);
                     if (!_msgIndexMap.TryGetValue(key, out int idx)) continue;
                     var info = _displayList[idx];
@@ -668,7 +668,7 @@ namespace PCAN_Client
             // 预缓存所有(通道,MsgId)的描述/节点信息
             foreach (var rawMsg in frames)
             {
-                byte ch = rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1;
+                byte ch = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1; // rawMsg.Channel为BLF通道号→逻辑通道号
                 long key = MsgKey(rawMsg.CanId, ch);
                 if (!_msgMetaCache.ContainsKey(key))
                 {
@@ -1649,11 +1649,17 @@ namespace PCAN_Client
             };
 
             _connectionStrip.Items.Add(new ToolStripLabel("PCAN"));
-            _connectionStrip.Items.Add(new ToolStripControlHost(comboBox1));
+            _hostPcanCombo = new ToolStripControlHost(comboBox1);
+            _connectionStrip.Items.Add(_hostPcanCombo);
+            _lblPcanSummary = CreateSummaryLabel(comboBox1);
+            _connectionStrip.Items.Add(_lblPcanSummary);
             _connectionStrip.Items.Add(new ToolStripControlHost(button1));
             _connectionStrip.Items.Add(new ToolStripSeparator());
             _connectionStrip.Items.Add(new ToolStripLabel("CANoe"));
-            _connectionStrip.Items.Add(new ToolStripControlHost(comboBox_CanoeChannel));
+            _hostCanoeCombo = new ToolStripControlHost(comboBox_CanoeChannel);
+            _connectionStrip.Items.Add(_hostCanoeCombo);
+            _lblCanoeSummary = CreateSummaryLabel(comboBox_CanoeChannel);
+            _connectionStrip.Items.Add(_lblCanoeSummary);
             _connectionStrip.Items.Add(new ToolStripControlHost(button5));
             _connectionStrip.Items.Add(new ToolStripSeparator());
             _connectionStrip.Items.Add(new ToolStripControlHost(radioButtonCANFD));
@@ -2161,6 +2167,8 @@ namespace PCAN_Client
 
             // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送使用
             BaseParamter.LoadBusChannelsConfig();
+            // 通道配置加载后刷新连接区显示（多通道模式：隐藏下拉框+显示硬件识别摘要文本）
+            UpdateChannelComboDisplay();
 
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
             this.FormClosing += Main_FormClosingEx;
@@ -2212,9 +2220,30 @@ namespace PCAN_Client
                         // 连接前清空数据（不改变scroll/fixed模式）
                         ClearDataOnly();
 
-                        // 多通道模式：通道配置中绑定了硬件通道时，批量连接所有配置的通道（优先于下拉单选）
+                        // 多通道模式：枚举识别到的硬件通道，弹映射对话框让用户指定硬件通道→逻辑通道，确认后按映射连接
                         if (BaseParamter.BusChannels.Count > 0)
                         {
+                            var hwList = new List<ChannelMappingDialog.HwChannelInfo>();
+                            var pcanList = pCAN_API.GetPCAN_ChannelRefresh();
+                            foreach (var text in pcanList)
+                            {
+                                // 格式："USB_1(空闲)"/"USB_2(已占用)"
+                                string name = text.Split('(')[0];
+                                string status = text.Contains("(") ? text.Split('(', ')')[1] : "";
+                                if (int.TryParse(name.Replace("USB_", ""), out int hw) && hw >= 1 && hw <= 16)
+                                {
+                                    hwList.Add(new ChannelMappingDialog.HwChannelInfo { Hw = (byte)hw, Name = name, Status = status });
+                                }
+                            }
+                            if (hwList.Count == 0)
+                            {
+                                if (ShowFlag) MessageBox.Show("未识别到PCAN硬件通道");
+                                return;
+                            }
+                            var dlg = new ChannelMappingDialog("PCAN", hwList, BaseParamter.BusChannels);
+                            if (dlg.ShowDialog(this) != DialogResult.OK) return; // 用户取消则不连接
+                            BaseParamter.SaveBusChannelsConfig(); // 记忆本次映射
+
                             int connected = pCAN_API.ConnectMulti(CanFDFlag);
                             if (connected > 0)
                             {
@@ -2227,7 +2256,7 @@ namespace PCAN_Client
                                 pcanOpenFlag = false;
                                 if (ShowFlag)
                                 {
-                                    MessageBox.Show("多通道连接失败：所有配置通道均连接失败（请检查硬件通道绑定与设备）");
+                                    MessageBox.Show("多通道连接失败：所有映射通道均连接失败（请检查硬件通道映射与设备状态）");
                                 }
                             }
                             return;
@@ -2306,6 +2335,7 @@ namespace PCAN_Client
                 /* empty */
             }
             List<string> PCAN_Channel = Main.main.pCAN_API.GetPCAN_ChannelRefresh();
+            _lastPcanChannels = new List<string>(PCAN_Channel); // 缓存识别结果，供多通道模式摘要显示
             if(comboBox1.Items.Count == PCAN_Channel.Count)
             {
                 for(int i=0; i< comboBox1.Items.Count; i++)
@@ -2348,6 +2378,8 @@ namespace PCAN_Client
                         comboBox1.Items.Add("未连接PCAN");
                         comboBox1.SelectedIndex = 0;
                     }
+                    // 多通道模式（有通道配置）时禁用下拉单选——连接走映射对话框批量连接，下拉选择无意义
+                    UpdateChannelComboDisplay();
                 }));
             }
             else
@@ -2410,6 +2442,14 @@ namespace PCAN_Client
                         comboBox_CanoeChannel.Items.Add("未连接CANoe");
                         comboBox_CanoeChannel.SelectedIndex = 0;
                     }
+                    // 多通道模式（有通道配置）时禁用下拉单选——连接走映射对话框批量连接，下拉选择无意义
+                    _lastCanoeChannels = new List<string>();
+                    for (int i = 0; i < driverConfig.channelCount; i++)
+                    {
+                        if (!driverConfig.channel[i].name.Contains("Virtual Channel"))
+                            _lastCanoeChannels.Add(driverConfig.channel[i].name);
+                    }
+                    UpdateChannelComboDisplay();
                 }));
             }
             else
@@ -2466,13 +2506,34 @@ namespace PCAN_Client
                         // 连接前清空数据（不改变scroll/fixed模式）
                         ClearDataOnly();
 
-                        // 多通道模式：通道配置中绑定了硬件通道时，组合mask一次打开所有配置通道（优先于下拉单选）
+                        // 多通道模式：枚举识别到的硬件通道，弹映射对话框让用户指定硬件通道→逻辑通道，确认后按映射组合mask打开
                         if (BaseParamter.BusChannels.Count > 0)
                         {
-                            ulong mask = 0;
-                            foreach (var ch in BaseParamter.BusChannels)
+                            var hwList = new List<ChannelMappingDialog.HwChannelInfo>();
+                            for (int i = 0; i < driverConfig.channelCount; i++)
                             {
-                                byte hw = ch.EffectiveHwChannel;
+                                if (driverConfig.channel[i].name.Contains("Virtual Channel")) continue;
+                                hwList.Add(new ChannelMappingDialog.HwChannelInfo
+                                {
+                                    Hw = (byte)(driverConfig.channel[i].channelIndex + 1), // XL通道索引0-based→硬件通道号1-based
+                                    Name = driverConfig.channel[i].name,
+                                    Status = ""
+                                });
+                            }
+                            if (hwList.Count == 0)
+                            {
+                                if (ShowFlag) MessageBox.Show("未识别到CANoe硬件通道");
+                                return;
+                            }
+                            var dlg = new ChannelMappingDialog("CANoe", hwList, BaseParamter.BusChannels);
+                            if (dlg.ShowDialog(this) != DialogResult.OK) return; // 用户取消则不连接
+                            BaseParamter.SaveBusChannelsConfig(); // 记忆本次映射
+
+                            ulong mask = 0;
+                            for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
+                            {
+                                if (BaseParamter.BusChannels[i].HwChannel == ChannelMappingDialog.NotConnect) continue; // 本次不连接
+                                byte hw = BaseParamter.GetEffectiveHwChannel(i);
                                 if (hw >= 1 && hw <= 64) mask |= (1UL << (hw - 1));
                             }
                             if (mask != 0 && canoe_API.CANOE_Open(mask, CanFDFlag))
@@ -2486,7 +2547,7 @@ namespace PCAN_Client
                                 canoeOpenFlag = false;
                                 if (ShowFlag)
                                 {
-                                    MessageBox.Show("多通道连接失败（请检查硬件通道绑定与设备）");
+                                    MessageBox.Show("多通道连接失败（请检查硬件通道映射与设备状态）");
                                 }
                             }
                             return;
@@ -2522,6 +2583,69 @@ namespace PCAN_Client
                 }));
             }
         }
+        // === 硬件识别状态显示（多通道模式）===
+        // 注意：comboBox1/comboBox_CanoeChannel被ToolStripControlHost托管进顶部工具栏，
+        // Parent是ToolStrip（Controls只读），摘要只能做成ToolStripLabel项插入工具栏
+        private ToolStripControlHost _hostPcanCombo;
+        private ToolStripControlHost _hostCanoeCombo;
+        private ToolStripLabel _lblPcanSummary;
+        private ToolStripLabel _lblCanoeSummary;
+        private List<string> _lastPcanChannels = new List<string>();
+        private List<string> _lastCanoeChannels = new List<string>();
+
+        /// <summary>通道配置变化后刷新连接区显示（多通道模式隐藏下拉单选，连接走映射对话框）</summary>
+        internal void RefreshChannelComboState()
+        {
+            UpdateChannelComboDisplay();
+        }
+
+        /// <summary>创建硬件识别摘要工具栏文本项（多通道模式替代下拉框显示，白底黑字、字号小一档保证显示完整）</summary>
+        private ToolStripLabel CreateSummaryLabel(System.Windows.Forms.ComboBox combo)
+        {
+            return new ToolStripLabel
+            {
+                Visible = false,
+                ForeColor = SystemColors.ControlText,
+                BackColor = SystemColors.Window,
+                Font = new Font(combo.Font.FontFamily, combo.Font.Size - 1f)
+            };
+        }
+
+        /// <summary>刷新连接区显示：单通道显示下拉框，多通道显示硬件识别摘要文本（仅更新显示，不重新枚举硬件、无副作用）</summary>
+        internal void UpdateChannelComboDisplay()
+        {
+            if (!this.IsHandleCreated) return;
+            this.BeginInvoke((EventHandler)(delegate
+            {
+                bool single = BaseParamter.BusChannels.Count == 0;
+                if (_hostPcanCombo != null) _hostPcanCombo.Visible = single;
+                if (_hostCanoeCombo != null) _hostCanoeCombo.Visible = single;
+                if (!single)
+                {
+                    // 多通道模式：文本显示硬件识别摘要（Tooltip显示每路明细）
+                    SetSummaryLabel(_lblPcanSummary, _lastPcanChannels, "PCAN");
+                    SetSummaryLabel(_lblCanoeSummary, _lastCanoeChannels, "CANoe");
+                }
+                else
+                {
+                    if (_lblPcanSummary != null) _lblPcanSummary.Visible = false;
+                    if (_lblCanoeSummary != null) _lblCanoeSummary.Visible = false;
+                }
+            }));
+        }
+
+        private void SetSummaryLabel(ToolStripLabel lbl, List<string> channels, string device)
+        {
+            if (lbl == null) return;
+            lbl.Text = channels.Count > 0
+                ? $"已识别{channels.Count}路{device}"
+                : $"未识别到{device}设备";
+            lbl.Visible = true;
+            lbl.ToolTipText = channels.Count > 0
+                ? string.Join("\r\n", channels)
+                : $"未识别到{device}设备，请检查硬件连接与驱动";
+        }
+
         /// <summary>断开PCAN连接并更新UI（供ChartFrom调用）</summary>
         internal void DisconnectPCAN()
         {

@@ -44,42 +44,72 @@ namespace PCAN_Client
             dbcHelper.RebuildMessageDict();
         }
 
-        /// <summary>按逻辑通道号（BlfChannelId）查找通道索引；未找到返回 -1</summary>
-        public static int GetChannelIndexByBlfId(byte blfChannelId)
+        /* ===== 三类通道标识（严格区分，互不混用）=====
+         * 逻辑通道号：通道在 BusChannels 中的序号（1-based，CH1=第1个通道）——实时收发链路全程使用
+         * 硬件通道号：PCAN USBBUS序号 / CANoe通道号（HwChannel）——仅连接映射使用
+         * BLF通道号：BLF文件 mChannel（BlfChannelId）——仅BLF读取匹配/记录写出使用
+         */
+
+        /// <summary>通道的逻辑通道号（列表序号，1-based）</summary>
+        public static byte GetLogicChannel(CanBusChannel ch)
         {
-            for (int i = 0; i < BusChannels.Count; i++)
-            {
-                if (BusChannels[i].BlfChannelId == blfChannelId) return i;
-            }
-            return -1;
+            int idx = BusChannels.IndexOf(ch);
+            return (byte)(idx >= 0 ? idx + 1 : 1);
         }
 
-        /// <summary>按逻辑通道号取该通道的DBC解析实例；无匹配或该通道未配置时返回 null（调用方回退聚合视图）</summary>
-        public static DbcHelper GetDbcHelperByChannel(byte blfChannelId)
+        /// <summary>通道实际生效的硬件通道号：HwChannel>0用配置值，否则默认=逻辑通道号（索引+1）</summary>
+        public static byte GetEffectiveHwChannel(int index)
         {
-            int idx = GetChannelIndexByBlfId(blfChannelId);
-            if (idx >= 0 && BusChannels[idx].IsConfigured) return BusChannels[idx].DbcHelper;
+            if (index < 0 || index >= BusChannels.Count) return (byte)(index + 1);
+            var ch = BusChannels[index];
+            return ch.HwChannel > 0 ? ch.HwChannel : (byte)(index + 1);
+        }
+
+        /// <summary>按逻辑通道号取该通道的DBC解析实例；越界或未配置时返回 null（调用方回退聚合视图）</summary>
+        public static DbcHelper GetDbcHelperByChannel(byte logicChannel)
+        {
+            int idx = logicChannel - 1;
+            if (idx >= 0 && idx < BusChannels.Count && BusChannels[idx].IsConfigured)
+                return BusChannels[idx].DbcHelper;
             return null;
         }
 
-        /// <summary>按物理硬件通道号反查逻辑通道号；无匹配返回入参本身（兼容未配置场景）</summary>
-        public static byte GetBlfChannelByHw(byte hwChannel)
+        /// <summary>按物理硬件通道号反查逻辑通道号（连接映射 HwChannel → 列表序号）；无匹配返回入参本身（兼容未配置场景）</summary>
+        public static byte GetLogicChannelByHw(byte hwChannel)
         {
-            foreach (var ch in BusChannels)
+            for (int i = 0; i < BusChannels.Count; i++)
             {
-                if (ch.EffectiveHwChannel == hwChannel) return ch.BlfChannelId;
+                if (GetEffectiveHwChannel(i) == hwChannel) return (byte)(i + 1);
             }
             return hwChannel;
+        }
+
+        /// <summary>按BLF文件通道号反查逻辑通道号（回放路径：mChannel → 列表序号）；无匹配返回入参本身</summary>
+        public static byte GetLogicChannelByBlfId(byte blfChannelId)
+        {
+            for (int i = 0; i < BusChannels.Count; i++)
+            {
+                if (BusChannels[i].BlfChannelId == blfChannelId) return (byte)(i + 1);
+            }
+            return blfChannelId;
+        }
+
+        /// <summary>逻辑通道号 → BLF文件通道号（实时记录写BLF/ASC时落盘用）；越界返回入参本身</summary>
+        public static byte GetBlfIdByLogicChannel(byte logicChannel)
+        {
+            int idx = logicChannel - 1;
+            if (idx >= 0 && idx < BusChannels.Count) return BusChannels[idx].BlfChannelId;
+            return logicChannel;
         }
 
         /// <summary>反查DBC报文所属的逻辑通道号（聚合视图中报文为各通道同一对象引用）；未匹配返回 1（默认通道）</summary>
         public static byte GetChannelOfMessage(CAN_Data.Message msg)
         {
             if (msg == null) return 1;
-            foreach (var ch in BusChannels)
+            for (int i = 0; i < BusChannels.Count; i++)
             {
-                if (!ch.IsConfigured) continue;
-                if (ch.DbcHelper.dbcFile.messages.Contains(msg)) return ch.BlfChannelId;
+                if (!BusChannels[i].IsConfigured) continue;
+                if (BusChannels[i].DbcHelper.dbcFile.messages.Contains(msg)) return (byte)(i + 1);
             }
             return 1;
         }

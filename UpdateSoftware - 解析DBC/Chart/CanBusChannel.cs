@@ -20,12 +20,9 @@ namespace PCAN_Client
 
         /// <summary>
         /// 绑定的物理硬件通道号（PCAN USBBUS序号 / CANoe(Vector)通道号），实时收发时与逻辑通道号映射；
-        /// 0 或未配置时默认等于 BlfChannelId
+        /// 0=未单独配置（生效值=逻辑通道号，见 BaseParamter.GetEffectiveHwChannel）
         /// </summary>
         public byte HwChannel { get; set; } = 0;
-
-        /// <summary>实际生效的硬件通道号（未单独配置时跟随逻辑通道号）</summary>
-        public byte EffectiveHwChannel => HwChannel > 0 ? HwChannel : BlfChannelId;
 
         /// <summary>
         /// 该通道使用的DBC文件路径

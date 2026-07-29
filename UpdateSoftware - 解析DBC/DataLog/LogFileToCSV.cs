@@ -599,11 +599,12 @@ namespace PCAN_Client.DataLog
                             lastTimeMicroseconds = currentTimeMicroseconds;
 
                             if (msgChannel == 0) msgChannel = 1; // 容错：BLF通道号应1-based
+                            byte logicCh = BaseParamter.GetLogicChannelByBlfId(msgChannel); // BLF通道号→逻辑通道号（解码路由用）
 
                             if (saveExcelFlag)
                             {
                                 // 使用时间差（微秒）处理DBC数据（按通道选择对应DBC解析）
-                                BaseParamter.dbcHelper.CANDataDeal(canid, (ushort)dataLen, datas, (ulong)deltaTimeMicroseconds, msgChannel);
+                                BaseParamter.dbcHelper.CANDataDeal(canid, (ushort)dataLen, datas, (ulong)deltaTimeMicroseconds, logicCh);
                             }
 
                             // 生成ASC格式输出（通道列写BLF实际通道号）
@@ -1074,8 +1075,8 @@ namespace PCAN_Client.DataLog
             if (!dataValid)
                 return;
 
-            // 处理CAN数据（按ASC通道列路由对应DBC解析）
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
+            // 处理CAN数据（ASC通道列为BLF通道号语义，转逻辑通道号路由对应DBC解析）
+            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
 
             messageCount++;
 
@@ -1148,8 +1149,8 @@ namespace PCAN_Client.DataLog
             if (!dataValid)
                 return;
 
-            // 处理CAN数据（按ASC通道列路由对应DBC解析）
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
+            // 处理CAN数据（ASC通道列为BLF通道号语义，转逻辑通道号路由对应DBC解析）
+            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
             if(canId == 0x5a0)
             {
                 Console.WriteLine($"ID:{canId:X2} len:{dataLength} { string.Join(" ", datas.Select(b => b.ToString("X2")))}" );
@@ -1334,7 +1335,8 @@ namespace PCAN_Client.DataLog
                             byte[] datas = reader.ReadBytes(dataLength);
                             if (saveExcelFlag)
                             {
-                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
+                                // 裸格式通道号为BLF通道号语义，转逻辑通道号路由解码
+                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
                             }
 
                             messageCount++;
@@ -1478,7 +1480,8 @@ namespace PCAN_Client.DataLog
                             byte[] datas = reader.ReadBytes(dataLength);
                             if (saveExcelFlag)
                             {
-                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, msgChannel);
+                                // 裸格式通道号为BLF通道号语义，转逻辑通道号路由解码
+                                BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
                             }
 
                             messageCount++;

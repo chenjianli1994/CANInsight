@@ -92,7 +92,7 @@ namespace PCAN_Client.PCAN_API
         {
             int idx = Array.IndexOf(PCAN_DeviceChannelBuf, PCAN_DeviceChannel);
             byte hw = (byte)(idx >= 0 ? idx + 1 : 1);
-            return BaseParamter.GetBlfChannelByHw(hw);
+            return BaseParamter.GetLogicChannelByHw(hw);
         }
 
         public void PCAN_ChannelUninitialize()
@@ -118,9 +118,10 @@ namespace PCAN_Client.PCAN_API
             _connectedChannels.Clear();
             PCAN_ReceiveThreadAlive = 0;
 
-            foreach (var ch in BaseParamter.BusChannels)
+            for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
             {
-                byte hw = ch.EffectiveHwChannel;
+                var ch = BaseParamter.BusChannels[i];
+                byte hw = BaseParamter.GetEffectiveHwChannel(i);
                 if (hw < 1 || hw > 16) continue;
                 ushort handle = PCAN_DeviceChannelBuf[hw - 1];
 
@@ -130,7 +131,7 @@ namespace PCAN_Client.PCAN_API
                     : PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
-                    _connectedChannels[ch.BlfChannelId] = handle;
+                    _connectedChannels[(byte)(i + 1)] = handle; // key=逻辑通道号（接收轮询按此上报）
                 }
                 else
                 {
@@ -180,32 +181,21 @@ namespace PCAN_Client.PCAN_API
                     continue;
                 }
                 result = PCANBasic.Initialize(PCAN_DeviceChannelBuf[i], ConnectBaud, (TPCANType)0, 0, 0);
-                if (TPCANStatus.PCAN_ERROR_HWINUSE == result)
-                {
-                    PCAN_Channel.Add("USB_" + (i + 1) + "(已占用)");
-                    continue;
-                }
-                else if (TPCANStatus.PCAN_ERROR_ILLHW == result)
-                {
-                    break;
-                }
-                else
-                {
-                    /* empty */
-                }
-                result = PCANBasic.GetStatus(PCAN_DeviceChannelBuf[i]);
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
+                    // 初始化成功：通道存在且空闲（还原释放）
                     PCAN_Channel.Add("USB_" + (i + 1) + "(空闲)");
                     PCANBasic.Uninitialize(PCAN_DeviceChannelBuf[i]);
                 }
-                else if (TPCANStatus.PCAN_ERROR_INITIALIZE == result)
+                else if (TPCANStatus.PCAN_ERROR_HWINUSE == result)
                 {
+                    // 通道存在但被其他程序占用
                     PCAN_Channel.Add("USB_" + (i + 1) + "(已占用)");
                 }
                 else
                 {
-                    PCAN_Channel.Add("USB_" + (i + 1) + "(空闲)");
+                    // ILLHW/INITIALIZE等：硬件不存在（WMI可能有驱动残留节点），后续序号不再探测
+                    break;
                 }
             }
             Delay.stop();

@@ -2045,8 +2045,9 @@ namespace PCAN_Client
                 tMsg.LEN = (byte)rawMsg.Data.Length;
                 tMsg.DATA = rawMsg.Data;
                 ulong tUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
-                // 回放帧带BLF通道号：报文列表同ID按通道分行、各自通道DBC解析
-                Main.main.RecordCanMessage(tMsg, tUs, false, true, rawMsg.Channel > 0 ? rawMsg.Channel : (byte)1);
+                // 回放帧rawMsg.Channel为BLF通道号，转换为逻辑通道号（列表分行/各自通道DBC解析）
+                byte logicCh = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1;
+                Main.main.RecordCanMessage(tMsg, tUs, false, true, logicCh);
 
                 // 流式模式：记录最新的5w帧原始报文
                 if (_streamingMode)
@@ -2190,6 +2191,7 @@ namespace PCAN_Client
                     try
                     {
                         Main.main?.UpdateDbcTreeview();
+                        Main.main?.RefreshChannelComboState(); // 通道配置变化：刷新连接下拉框可用状态
                         if (Main.canSendOpenFlag) Main.canSend?.UpdateDbcTreeview();
                     }
                     catch { /* 窗口未初始化时忽略 */ }
