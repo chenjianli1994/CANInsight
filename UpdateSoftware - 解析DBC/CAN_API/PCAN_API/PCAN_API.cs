@@ -61,12 +61,12 @@ namespace PCAN_Client.PCAN_API
             PCAN_DeviceChannel = PCAN_DeviceChannelBuf[channel];
         }
 
-        /// <summary>当前连接的物理通道（PCAN_USBBUSn）对应的逻辑通道号（经通道配置的硬件通道映射）</summary>
+        /// <summary>当前连接的物理通道（PCAN_USBBUSn）对应的逻辑通道号（经通道配置的硬件通道映射；混合硬件时限定PCAN类型反查消除同号歧义）</summary>
         private byte GetCurrentLogicChannel()
         {
             int idx = Array.IndexOf(PCAN_DeviceChannelBuf, PCAN_DeviceChannel);
             byte hw = (byte)(idx >= 0 ? idx + 1 : 1);
-            return BaseParamter.GetLogicChannelByHw(hw);
+            return BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypePcan, hw);
         }
 
         public void PCAN_ChannelUninitialize()
@@ -95,8 +95,10 @@ namespace PCAN_Client.PCAN_API
             for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
             {
                 var ch = BaseParamter.BusChannels[i];
+                string hwType = BaseParamter.GetEffectiveHwType(i);
+                if (hwType != "" && hwType != BaseParamter.HwTypePcan) continue; // 混合硬件：只连PCAN类型或未指定的通道
                 byte hw = BaseParamter.GetEffectiveHwChannel(i);
-                if (hw < 1 || hw > 16) continue;
+                if (hw < 1 || hw > 16) continue; // 含255=不连接哨兵
                 ushort handle = PCAN_DeviceChannelBuf[hw - 1];
 
                 PCANBasic.Uninitialize(handle);

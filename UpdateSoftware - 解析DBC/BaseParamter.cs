@@ -48,7 +48,15 @@ namespace PCAN_Client
          * 逻辑通道号：通道在 BusChannels 中的序号（1-based，CH1=第1个通道）——实时收发链路全程使用
          * 硬件通道号：PCAN USBBUS序号 / CANoe通道号（HwChannel）——仅连接映射使用
          * BLF通道号：BLF文件 mChannel（BlfChannelId）——仅BLF读取匹配/记录写出使用
+         * 硬件类型：HwType（"PCAN"/"CANoe"），混合硬件时收发按类型路由；""=未指定（旧配置兼容）
          */
+
+        /// <summary>硬件类型常量：PCAN（Peak）</summary>
+        public const string HwTypePcan = "PCAN";
+        /// <summary>硬件类型常量：CANoe（Vector XL）</summary>
+        public const string HwTypeCanoe = "CANoe";
+        /// <summary>不连接哨兵值（写入 HwChannel 表示该逻辑通道不连接硬件）</summary>
+        public const byte HwNotConnect = 255;
 
         /// <summary>通道的逻辑通道号（列表序号，1-based）</summary>
         public static byte GetLogicChannel(CanBusChannel ch)
@@ -65,6 +73,13 @@ namespace PCAN_Client
             return ch.HwChannel > 0 ? ch.HwChannel : (byte)(index + 1);
         }
 
+        /// <summary>通道配置的硬件类型（"PCAN"/"CANoe"/""）；空=未指定，由调用方按当前连接的设备类型解释（兼容旧配置）</summary>
+        public static string GetEffectiveHwType(int index)
+        {
+            if (index < 0 || index >= BusChannels.Count) return "";
+            return BusChannels[index].HwType ?? "";
+        }
+
         /// <summary>按逻辑通道号取该通道的DBC解析实例；越界或未配置时返回 null（调用方回退聚合视图）</summary>
         public static DbcHelper GetDbcHelperByChannel(byte logicChannel)
         {
@@ -79,6 +94,18 @@ namespace PCAN_Client
         {
             for (int i = 0; i < BusChannels.Count; i++)
             {
+                if (GetEffectiveHwChannel(i) == hwChannel) return (byte)(i + 1);
+            }
+            return hwChannel;
+        }
+
+        /// <summary>按硬件类型+物理硬件通道号反查逻辑通道号（混合硬件时消除PCAN/CANoe同号歧义，只在同类型通道中匹配；HwType未指定的通道视为与同类型匹配）；无匹配返回入参本身</summary>
+        public static byte GetLogicChannelByHw(string hwType, byte hwChannel)
+        {
+            for (int i = 0; i < BusChannels.Count; i++)
+            {
+                string t = GetEffectiveHwType(i);
+                if (t != "" && t != hwType) continue; // 已指定类型且不匹配的跳过；未指定的视为匹配（旧配置兼容）
                 if (GetEffectiveHwChannel(i) == hwChannel) return (byte)(i + 1);
             }
             return hwChannel;
@@ -123,7 +150,7 @@ namespace PCAN_Client
             {
                 var list = BusChannels
                     .Select(ch => new BusChannelConfig(ch.Name, ch.BlfChannelId, ch.DbcFilePath ?? "")
-                    { HwChannel = ch.HwChannel })
+                    { HwChannel = ch.HwChannel, HwType = ch.HwType ?? "" })
                     .ToList();
                 string json = Newtonsoft.Json.JsonConvert.SerializeObject(list, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(BusChannelsConfigPath, json);
@@ -151,6 +178,7 @@ namespace PCAN_Client
                 {
                     var ch = new CanBusChannel(cfg.Name, cfg.BlfChannelId, cfg.DbcFilePath ?? "");
                     ch.HwChannel = cfg.HwChannel; // 旧配置无此字段时为0，EffectiveHwChannel自动跟随逻辑通道号
+                    ch.HwType = cfg.HwType ?? ""; // 旧配置无此字段时为空，连接时按设备类型认领
                     if (!string.IsNullOrWhiteSpace(ch.DbcFilePath) && File.Exists(ch.DbcFilePath))
                     {
                         try

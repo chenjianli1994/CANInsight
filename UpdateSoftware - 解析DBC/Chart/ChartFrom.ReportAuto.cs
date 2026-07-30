@@ -390,6 +390,7 @@ namespace PCAN_Client
                     string dbcPath = ResolvePortableDbcPath(bcConfig.DbcFilePath, type.Group);
                     var bc = new CanBusChannel(bcConfig.Name, bcConfig.BlfChannelId, dbcPath);
                     bc.HwChannel = bcConfig.HwChannel; // 旧工况JSON无此字段时为0，自动跟随逻辑通道号
+                    bc.HwType = bcConfig.HwType ?? ""; // 旧工况JSON无此字段时为空，连接时按设备类型认领
                     // 尝试加载DBC文件
                     if (!string.IsNullOrEmpty(dbcPath))
                     {
@@ -406,7 +407,7 @@ namespace PCAN_Client
                     }
                     _busChannels.Add(bc);
                 }
-                _btnBusConfig.Text = $"通道配置({_busChannels.Count})";
+                _btnBusConfig.Text = $"通道管理({_busChannels.Count})";
 
                 // 工况通道即全局唯一DBC源：刷新聚合视图(Main/CanSend/版本校验用)并持久化
                 BaseParamter.RefreshGlobalDbcFromChannels();

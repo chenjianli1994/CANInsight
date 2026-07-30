@@ -44,7 +44,12 @@ namespace PCAN_Client.CAN_API
             Boolean result = false;
             TPCANMsg tPCANMsg = new TPCANMsg();
 
-            if (Main.pcanOpenFlag)
+            // 混合硬件：按逻辑通道配置的硬件类型路由；未指定类型时按现状兜底（PCAN优先）
+            string hwType = BaseParamter.GetEffectiveHwType(channel - 1);
+            bool usePcan = hwType == BaseParamter.HwTypePcan || (hwType == "" && Main.pcanOpenFlag);
+            bool useCanoe = !usePcan && (hwType == BaseParamter.HwTypeCanoe || hwType == "");
+
+            if (usePcan && Main.pcanOpenFlag)
             {
                 tPCANMsg.DATA = data;
                 tPCANMsg.ID = ID;
@@ -65,7 +70,7 @@ namespace PCAN_Client.CAN_API
                     PendingTxId = 0xFFFFFFFF;
                 }
             }
-            else if (Main.canoeOpenFlag)
+            else if (useCanoe && Main.canoeOpenFlag)
             {
                 if (Main.main.canoe_API.CanoeCanTransmit(ID, len, data, channel))
                 {

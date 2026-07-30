@@ -25,6 +25,12 @@ namespace PCAN_Client
         public byte HwChannel { get; set; } = 0;
 
         /// <summary>
+        /// 绑定的硬件类型（BaseParamter.HwTypePcan / HwTypeCanoe），在通道管理窗口选择绑定硬件时固化；
+        /// ""=未指定（兼容旧配置：连接哪类硬件时被哪类认领，见 BaseParamter.GetEffectiveHwType）
+        /// </summary>
+        public string HwType { get; set; } = "";
+
+        /// <summary>
         /// 该通道使用的DBC文件路径
         /// </summary>
         public string DbcFilePath { get; set; } = "";

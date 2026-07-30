@@ -37,6 +37,7 @@ namespace PCAN_Client.ReportAuto
         public string Name;           // 通道名称，如 "CAN1", "CAN3"
         public byte BlfChannelId;     // BLF文件中的通道号（逻辑通道号）
         public byte HwChannel;        // 绑定的物理硬件通道号（0=跟随逻辑通道号，兼容旧配置）
+        public string HwType;         // 绑定的硬件类型（"PCAN"/"CANoe"，空=未指定，兼容旧配置）
         public string DbcFilePath;    // DBC文件路径
 
         public BusChannelConfig() { }

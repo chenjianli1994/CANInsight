@@ -305,7 +305,8 @@
     </Compile>
     <Compile Include="CAN_API\Canoe_API\CanOe_API.cs" />
     <Compile Include="CAN_API\CAN_API.cs" />
-    <Compile Include="CAN_API\ChannelMappingDialog.cs">
+    <Compile Include="CAN_API\HwChannelInfo.cs" />
+    <Compile Include="CAN_API\ChannelManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="CAN_Data\blf\BinlogReadWrite.cs" />
@@ -349,9 +350,6 @@
       <DependentUpon>SignalSelector.cs</DependentUpon>
     </Compile>
     <Compile Include="Chart\CanBusChannel.cs" />
-    <Compile Include="Chart\CanBusChannelConfigDialog.cs">
-      <SubType>Form</SubType>
-    </Compile>
     <Compile Include="Chart\LogFileListDialog.cs" />
     <Compile Include="DataLog\LogFileToCSV.cs">
       <SubType>Form</SubType>

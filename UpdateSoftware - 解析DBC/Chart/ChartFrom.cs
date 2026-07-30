@@ -672,7 +672,7 @@ namespace PCAN_Client
             this._btnBusConfig.Image = ToolbarIcons.Get("gear");
             this._btnBusConfig.Name = "_btnBusConfig";
             this._btnBusConfig.Size = new System.Drawing.Size(72, 22);
-            this._btnBusConfig.Text = "通道配置";
+            this._btnBusConfig.Text = "通道管理";
             this._btnBusConfig.ToolTipText = "配置CAN解析通道（多路CAN总线）";
             this._btnBusConfig.Click += new System.EventHandler(this._btnBusConfig_Click);
             //
@@ -2180,22 +2180,22 @@ namespace PCAN_Client
 
         private void _btnBusConfig_Click(object sender, EventArgs e)
         {
-            using (var dlg = new CanBusChannelConfigDialog(_busChannels))
+            // 统一通道管理窗口（硬件识别/通道配置/DBC/映射/连接一窗统管）：
+            // 窗口内保存时已写回全局通道列表、持久化并刷新聚合DBC视图，此处仅执行后置刷新
+            using (var dlg = new ChannelManagerForm(Main.main))
             {
-                if (dlg.ShowDialog(this) == DialogResult.OK)
+                dlg.ShowDialog(this);
+                if (!dlg.ConfigSaved) return;
+            }
+            {
                 {
-                    BaseParamter.BusChannels = dlg.Channels;
-                    // 通道配置是全局唯一DBC源：刷新聚合视图(Main/CanSend/版本校验用)并持久化
-                    BaseParamter.RefreshGlobalDbcFromChannels();
-                    BaseParamter.SaveBusChannelsConfig();
                     try
                     {
                         Main.main?.UpdateDbcTreeview();
-                        Main.main?.RefreshChannelComboState(); // 通道配置变化：刷新连接下拉框可用状态
                         if (Main.canSendOpenFlag) Main.canSend?.UpdateDbcTreeview();
                     }
                     catch { /* 窗口未初始化时忽略 */ }
-                    _btnBusConfig.Text = _busChannels.Count > 0 ? $"通道配置({_busChannels.Count})" : "通道配置";
+                    _btnBusConfig.Text = _busChannels.Count > 0 ? $"通道管理({_busChannels.Count})" : "通道管理";
 
                     // 通道配置变更立即回写当前工况JSON:否则下次应用工况时会被工况里保存的旧路径覆盖(跨机器使用时表现为"路径每次被重置")
                     if (_currentAnalysisType != null)
