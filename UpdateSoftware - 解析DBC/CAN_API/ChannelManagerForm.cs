@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace PCAN_Client
@@ -23,6 +24,7 @@ namespace PCAN_Client
         private readonly Main _main;
         private List<HwChannelInfo> _hwList = new List<HwChannelInfo>(); // 识别到的硬件（PCAN+CANoe合并）
         private bool _suppressModeEvent; // 初始化模式单选时抑制事件
+        private bool _detecting;         // 后台识别进行中（重入保护）
 
         private Label _lblHwStatus;
         private RadioButton _rbCan;
@@ -44,9 +46,12 @@ namespace PCAN_Client
         /// <summary>绑定硬件下拉项（携带硬件类型+通道号，选中即固化二元组；Hw=0表示不连接）</summary>
         private class HwBindItem
         {
-            public string HwType = "";
-            public byte Hw;
-            public string Display = "";
+            // 注意：DisplayMember/ValueMember 数据绑定只认属性，必须是属性不能是字段
+            public string HwType { get; set; } = "";
+            public byte Hw { get; set; }
+            public string Display { get; set; } = "";
+            /// <summary>下拉ValueMember唯一键（"类型:通道号"）；cell.Value存此键字符串，避免对象引用匹配在失焦重绘时回退</summary>
+            public string Key => HwType + ":" + Hw;
             public override string ToString() { return Display; }
         }
 
@@ -56,10 +61,16 @@ namespace PCAN_Client
         {
             _main = main;
             BuildUi();
-            RefreshHardware();   // 打开时主动识别一次
+            // 先用Main现有识别缓存立即填充（窗口秒开）；硬件识别为耗时操作（PCAN试开16槽位约1-2秒），窗口显示后后台异步刷新
+            if (_main != null)
+            {
+                _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
+            }
+            UpdateHwStatusLabel();
             LoadChannelRows();   // 从全局通道配置填充表格
             RefreshConnButtons();
             RefreshPreview();
+            this.Shown += (s, e) => RefreshHardwareAsync();
         }
 
         private void BuildUi()
@@ -95,7 +106,7 @@ namespace PCAN_Client
             this.Controls.Add(_rbCanFd);
 
             var btnRefresh = new Button { Text = "刷新识别", Location = new Point(772, 10), Size = new Size(94, 32) };
-            btnRefresh.Click += (s, e) => RefreshHardware();
+            btnRefresh.Click += (s, e) => RefreshHardwareAsync();
             this.Controls.Add(btnRefresh);
 
             // === 中部：逻辑通道配置表格 ===
@@ -110,16 +121,16 @@ namespace PCAN_Client
                 AutoGenerateColumns = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect
             };
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 13 });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = "BLF通道号", FillWeight = 10 });
-            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", FillWeight = 30, FlatStyle = FlatStyle.Flat });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 12 });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = "BLF通道号", FillWeight = 9 });
+            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 34, FlatStyle = FlatStyle.Flat });
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 29 });
-            _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "browse", HeaderText = "浏览", Text = "...", UseColumnTextForButtonValue = true, FillWeight = 8 });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbcStatus", HeaderText = "DBC状态", ReadOnly = true, FillWeight = 10 });
+            _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "browse", HeaderText = "浏览", Text = "...", UseColumnTextForButtonValue = true, FillWeight = 6 });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbcStatus", HeaderText = "DBC状态", ReadOnly = true, FillWeight = 8 });
             _dgv.CurrentCellDirtyStateChanged += Dgv_CurrentCellDirtyStateChanged;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CellContentClick += Dgv_CellContentClick;
-            _dgv.DataError += (s, e) => { e.ThrowException = false; }; // 绑定项不在数据源时静默（不在位硬件占位项）
+            _dgv.DataError += (s, e) => { e.ThrowException = false; }; // 重建数据源瞬间旧键值暂不在新列表时静默（随后立即重设）
             this.Controls.Add(_dgv);
 
             var btnAdd = new Button { Text = "添加通道", Location = new Point(12, 296), Size = new Size(96, 28) };
@@ -169,7 +180,7 @@ namespace PCAN_Client
             _statusTimer.Tick += (s, e) =>
             {
                 _statusTimer.Stop();
-                RefreshHardware();
+                RefreshHardwareAsync();
                 RefreshConnButtons();
             };
             this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
@@ -181,27 +192,40 @@ namespace PCAN_Client
             _main.SetCanFdMode(_rbCanFd.Checked);
         }
 
-        /// <summary>主动刷新硬件识别并重建绑定下拉选项（尽量保持各行原选择）</summary>
-        private void RefreshHardware()
+        /// <summary>后台异步刷新硬件识别（PCAN试开16槽位约1-2秒，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>
+        private void RefreshHardwareAsync()
         {
-            if (_main == null) return;
-            this.Cursor = Cursors.WaitCursor;
-            try
+            if (_main == null || _detecting) return;
+            _detecting = true;
+            _lblHwStatus.Text = "正在识别硬件...";
+            Task.Run(() =>
             {
-                _main.RefreshHardwareDetection();
-                _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
-                foreach (DataGridViewRow row in _dgv.Rows) RebuildBindCellDataSource(row);
-                UpdateHwStatusLabel();
-                RefreshPreview();
-            }
-            finally
-            {
-                this.Cursor = Cursors.Default;
-            }
+                try { _main.RefreshHardwareDetection(); } catch { /* 单个设备枚举失败不影响另一个 */ }
+                try
+                {
+                    if (this.IsHandleCreated && !this.IsDisposed)
+                    {
+                        this.BeginInvoke((EventHandler)(delegate
+                        {
+                            _detecting = false;
+                            _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
+                            foreach (DataGridViewRow row in _dgv.Rows) RebuildBindCellDataSource(row);
+                            UpdateHwStatusLabel();
+                            RefreshPreview();
+                        }));
+                    }
+                    else
+                    {
+                        _detecting = false;
+                    }
+                }
+                catch { _detecting = false; } // 窗口已关闭时BeginInvoke失败，忽略
+            });
         }
 
         private void UpdateHwStatusLabel()
         {
+            if (_main == null) return;
             int pcanN = _main.PcanHwChannels.Count;
             int canoeN = _main.CanoeHwChannels.Count;
             _lblHwStatus.Text =
@@ -227,54 +251,49 @@ namespace PCAN_Client
             return items;
         }
 
-        /// <summary>重建某行绑定下拉的数据源（识别结果变化后），尽量保持原选择；原绑定硬件不在位时保留占位项</summary>
+        /// <summary>读取某行当前绑定项（cell.Value为Key字符串，从该行数据源按键反查；无匹配视为不连接）</summary>
+        private HwBindItem GetRowBindItem(DataGridViewRow row)
+        {
+            var cell = (DataGridViewComboBoxCell)row.Cells[ColHwBind];
+            string key = cell.Value?.ToString();
+            var items = cell.DataSource as List<HwBindItem>;
+            if (string.IsNullOrEmpty(key) || items == null) return NotConnectItem;
+            return items.FirstOrDefault(x => x.Key == key) ?? NotConnectItem;
+        }
+
+        /// <summary>重建某行绑定下拉的数据源（识别结果变化后），尽量保持原选择；原绑定硬件不在位时直接回退"不连接"</summary>
         private void RebuildBindCellDataSource(DataGridViewRow row)
         {
             var cell = (DataGridViewComboBoxCell)row.Cells[ColHwBind];
-            var cur = cell.Value as HwBindItem;
+            var cur = cell.Value == null ? null : GetRowBindItem(row);
             var items = BuildBindItems();
             cell.DataSource = items;
-            if (cur == null || cur.Hw == 0)
+            if (cur == null) return; // 尚未设置过值（初始化场景，由FindBindKey随后赋值）
+            if (cur.Hw == 0)
             {
-                cell.Value = NotConnectItem;
+                cell.Value = NotConnectItem.Key;
                 return;
             }
             var keep = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == cur.Hw && (cur.HwType == "" || x.HwType == cur.HwType));
-            if (keep != null)
-            {
-                cell.Value = keep;
-            }
-            else
-            {
-                // 原绑定硬件当前不在位：保留占位项（不丢配置，预览中提示）
-                items.Add(cur);
-                cell.Value = cur;
-            }
+            // 原绑定硬件当前不在位：直接回退"不连接"（重新插入并刷新后需重新选择）
+            cell.Value = (keep ?? NotConnectItem).Key;
         }
 
-        /// <summary>按通道当前绑定找下拉项：已保存绑定 > 不在位占位 > 同号预选 > 不连接</summary>
-        private HwBindItem FindBindItem(DataGridViewRow row, string hwType, byte hwChannel, int logicIndex)
+        /// <summary>按通道当前绑定找下拉项键值：已保存绑定 > 同号预选 > 不连接（绑定硬件不在位时回退"不连接"）</summary>
+        private string FindBindKey(DataGridViewRow row, string hwType, byte hwChannel, int logicIndex)
         {
             var items = (List<HwBindItem>)((DataGridViewComboBoxCell)row.Cells[ColHwBind]).DataSource;
-            if (hwChannel == BaseParamter.HwNotConnect) return NotConnectItem;
+            if (hwChannel == BaseParamter.HwNotConnect) return NotConnectItem.Key;
             if (hwChannel > 0)
             {
+                // 已保存的精确绑定（类型+通道号）；绑定硬件当前不在位则回退"不连接"
                 var m = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == hwChannel && (hwType == "" || x.HwType == hwType));
-                if (m != null) return m;
-                // 绑定硬件当前不在位：插入占位项保留原绑定（类型未知时无前缀）
-                var absent = new HwBindItem
-                {
-                    HwType = hwType ?? "",
-                    Hw = hwChannel,
-                    Display = string.IsNullOrEmpty(hwType) ? $"通道{hwChannel}(不在位)" : $"{hwType} 通道{hwChannel}(不在位)"
-                };
-                items.Add(absent);
-                return absent;
+                return (m ?? NotConnectItem).Key;
             }
             // HwChannel=0（跟随）：预选同号硬件（逻辑序号=索引+1），找不到则不连接
             byte sameNo = (byte)(logicIndex + 1);
             var same = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == sameNo);
-            return same ?? NotConnectItem;
+            return (same ?? NotConnectItem).Key;
         }
 
         /// <summary>从全局通道配置填充表格</summary>
@@ -289,7 +308,7 @@ namespace PCAN_Client
                 row.Cells[ColName].Value = ch.Name;
                 row.Cells[ColBlf].Value = ch.BlfChannelId.ToString();
                 RebuildBindCellDataSource(row);
-                row.Cells[ColHwBind].Value = FindBindItem(row, ch.HwType, ch.HwChannel, i);
+                row.Cells[ColHwBind].Value = FindBindKey(row, ch.HwType, ch.HwChannel, i);
                 row.Cells[ColDbc].Value = ch.DbcFilePath ?? "";
                 row.Cells[ColDbcStatus].Value = DbcStatusText(ch.DbcFilePath, ch.IsConfigured);
             }
@@ -347,7 +366,7 @@ namespace PCAN_Client
             row.Cells[ColName].Value = "CAN" + n;
             row.Cells[ColBlf].Value = n.ToString();
             RebuildBindCellDataSource(row);
-            row.Cells[ColHwBind].Value = FindBindItem(row, "", 0, n - 1); // 同号预选
+            row.Cells[ColHwBind].Value = FindBindKey(row, "", 0, n - 1); // 同号预选
             row.Cells[ColDbc].Value = "";
             row.Cells[ColDbcStatus].Value = "";
             RefreshPreview();
@@ -382,7 +401,7 @@ namespace PCAN_Client
             {
                 var row = _dgv.Rows[i];
                 string name = (row.Cells[ColName].Value?.ToString() ?? "").Trim();
-                var bind = row.Cells[ColHwBind].Value as HwBindItem ?? NotConnectItem;
+                var bind = GetRowBindItem(row);
                 if (bind.Hw == 0) continue;
                 string key = bind.HwType + ":" + bind.Hw;
                 if (hwBound.ContainsKey(key))
@@ -417,7 +436,7 @@ namespace PCAN_Client
             {
                 var row = _dgv.Rows[i];
                 string name = (row.Cells[ColName].Value?.ToString() ?? "").Trim();
-                var bind = row.Cells[ColHwBind].Value as HwBindItem ?? NotConnectItem;
+                var bind = GetRowBindItem(row);
                 if (bind.Hw == 0)
                 {
                     sb.AppendLine($"[!] {name} 未关联硬件通道（不连接）");
@@ -459,7 +478,7 @@ namespace PCAN_Client
                 var row = _dgv.Rows[i];
                 string name = (row.Cells[ColName].Value?.ToString() ?? "").Trim();
                 string blfStr = row.Cells[ColBlf].Value?.ToString() ?? "";
-                var bind = row.Cells[ColHwBind].Value as HwBindItem ?? NotConnectItem;
+                var bind = GetRowBindItem(row);
                 string dbcPath = row.Cells[ColDbc].Value?.ToString() ?? "";
 
                 if (string.IsNullOrWhiteSpace(name))
