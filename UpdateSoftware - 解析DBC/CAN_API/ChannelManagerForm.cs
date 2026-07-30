@@ -540,7 +540,6 @@ namespace PCAN_Client
 
             for (int i = 0; i < _dgv.Rows.Count && i < channels.Count; i++)
                 _dgv.Rows[i].Cells[ColDbcStatus].Value = DbcStatusText(channels[i].DbcFilePath, channels[i].IsConfigured);
-            _main?.RefreshChannelComboState(); // 通道配置变化：刷新连接区显示（单/多通道模式切换）
             RefreshPreview();
             if (showSuccess)
                 MessageBox.Show("通道配置已保存", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);

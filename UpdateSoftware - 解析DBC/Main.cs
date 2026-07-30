@@ -1620,12 +1620,13 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 创建顶部连接工具栏：与绘图页面完全一致的ToolStrip风格（图标20x20、系统渲染、默认字体）。
-        /// 原Designer控件（下拉框/连接按钮/单选钮）通过ToolStripControlHost托管迁入，全部事件逻辑不变。
+        /// 创建顶部工具栏：左侧"通道管理"统一入口（硬件识别/连接/通道配置均在通道管理窗口），右侧功能按钮。
+        /// 原连接区Designer控件保留在隐藏容器内作状态载体不再显示：
+        /// button1/button5文本是连接状态机、comboBox是单通道兼容路径数据源、radioButton是CAN/CANFD模式载体。
         /// </summary>
         private void CreateConnectionStrip()
         {
-            // 隐藏旧的顶部区域容器（子控件被托管进ToolStrip）
+            // 隐藏旧的顶部区域容器（子控件保留作状态载体，不再显示）
             groupBox1.Visible = false;
             groupBox2.Visible = false;
             groupBox3.Visible = false;
@@ -1633,10 +1634,6 @@ namespace PCAN_Client
             SendMsg.Visible = false;
             button6.Visible = false;
             button7.Visible = false;
-
-            // 连接按钮略加高，避免小按钮局促
-            button1.Size = new Size(64, 23);
-            button5.Size = new Size(64, 23);
 
             _connectionStrip = new ToolStrip
             {
@@ -1648,24 +1645,10 @@ namespace PCAN_Client
                 AutoSize = true
             };
 
-            _connectionStrip.Items.Add(new ToolStripLabel("PCAN"));
-            _hostPcanCombo = new ToolStripControlHost(comboBox1);
-            _connectionStrip.Items.Add(_hostPcanCombo);
-            _lblPcanSummary = CreateSummaryLabel(comboBox1);
-            _lblPcanSummary.Click += (s, e) => OpenChannelManager(); // 点击摘要打开通道管理窗口
-            _connectionStrip.Items.Add(_lblPcanSummary);
-            _connectionStrip.Items.Add(new ToolStripControlHost(button1));
-            _connectionStrip.Items.Add(new ToolStripSeparator());
-            _connectionStrip.Items.Add(new ToolStripLabel("CANoe"));
-            _hostCanoeCombo = new ToolStripControlHost(comboBox_CanoeChannel);
-            _connectionStrip.Items.Add(_hostCanoeCombo);
-            _lblCanoeSummary = CreateSummaryLabel(comboBox_CanoeChannel);
-            _lblCanoeSummary.Click += (s, e) => OpenChannelManager(); // 点击摘要打开通道管理窗口
-            _connectionStrip.Items.Add(_lblCanoeSummary);
-            _connectionStrip.Items.Add(new ToolStripControlHost(button5));
-            _connectionStrip.Items.Add(new ToolStripSeparator());
-            _connectionStrip.Items.Add(new ToolStripControlHost(radioButtonCANFD));
-            _connectionStrip.Items.Add(new ToolStripControlHost(radioButtonCAN));
+            // 硬件识别/连接操作/通道配置的统一入口（硬件↔通道↔DBC关系、连接/断开、CAN/CANFD模式均在其中）
+            var itemChannelMgr = new ToolStripButton("通道管理", ToolbarIcons.Get("gear"));
+            itemChannelMgr.Click += (s, e) => OpenChannelManager();
+            _connectionStrip.Items.Add(itemChannelMgr);
 
             // 右侧功能按钮（右对齐，从右往左依次添加）
             var itemConvert = new ToolStripButton("数据转换", ToolbarIcons.Get("folder"));
@@ -1680,10 +1663,7 @@ namespace PCAN_Client
             var itemSave = new ToolStripButton("存储数据", ToolbarIcons.Get("save"));
             itemSave.Alignment = ToolStripItemAlignment.Right;
             itemSave.Click += button3_Click;
-            var itemChannelMgr = new ToolStripButton("通道管理", ToolbarIcons.Get("gear"));
-            itemChannelMgr.Alignment = ToolStripItemAlignment.Right;
-            itemChannelMgr.Click += (s, e) => OpenChannelManager();
-            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, itemSave, itemChannelMgr });
+            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, itemSave });
 
             this.Controls.Add(_connectionStrip);
             _connectionStrip.BringToFront();
@@ -2171,8 +2151,6 @@ namespace PCAN_Client
 
             // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送使用
             BaseParamter.LoadBusChannelsConfig();
-            // 通道配置加载后刷新连接区显示（多通道模式：隐藏下拉框+显示硬件识别摘要文本）
-            UpdateChannelComboDisplay();
 
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
             this.FormClosing += Main_FormClosingEx;
@@ -2223,7 +2201,6 @@ namespace PCAN_Client
                         if (BaseParamter.BusChannels.Count > 0)
                         {
                             var pcanList = pCAN_API.GetPCAN_ChannelRefresh();
-                            _lastPcanChannels = new List<string>(pcanList);
                             _lastPcanHwList = ParsePcanHwList(pcanList);
                             if (_lastPcanHwList.Count == 0)
                             {
@@ -2325,8 +2302,7 @@ namespace PCAN_Client
                 /* empty */
             }
             List<string> PCAN_Channel = Main.main.pCAN_API.GetPCAN_ChannelRefresh();
-            _lastPcanChannels = new List<string>(PCAN_Channel); // 缓存识别结果，供多通道模式摘要显示
-            _lastPcanHwList = ParsePcanHwList(PCAN_Channel); // 结构化缓存（通道管理窗口/摘要Tooltip用）
+            _lastPcanHwList = ParsePcanHwList(PCAN_Channel); // 结构化识别缓存（通道管理窗口数据源）
             if(comboBox1.Items.Count == PCAN_Channel.Count)
             {
                 for(int i=0; i< comboBox1.Items.Count; i++)
@@ -2369,8 +2345,7 @@ namespace PCAN_Client
                         comboBox1.Items.Add("未连接PCAN");
                         comboBox1.SelectedIndex = 0;
                     }
-                    // 多通道模式（有通道配置）时禁用下拉单选——连接走映射对话框批量连接，下拉选择无意义
-                    UpdateChannelComboDisplay();
+                    // comboBox1已不在界面显示，填充仅作为单通道兼容路径（PCAN_Connect读取Text）的数据源
                 }));
             }
             else
@@ -2393,16 +2368,13 @@ namespace PCAN_Client
             }
             driverConfig = canoe_API.FindAllChannel(10, CanFDFlag);
 
-            // 后台线程同步计算CAN通道识别结果：供热插拔重试即时判断，并供UI委托显示
-            _lastCanoeChannels = new List<string>();
+            // 结构化识别缓存（通道管理窗口数据源）；已打开mask内的通道标记"已连接"
             _lastCanoeHwList = new List<HwChannelInfo>();
             for (int i = 0; i < driverConfig.channelCount; i++)
             {
                 // 只统计CAN通道：排除虚拟通道与LIN等非CAN通道（如VN1640A第5路为LIN）
                 if (driverConfig.channel[i].name.Contains("Virtual Channel")) continue;
                 if ((driverConfig.channel[i].channelBusCapabilities & vxlapi_NET.XLDefine.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_CAN) == 0) continue;
-                _lastCanoeChannels.Add(driverConfig.channel[i].name);
-                // 结构化缓存（通道管理窗口/摘要Tooltip用）；已打开mask内的通道标记"已连接"
                 bool opened = canoeOpenFlag && null != canoe_API
                     && (canoe_API.appChannelMask & (1UL << (int)driverConfig.channel[i].channelIndex)) != 0;
                 _lastCanoeHwList.Add(new HwChannelInfo
@@ -2458,8 +2430,7 @@ namespace PCAN_Client
                             comboBox_CanoeChannel.SelectedIndex = 0;
                         }
                     }
-                    // 多通道模式（有通道配置）时禁用下拉单选——连接走映射对话框批量连接，下拉选择无意义
-                    UpdateChannelComboDisplay();
+                    // comboBox_CanoeChannel已不在界面显示，填充仅作为单通道兼容路径（CANoeConnect读取Text）的数据源
                 }));
             }
             else
@@ -2581,16 +2552,7 @@ namespace PCAN_Client
                 }));
             }
         }
-        // === 硬件识别状态显示（多通道模式）===
-        // 注意：comboBox1/comboBox_CanoeChannel被ToolStripControlHost托管进顶部工具栏，
-        // Parent是ToolStrip（Controls只读），摘要只能做成ToolStripLabel项插入工具栏
-        private ToolStripControlHost _hostPcanCombo;
-        private ToolStripControlHost _hostCanoeCombo;
-        private ToolStripLabel _lblPcanSummary;
-        private ToolStripLabel _lblCanoeSummary;
-        private List<string> _lastPcanChannels = new List<string>();
-        private List<string> _lastCanoeChannels = new List<string>();
-        // 结构化识别缓存（供通道管理窗口/摘要Tooltip使用，与字符串缓存同步填充）
+        // === 硬件识别缓存（通道管理窗口的数据源；连接区UI已移除，识别/连接/配置统一在通道管理窗口）===
         private List<HwChannelInfo> _lastPcanHwList = new List<HwChannelInfo>();
         private List<HwChannelInfo> _lastCanoeHwList = new List<HwChannelInfo>();
 
@@ -2654,92 +2616,6 @@ namespace PCAN_Client
             Properties.Settings.Default.CANType = canFd ? "CANFD" : "CAN";
             Properties.Settings.Default.Save();
             CanFDFlag = canFd;
-        }
-
-        /// <summary>通道配置变化后刷新连接区显示（多通道模式隐藏下拉单选，连接走映射对话框）</summary>
-        internal void RefreshChannelComboState()
-        {
-            UpdateChannelComboDisplay();
-        }
-
-        /// <summary>创建硬件识别摘要工具栏文本项（多通道模式替代下拉框显示，白底黑字、字号小一档保证显示完整）</summary>
-        private ToolStripLabel CreateSummaryLabel(System.Windows.Forms.ComboBox combo)
-        {
-            return new ToolStripLabel
-            {
-                Visible = false,
-                ForeColor = SystemColors.ControlText,
-                BackColor = SystemColors.Window,
-                Font = new Font(combo.Font.FontFamily, combo.Font.Size - 1f)
-            };
-        }
-
-        /// <summary>刷新连接区显示：单通道显示下拉框，多通道显示硬件识别摘要文本（仅更新显示，不重新枚举硬件、无副作用）</summary>
-        internal void UpdateChannelComboDisplay()
-        {
-            if (!this.IsHandleCreated) return;
-            this.BeginInvoke((EventHandler)(delegate
-            {
-                bool single = BaseParamter.BusChannels.Count == 0;
-                if (_hostPcanCombo != null) _hostPcanCombo.Visible = single;
-                if (_hostCanoeCombo != null) _hostCanoeCombo.Visible = single;
-                if (!single)
-                {
-                    // 多通道模式：文本显示硬件识别摘要（Tooltip显示每路硬件→逻辑通道→DBC明细，点击打开通道管理窗口）
-                    SetSummaryLabel(_lblPcanSummary, _lastPcanChannels, _lastPcanHwList, "PCAN");
-                    SetSummaryLabel(_lblCanoeSummary, _lastCanoeChannels, _lastCanoeHwList, "CANoe");
-                }
-                else
-                {
-                    if (_lblPcanSummary != null) _lblPcanSummary.Visible = false;
-                    if (_lblCanoeSummary != null) _lblCanoeSummary.Visible = false;
-                }
-            }));
-        }
-
-        private void SetSummaryLabel(ToolStripLabel lbl, List<string> channels, List<HwChannelInfo> hwList, string device)
-        {
-            if (lbl == null) return;
-            if (channels.Count > 0)
-                lbl.Text = $"已识别{channels.Count}路{device}";
-            else
-                lbl.Text = $"未识别到{device}设备";
-            lbl.Visible = true;
-            lbl.ToolTipText = channels.Count > 0
-                ? BuildSummaryTooltip(hwList, device)
-                : $"未识别到{device}设备，请检查硬件连接与驱动";
-            // 强制工具栏同步重绘：Text变化后某些场景ToolStrip未自动刷新到屏幕
-            if (_connectionStrip != null)
-            {
-                _connectionStrip.PerformLayout();
-                _connectionStrip.Refresh();
-            }
-        }
-
-        /// <summary>生成摘要Tooltip：每路硬件通道 → 映射的逻辑通道 [DBC文件]（状态），让"硬件↔通道↔DBC"关系悬停可见</summary>
-        private string BuildSummaryTooltip(List<HwChannelInfo> hwList, string device)
-        {
-            var lines = new List<string>();
-            foreach (var hw in hwList)
-            {
-                // 反查绑定到该硬件通道的逻辑通道（跳过不连接哨兵；HwType未指定的通道视为匹配）
-                string mapping = "（不连接）";
-                for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
-                {
-                    var ch = BaseParamter.BusChannels[i];
-                    if (ch.HwChannel == BaseParamter.HwNotConnect) continue;
-                    string t = BaseParamter.GetEffectiveHwType(i);
-                    if (t != "" && t != hw.HwType) continue;
-                    if (BaseParamter.GetEffectiveHwChannel(i) != hw.Hw) continue;
-                    string dbc = string.IsNullOrEmpty(ch.DbcFilePath) ? "未配置DBC" : System.IO.Path.GetFileName(ch.DbcFilePath);
-                    mapping = $"→ {ch.Name} [{dbc}]";
-                    break;
-                }
-                string status = string.IsNullOrEmpty(hw.Status) ? "" : $"（{hw.Status}）";
-                lines.Add($"{hw.Name} {mapping}{status}");
-            }
-            lines.Add("—— 点击查看通道管理 ——");
-            return string.Join("\r\n", lines);
         }
 
         /// <summary>断开PCAN连接并更新UI（供ChartFrom调用）</summary>
