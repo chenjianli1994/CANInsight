@@ -2381,7 +2381,8 @@ namespace PCAN_Client
                 {
                     Hw = (byte)(driverConfig.channel[i].channelIndex + 1), // XL通道索引0-based→硬件通道号1-based
                     HwType = BaseParamter.HwTypeCanoe,
-                    Name = driverConfig.channel[i].name,
+                    // XL通道名是C定长字符数组，封送后尾部可能带\0/空格（不可见但占宽度，导致单元格显示完整仍出现截断省略号）
+                    Name = driverConfig.channel[i].name.TrimEnd('\0', ' ', '\t'),
                     Status = opened ? "已连接" : ""
                 });
             }

@@ -239,7 +239,7 @@ namespace PCAN_Client
             _btnConnectCanoe.Text = Main.canoeOpenFlag ? "断开CANoe" : "连接CANoe";
         }
 
-        /// <summary>构建绑定下拉选项：不连接 + 识别到的全部硬件通道（带类型前缀与状态）</summary>
+        /// <summary>构建绑定下拉选项：不连接 + 识别到的全部硬件通道（带类型前缀与状态；冲突不限制选择，由标红提示+连接时拦截）</summary>
         private List<HwBindItem> BuildBindItems()
         {
             var items = new List<HwBindItem> { NotConnectItem };
@@ -448,6 +448,26 @@ namespace PCAN_Client
             }
 
             _txtPreview.Text = sb.ToString();
+            UpdateConflictMarks();
+        }
+
+        /// <summary>标红绑定冲突：同一硬件通道被多行绑定时，这些行的绑定单元格文字显示为红色（视觉告警，不限制选择）</summary>
+        private void UpdateConflictMarks()
+        {
+            var keyCount = new Dictionary<string, int>();
+            foreach (DataGridViewRow row in _dgv.Rows)
+            {
+                string k = row.Cells[ColHwBind].Value?.ToString();
+                if (string.IsNullOrEmpty(k) || k == NotConnectItem.Key) continue;
+                keyCount[k] = keyCount.TryGetValue(k, out int n) ? n + 1 : 1;
+            }
+            foreach (DataGridViewRow row in _dgv.Rows)
+            {
+                string k = row.Cells[ColHwBind].Value?.ToString();
+                bool conflict = !string.IsNullOrEmpty(k) && k != NotConnectItem.Key
+                    && keyCount.TryGetValue(k, out int cnt) && cnt > 1;
+                row.Cells[ColHwBind].Style.ForeColor = conflict ? Color.Red : _dgv.DefaultCellStyle.ForeColor;
+            }
         }
 
         private string GetRowDbcFileName(string channelName)
@@ -551,12 +571,8 @@ namespace PCAN_Client
         private void BtnConnectPcan_Click(object sender, EventArgs e)
         {
             if (_main == null) return;
-            // 连接动作前固化当前编辑（连接使用全局配置）；断开动作无需保存
-            if (!Main.pcanOpenFlag && !SaveConfig(false))
-            {
-                MessageBox.Show("请先修正配置后再连接", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            // 连接动作前固化当前编辑并检查（连接使用全局配置）：保存校验发现冲突/DBC错误时弹窗告警并中止连接，需重新分配硬件
+            if (!Main.pcanOpenFlag && !SaveConfig(false)) return;
             _main.PCAN_Connect(true); // 内部BeginInvoke异步执行 连接/断开 切换
             _statusTimer.Stop();
             _statusTimer.Start();   // 延迟刷新窗口状态（识别状态/按钮文本/预览）
@@ -565,11 +581,7 @@ namespace PCAN_Client
         private void BtnConnectCanoe_Click(object sender, EventArgs e)
         {
             if (_main == null) return;
-            if (!Main.canoeOpenFlag && !SaveConfig(false))
-            {
-                MessageBox.Show("请先修正配置后再连接", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            if (!Main.canoeOpenFlag && !SaveConfig(false)) return;
             _main.CANoeConnect(true);
             _statusTimer.Stop();
             _statusTimer.Start();
