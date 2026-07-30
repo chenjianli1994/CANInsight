@@ -18,6 +18,9 @@ namespace PCAN_Client.Canoe_API
         public XLClass.xl_event xlEvent = new XLClass.xl_event();
         public int portHandle = 2; // Correctly initialize the port handle as an integer
         public ulong appChannelMask = 0;
+        /// <summary>当前实际打开（已激活）的通道mask，仅CANOE_Open成功时写入、CANOE_Close清零；
+        /// 识别"已连接"判定专用——不能用appChannelMask（FindAllChannel枚举时会把它污染为最后一路CAN通道）</summary>
+        internal ulong OpenedChannelMask = 0;
         public List<ulong> ChannelMaskList = new List<ulong>();
         public Boolean aliveFlag = false;
         public Boolean CanFDFlag = false;
@@ -40,7 +43,9 @@ namespace PCAN_Client.Canoe_API
 
             ChannelMaskList = new List<ulong>();
 
-            CANOE_Close();
+            // 仅在未连接时关闭释放：已连接状态下枚举配置与活跃连接可共存，
+            // 无条件Close会把正在收发的工作连接掐断（运行期识别刷新导致CANoe收几秒就停的根因）
+            if (!aliveFlag) CANOE_Close();
 
             status = xlDriver.XL_OpenDriver();
             if (status != XLDefine.XL_Status.XL_SUCCESS)
@@ -76,6 +81,7 @@ namespace PCAN_Client.Canoe_API
         }
         public void CANOE_Close()
         {
+            OpenedChannelMask = 0; // 实际连接通道集合清零（识别"已连接"判定用）
             try
             {
                 multiMessageCANScheduler.Stop();
@@ -163,6 +169,7 @@ namespace PCAN_Client.Canoe_API
             }
 
             aliveFlag = true;
+            OpenedChannelMask = appChannelMask; // 记录实际打开的通道集合（此时appChannelMask=入参mask，未被枚举污染）
             // 重连成功：重新武装发送链路死亡检测
             _consecutiveTxFailures = 0;
             _txLinkDeadNotified = false;

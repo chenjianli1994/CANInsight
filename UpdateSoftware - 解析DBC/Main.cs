@@ -2375,8 +2375,10 @@ namespace PCAN_Client
                 // 只统计CAN通道：排除虚拟通道与LIN等非CAN通道（如VN1640A第5路为LIN）
                 if (driverConfig.channel[i].name.Contains("Virtual Channel")) continue;
                 if ((driverConfig.channel[i].channelBusCapabilities & vxlapi_NET.XLDefine.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_CAN) == 0) continue;
+                // 已连接判定用OpenedChannelMask（CANOE_Open实际打开的通道集合）；
+                // 不能用appChannelMask——FindAllChannel枚举会把它污染为最后一路CAN通道
                 bool opened = canoeOpenFlag && null != canoe_API
-                    && (canoe_API.appChannelMask & (1UL << (int)driverConfig.channel[i].channelIndex)) != 0;
+                    && (canoe_API.OpenedChannelMask & (1UL << (int)driverConfig.channel[i].channelIndex)) != 0;
                 _lastCanoeHwList.Add(new HwChannelInfo
                 {
                     Hw = (byte)(driverConfig.channel[i].channelIndex + 1), // XL通道索引0-based→硬件通道号1-based
