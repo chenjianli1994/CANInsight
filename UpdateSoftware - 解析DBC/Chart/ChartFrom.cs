@@ -2756,7 +2756,7 @@ namespace PCAN_Client
                     for (int i = 0; i < _busChannels.Count; i++)
                     {
                         var ch = _busChannels[i];
-                        string displayName = $"{ch.Name} (BLF通道={ch.BlfChannelId})";
+                        string displayName = $"{ch.Name} (通道={ch.BlfChannelId})";
                         if (ch.IsConfigured)
                             displayName += $" [{Path.GetFileName(ch.DbcFilePath)}]";
                         else
@@ -2898,6 +2898,9 @@ namespace PCAN_Client
         private void _btnShowMainForm_Click(object sender, EventArgs e)
         {
             if (Main.main == null) return;
+            // 独立窗口化：启动时为防闪窗设了ShowInTaskbar=false（Program.cs），唤出时恢复任务栏/Alt-Tab独立按钮，
+            // 之后可独立最小化(任务栏找回)/最大化/关闭(隐藏)；仅在隐藏状态下设置，避免可见时修改引发句柄重建闪烁
+            if (!Main.main.Visible) Main.main.ShowInTaskbar = true;
             // Main以最小化方式启动从未真正绘制过，首次恢复Normal时整个窗体走首次布局+绘制，
             // 半成品窗口会闪现；先隐藏起来同步完成完整绘制，再一次性呈现完整窗口
             bool firstShow = (Main.main.WindowState == FormWindowState.Minimized);

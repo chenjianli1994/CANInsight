@@ -22,9 +22,13 @@ namespace PCAN_Client
         public bool ConfigSaved { get; private set; }
 
         private readonly Main _main;
+        private readonly bool _realTimeMode; // 打开窗口时绘图区所处模式：true=实时数据（通道号用于记录导出编号），false=报文数据（BLF通道号用于回放映射）
         private List<HwChannelInfo> _hwList = new List<HwChannelInfo>(); // 识别到的硬件（PCAN+CANoe合并）
         private bool _suppressModeEvent; // 初始化模式单选时抑制事件
         private bool _detecting;         // 后台识别进行中（重入保护）
+
+        /// <summary>通道号列标题随模式切换：实时="通道号"，报文="BLF通道号"</summary>
+        private string BlfColumnTitle => _realTimeMode ? "通道号" : "BLF通道号";
 
         private Label _lblHwStatus;
         private RadioButton _rbCan;
@@ -60,6 +64,7 @@ namespace PCAN_Client
         public ChannelManagerForm(Main main)
         {
             _main = main;
+            _realTimeMode = Main.chartFromShow?.RealTimeDataSta ?? true;
             BuildUi();
             // 先用Main现有识别缓存立即填充（窗口秒开）；硬件识别为耗时操作（PCAN试开16槽位约1-2秒），窗口显示后后台异步刷新
             if (_main != null)
@@ -122,7 +127,7 @@ namespace PCAN_Client
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect
             };
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 12 });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = "BLF通道号", FillWeight = 9 });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = BlfColumnTitle, FillWeight = 9 });
             _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 34, FlatStyle = FlatStyle.Flat });
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 29 });
             _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "browse", HeaderText = "浏览", Text = "...", UseColumnTextForButtonValue = true, FillWeight = 6 });
@@ -508,7 +513,7 @@ namespace PCAN_Client
                 }
                 if (!byte.TryParse(blfStr, out byte blfChannelId))
                 {
-                    MessageBox.Show($"第{i + 1}行：BLF通道号格式错误", "验证错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show($"第{i + 1}行：{BlfColumnTitle}格式错误（0-255的数字）", "验证错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
                 }
                 if (bind.Hw != 0)

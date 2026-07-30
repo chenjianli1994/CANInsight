@@ -47,7 +47,8 @@ namespace PCAN_Client
         /* ===== 三类通道标识（严格区分，互不混用）=====
          * 逻辑通道号：通道在 BusChannels 中的序号（1-based，CH1=第1个通道）——实时收发链路全程使用
          * 硬件通道号：PCAN USBBUS序号 / CANoe通道号（HwChannel）——仅连接映射使用
-         * BLF通道号：BLF文件 mChannel（BlfChannelId）——仅BLF读取匹配/记录写出使用
+         * 通道号（BlfChannelId）：记录文件（BLF/ASC）的通道字段，通道管理窗口可自定义编辑——
+         *            实时模式：落盘导出时按此写入文件通道字段；报文模式：回放时按此把文件通道号匹配回逻辑通道
          * 硬件类型：HwType（"PCAN"/"CANoe"），混合硬件时收发按类型路由；""=未指定（旧配置兼容）
          */
 

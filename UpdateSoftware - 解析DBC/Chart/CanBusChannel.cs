@@ -14,7 +14,8 @@ namespace PCAN_Client
         public string Name { get; set; } = "";
 
         /// <summary>
-        /// BLF文件中的通道号（对应 mChannel 字段），同时作为全应用统一的逻辑通道号（1..N）
+        /// 通道号（记录文件 BLF/ASC 的通道字段），通道管理窗口可自定义编辑；
+        /// 实时模式：落盘导出时按此写入文件通道字段；报文模式：回放时按此把文件通道号匹配回逻辑通道
         /// </summary>
         public byte BlfChannelId { get; set; } = 0;
 
