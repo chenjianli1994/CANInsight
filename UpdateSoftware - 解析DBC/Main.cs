@@ -88,6 +88,8 @@ namespace PCAN_Client
             public byte[] Data;
             public bool IsTx;
             public byte Channel;       // CAN通道号
+            /// <summary>与"同通道同ID上一帧"的时间间隔(us)，写入时O(1)预计算——替代colTime单元格每行O(n)前向扫描（5w帧全显时滚动/切换O(n²)卡顿的根因）</summary>
+            public ulong PrevSameIdGapUs;
         }
 
         // === VirtualMode 数据源 ===
@@ -102,6 +104,8 @@ namespace PCAN_Client
         internal bool _pauseUpdate = false; // 暂停更新
         private DateTime _lastRefreshTime = DateTime.MinValue;
         private const int MIN_REFRESH_MS = 100; // 最大刷新频率 ~10fps
+        /// <summary>Scroll帧"同通道同ID上一帧时间戳"缓存（MsgKey→ts）：写入帧时O(1)计算间隔，清空数据时同步清空</summary>
+        private readonly Dictionary<long, ulong> _lastFrameTsByKey = new Dictionary<long, ulong>();
 
         // === 展开/折叠信号 ===
         internal enum FlatRowType { Message, Signal }
@@ -415,8 +419,9 @@ namespace PCAN_Client
                 info.LastTimestampUs = timestampUs;
             }
 
-            // Scroll模式：每帧均记录到_scrollFrames（Fixed模式不记录，节省内存）
-            if (_scrollMode)
+            // Scroll模式：每帧均记录到_scrollFrames（实时Fixed模式不记录，节省内存）；
+            // 离线回放（无硬件连接）始终记录：Fixed模式回放后切Scroll也要有帧流可看
+            if (_scrollMode || (!pcanOpenFlag && !canoeOpenFlag))
             {
                 // 预先查DBC缓存Description/Node，供CellValueNeeded绘制用
                 if (!_msgMetaCache.TryGetValue(msgKey, out _))
@@ -438,6 +443,9 @@ namespace PCAN_Client
                 Array.Copy(msg.DATA, dataCopy, msg.LEN);
                 lock (_scrollFrames)
                 {
+                    // 与同通道同ID上一帧的间隔（O(1)，供colTime直接读取）
+                    ulong prevGap = _lastFrameTsByKey.TryGetValue(msgKey, out ulong prevTs) ? timestampUs - prevTs : 0;
+                    _lastFrameTsByKey[msgKey] = timestampUs;
                     _scrollFrames.Add(new ScrollFrameRecord
                     {
                         MsgId = msg.ID,
@@ -445,7 +453,8 @@ namespace PCAN_Client
                         Len = msg.LEN,
                         Data = dataCopy,
                         IsTx = isTx,
-                        Channel = channel
+                        Channel = channel,
+                        PrevSameIdGapUs = prevGap
                     });
                     // 控制内存：增量裁剪
                     if (_scrollFrames.Count > MAX_SCROLL_FRAMES)
@@ -473,6 +482,7 @@ namespace PCAN_Client
                 _scrollFrames.Clear();
                 _scrollFrames.TrimExcess();
             }
+            _lastFrameTsByKey.Clear();
             _flatRows.Clear();
             _flatRows.TrimExcess();
             _msgMetaCache.Clear();
@@ -490,6 +500,9 @@ namespace PCAN_Client
         /// <summary>清空数据并切换到Scroll模式（ChartFrom开始播放前调用）</summary>
         internal void ClearForPlayback()
         {
+            // 复位暂停状态：前一次回放/导入会置暂停供回看（_pauseUpdate=true），
+            // 残留会冻结RefreshMessageDisplay——新回放帧正常写入但列表不刷新（表现为"清空后再回放没报文"）
+            SetPauseState(false);
             lock (_displayList)
             {
                 _displayList.Clear();
@@ -501,6 +514,7 @@ namespace PCAN_Client
                 _scrollFrames.Clear();
                 _scrollFrames.TrimExcess(); // 释放内部数组缓冲区，归还内存
             }
+            _lastFrameTsByKey.Clear();
             _flatRows.Clear();
             _flatRows.TrimExcess();
             _msgMetaCache.Clear();
@@ -512,13 +526,7 @@ namespace PCAN_Client
             _lastScrollRowCount = 0;
             _dgvMessages.RowCount = 0;
 
-            if (!_scrollMode)
-            {
-                _scrollMode = true;
-                _btnScroll.Checked = true;
-                _btnScroll.Text = "Scroll";
-            }
-
+            // 不再强制切Scroll：回放数据双写（Scroll帧记录+Fixed聚合列表），尊重用户当前选择的显示模式
             _msgDisplayRefreshPending = true;
             RefreshMessageDisplay();
         }
@@ -559,8 +567,9 @@ namespace PCAN_Client
                 }
             }
 
-            // 批量添加到_scrollFrames（Fixed模式不记录，节省内存）
-            if (_scrollMode)
+            // 批量添加到_scrollFrames（实时Fixed模式不记录，节省内存）；
+            // 离线回放（无硬件连接）始终记录：Fixed模式回放后切Scroll也要有帧流可看
+            if (_scrollMode || (!pcanOpenFlag && !canoeOpenFlag))
             {
                 lock (_scrollFrames)
                 {
@@ -587,6 +596,9 @@ namespace PCAN_Client
                         ulong tsUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
                         byte[] dataCopy = new byte[rawMsg.Data.Length];
                         Array.Copy(rawMsg.Data, dataCopy, rawMsg.Data.Length);
+                        // 与同通道同ID上一帧的间隔（O(1)，供colTime直接读取）
+                        ulong prevGap = _lastFrameTsByKey.TryGetValue(key, out ulong prevTs) ? tsUs - prevTs : 0;
+                        _lastFrameTsByKey[key] = tsUs;
                         _scrollFrames.Add(new ScrollFrameRecord
                         {
                             MsgId = rawMsg.CanId,
@@ -594,7 +606,8 @@ namespace PCAN_Client
                             Len = (byte)rawMsg.Data.Length,
                             Data = dataCopy,
                             IsTx = false,
-                            Channel = rawMsg.Channel
+                            Channel = rawMsg.Channel,
+                            PrevSameIdGapUs = prevGap
                         });
                     }
                     // 控制内存：增量裁剪
@@ -672,51 +685,15 @@ namespace PCAN_Client
 
             ClearForPlayback();
 
-            // 预缓存所有(通道,MsgId)的描述/节点信息
-            foreach (var rawMsg in frames)
-            {
-                byte ch = rawMsg.Channel > 0 ? BaseParamter.GetLogicChannelByBlfId(rawMsg.Channel) : (byte)1; // rawMsg.Channel为BLF通道号→逻辑通道号
-                long key = MsgKey(rawMsg.CanId, ch);
-                if (!_msgMetaCache.ContainsKey(key))
-                {
-                    string desc, node;
-                    if (TryFindDbcMessage(rawMsg.CanId, ch, out var dbcMsg))
-                    {
-                        desc = dbcMsg.messageName;
-                        node = dbcMsg.transmitter;
-                    }
-                    else
-                    {
-                        desc = "";
-                        node = "";
-                    }
-                    _msgMetaCache[key] = (desc, node);
-                }
-            }
-
-            // 添加到_scrollFrames
-            lock (_scrollFrames)
-            {
-                foreach (var rawMsg in frames)
-                {
-                    ulong tsUs = (ulong)(rawMsg.TimeStampSeconds * 1000000.0);
-                    byte[] dataCopy = new byte[rawMsg.Data.Length];
-                    Array.Copy(rawMsg.Data, dataCopy, rawMsg.Data.Length);
-                    _scrollFrames.Add(new ScrollFrameRecord
-                    {
-                        MsgId = rawMsg.CanId,
-                        TimestampUs = tsUs,
-                        Len = (byte)rawMsg.Data.Length,
-                        Data = dataCopy,
-                        IsTx = false,
-                        Channel = rawMsg.Channel
-                    });
-                }
-            }
-
-            // 切换到Scroll模式并暂停，显示所有帧
+            // 流式回放完成展示固定走Scroll（数据源为帧记录）；
+            // 批量导入双写：Scroll帧记录 + Fixed聚合列表/统计（否则切Fixed模式空白——原实现只写Scroll数据源）
             _scrollMode = true;
-            _pauseUpdate = true;
+            _btnScroll.Checked = true;
+            _btnScroll.Text = "Scroll";
+            BatchImportRawMessages(frames);
+
+            // 暂停显示所有帧（供回看，同步按钮状态）
+            SetPauseState(true);
             _flatRowsDirty = true;
             _msgDisplayRefreshPending = true;
             ForceRefreshDisplay();
@@ -957,16 +934,8 @@ namespace PCAN_Client
                         case "colCount":     e.Value = (flat.ScrollFrameIndex + 1).ToString(); break;
                         case "colTime":
                             {
-                                // 计算与前一帧的时间间隔（向前查找同MsgId的最近帧）
-                                long gapUs = 0;
-                                for (int i = flat.ScrollFrameIndex - 1; i >= 0; i--)
-                                {
-                                    if (i < _scrollFrames.Count && _scrollFrames[i].MsgId == frame.MsgId)
-                                    {
-                                        gapUs = (long)(frame.TimestampUs - _scrollFrames[i].TimestampUs);
-                                        break;
-                                    }
-                                }
+                                // 与"同通道同ID上一帧"的间隔：直接读写入时预计算的字段（原为每行O(n)前向扫描，5w帧全显时O(n²)卡顿）
+                                ulong gapUs = frame.PrevSameIdGapUs;
                                 e.Value = gapUs > 0
                                     ? (gapUs >= 1000 ? $"{gapUs / 1000.0:F1}ms" : $"{gapUs}us")
                                     : "0";
@@ -1704,8 +1673,10 @@ namespace PCAN_Client
                 _lastScrollRowCount = 0;
                 _expandedScrollFrames.Clear();
                 _flatRowsDirty = true;
-                _msgDisplayRefreshPending = true;
-                RefreshMessageDisplay();
+                // 海量帧↔聚合视图切换：先清空行数，避免DataGridView对数万旧行做增量布局（切换卡顿主因之一）
+                if (_dgvMessages.RowCount > 0) _dgvMessages.RowCount = 0;
+                // 暂停只冻结新数据滚动，不应冻结视图模式切换——强制重建（否则回放完成的暂停态下切Fixed无反应）
+                ForceRefreshDisplay();
             };
             _toolbarPanel.Items.Add(_btnScroll);
 
@@ -1811,6 +1782,8 @@ namespace PCAN_Client
             _btnClear = new ToolStripButton("Clear", ToolbarIcons.Get("clear"));
             _btnClear.Click += (s, e) =>
             {
+                // 清空同时复位暂停状态：暂停残留会冻结显示，清空后新数据（实时/回放）写入但不刷新
+                SetPauseState(false);
                 lock (_displayList)
                 {
                     _displayList.Clear();
@@ -1822,6 +1795,7 @@ namespace PCAN_Client
                     _scrollFrames.Clear();
                     _scrollFrames.TrimExcess();
                 }
+                _lastFrameTsByKey.Clear();
                 _flatRows.Clear();
                 _flatRows.TrimExcess();
                 _expandedScrollFrames.Clear();

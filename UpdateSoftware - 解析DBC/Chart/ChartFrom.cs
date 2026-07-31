@@ -1821,6 +1821,17 @@ namespace PCAN_Client
                                     ShowStreamingRecordedFrames();
                                 }));
                             }
+                            // 内存/缓存模式（含首次流式转缓存后的再次回放）：最快路径回放过程不写报文列表，
+                            // 完成后把内存数据批量显示到Main（否则只有首次流式回放有报文，再次回放列表空白）
+                            else if (_rawMessages != null && _rawMessages.Count > 0)
+                            {
+                                Invoke(new Action(() =>
+                                {
+                                    Main.main.BatchImportRawMessages(_rawMessages);
+                                    Main.main.SetPauseState(true); // 暂停显示全部帧供回看（与流式完成行为一致）
+                                    Main.main.ForceRefreshDisplay();
+                                }));
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -3779,6 +3790,10 @@ namespace PCAN_Client
                 multiChartFromScheduler.Stop();
             }
             _playbackTimer.Stop();
+
+            // 切换到报文模式即断开实时硬件连接（报文回放/分析不再需要硬件收发；原先延迟到点开始回放才断开，切换后硬件仍在收发）
+            Main.main?.DisconnectPCAN();
+            Main.main?.DisconnectCANoe();
 
             // 判断是否有可用的文件数据:内存已加载,或已勾选报文路径(播放时走流式/边读边缓存)
             int loadedCount = _rawMessages != null ? _rawMessages.Count : 0;
