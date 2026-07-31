@@ -122,9 +122,11 @@ namespace PCAN_Client.CAN_Data
 
             try
             {
-                // 直接通过字典查找 Message，无需遍历
+                // 直接通过字典查找 Message，无需遍历。
+                // 长度闸门取 定义DLC与8的较小者：兼容"DBC按CAN FD长定义(16/32/64字节)、实际经典CAN只发8字节"的常见场景——
+                // 前8字节内的信号可正常解析（解析器天然容错：Intel越界位读0，Motorola越界信号被逐信号跳过，不崩溃不串值）
                 if (routedDbc.messageDict.TryGetValue(ID, out Message message) &&
-                    len >= message.messageSize)
+                    len >= Math.Min(message.messageSize, 8u))
                 {
                     var parser = new CanSignalParser();
                     var result = parser.ParseSignals(data, message.signals);
