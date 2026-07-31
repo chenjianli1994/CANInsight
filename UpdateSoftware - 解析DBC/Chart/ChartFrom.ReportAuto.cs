@@ -115,7 +115,8 @@ namespace PCAN_Client
             // 注意:此时Channels尚未初始化(ChartFrom_Load才创建),只加载列表,初始应用推迟到Load
             string baseDir = Path.GetDirectoryName(Application.ExecutablePath);
             _templatesDir = Path.Combine(baseDir, "ReportAuto", "templates");
-            ReloadAnalysisTypes(null, false);
+            // 启动选中上次关闭时的工况（无会话快照则回退为第一个工况，与原行为一致）
+            ReloadAnalysisTypes(LoadLastSession()?.AnalysisTypeName, false);
 
             // 默认模板路径:依次找 exe同级/项目根 的 模板文件.pptx
             string templatePath = ResolveDefaultTemplate(baseDir);
@@ -504,6 +505,106 @@ namespace PCAN_Client
 
             _statusLabel.Text = $"状态: 已加载工况分类 \"{type.Name}\" 的信号列表 ({type.SignalList.Count}个)";
             _statusLabel.ForeColor = Color.Green;
+        }
+
+        // ==================== 上次会话快照（关闭前状态记忆） ====================
+        // 用户添加/删除信号后未点"保存工况"直接关软件时，把当前绘图区信号列表+选中工况名
+        // 快照到 exe 目录 LastSession.json；下次启动按快照恢复，保持关闭前状态。
+
+        private class LastSessionSnapshot
+        {
+            public string AnalysisTypeName;              // 关闭时选中的工况名（可空）
+            public List<SignalPresetItem> Signals;       // 关闭时绘图区信号列表（报告专用通道除外）
+        }
+
+        private static string LastSessionPath =>
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LastSession.json");
+
+        private LastSessionSnapshot _lastSession;        // 启动时读取的会话快照（null=无/损坏）
+        private bool _lastSessionLoaded;
+
+        /// <summary>读取上次会话快照（缓存，仅启动阶段使用）；无文件或解析失败返回 null</summary>
+        private LastSessionSnapshot LoadLastSession()
+        {
+            if (!_lastSessionLoaded)
+            {
+                _lastSessionLoaded = true;
+                try
+                {
+                    if (File.Exists(LastSessionPath))
+                        _lastSession = JsonConvert.DeserializeObject<LastSessionSnapshot>(File.ReadAllText(LastSessionPath));
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[LastSession] 读取会话快照失败: " + ex.Message);
+                    _lastSession = null;
+                }
+            }
+            return _lastSession;
+        }
+
+        /// <summary>关闭时快照当前绘图区信号列表+选中工况名（与"保存工况"同口径：报告专用通道不入快照）</summary>
+        internal void SaveLastSessionSnapshot()
+        {
+            try
+            {
+                var snapshot = new LastSessionSnapshot
+                {
+                    AnalysisTypeName = _currentAnalysisType?.Name,
+                    Signals = new List<SignalPresetItem>()
+                };
+                if (Channels != null)
+                {
+                    foreach (var ch in Channels)
+                    {
+                        if (ch.IsReportOnly) continue;
+                        snapshot.Signals.Add(new SignalPresetItem
+                        {
+                            SignalName = ch.DbcSignalName ?? "",
+                            MessageId = ch.DbcMessageId,
+                            MessageIndex = ch.DbcMessageIndex,
+                            SignalIndex = ch.DbcSignalIndex,
+                            Unit = ch.Unit ?? "",
+                            Color = ColorTranslator.ToHtml(ch.Color),
+                            Visible = ch.Visible,
+                            BusChannelIndex = ch.BusChannelIndex
+                        });
+                    }
+                }
+                File.WriteAllText(LastSessionPath, JsonConvert.SerializeObject(snapshot, Formatting.Indented));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LastSession] 保存会话快照失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>启动时按会话快照恢复绘图信号列表。
+        /// 调用时机必须在全局通道配置(BusChannels.json)恢复之后——DBC对象最终确定，
+        /// 恢复的ChartShowFlag/调度注册才不会被后续重建冲掉（由Main_Load调用）。</summary>
+        internal void RestoreLastSessionSignals()
+        {
+            var session = LoadLastSession();
+            if (session?.Signals == null || session.Signals.Count == 0) return; // 上次关闭时无信号：保持空白
+            if (Channels == null) return;
+
+            // 复用工况应用的信号恢复逻辑：构造只含信号列表的临时工况（BusChannels=null → 不动通道配置，
+            // 通道/DBC以 BusChannels.json 恢复的全局配置为准，即关闭前的真实状态）
+            var tempType = new AnalysisType
+            {
+                Name = session.AnalysisTypeName ?? "上次会话",
+                SignalList = session.Signals
+            };
+            ApplyAnalysisType(tempType);
+
+            // 置位ChartShowFlag+重建周期调度注册（针对当前BusChannels的DBC对象），保证实时喂点不依赖再次保存通道配置
+            RestoreChartShowFlags();
+
+            if (Channels.Count > 0)
+            {
+                _statusLabel.Text = $"状态: 已恢复上次关闭前的信号列表 ({Channels.Count}个)";
+                _statusLabel.ForeColor = Color.Green;
+            }
         }
 
         /// <summary>

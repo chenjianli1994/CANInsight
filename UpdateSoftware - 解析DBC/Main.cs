@@ -2133,6 +2133,10 @@ namespace PCAN_Client
             // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送使用
             BaseParamter.LoadBusChannelsConfig();
 
+            // 恢复上次关闭前的绘图信号列表（含未点"保存工况"的改动）；
+            // 必须在LoadBusChannelsConfig之后——BusChannels整体替换会新建DBC对象，提前恢复的标志位会被冲掉
+            chartFromShow?.RestoreLastSessionSignals();
+
             // 用户点X关闭主窗口时,若绘图窗口仍开着则只隐藏不退出(程序经绘图窗口关闭退出)
             this.FormClosing += Main_FormClosingEx;
 

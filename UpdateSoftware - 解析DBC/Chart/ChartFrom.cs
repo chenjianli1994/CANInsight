@@ -1453,6 +1453,9 @@ namespace PCAN_Client
             multiChartFromScheduler.Stop();
             Main.ChartShowOpenFlag = false;
 
+            // 快照当前绘图区信号列表+选中工况名（下次启动恢复关闭前状态，含未点"保存工况"的改动）
+            SaveLastSessionSnapshot();
+
             // 清除Main.cs的导入数据
             Main.main.ClearForPlayback();
 
@@ -2906,7 +2909,8 @@ namespace PCAN_Client
             if (_busChannels.Count > 0)
                 _btnBusConfig.Text = $"通道配置({_busChannels.Count})";
             // 初始选中工况在构造函数阶段仅加载未应用,此时Channels已就绪,补应用(恢复信号列表)
-            if (_currentAnalysisType != null)
+            // 存在上次会话快照时跳过：信号列表由Main_Load恢复全局通道配置后按快照恢复（保持关闭前状态，含未保存工况的改动）
+            if (_currentAnalysisType != null && LoadLastSession() == null)
                 ApplyAnalysisType(_currentAnalysisType);
             RefreshPresetComboBox();
         }
