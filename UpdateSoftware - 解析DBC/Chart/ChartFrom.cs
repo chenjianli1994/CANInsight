@@ -364,9 +364,15 @@ namespace PCAN_Client
             // 注意必须放在日志路径恢复之后,否则 _isFileMode 判断不到已勾选的报文文件
             var savedMode = (string)PCAN_Client.Properties.Settings.Default["ChartMode"];
             if (savedMode == "FileData")
+            {
                 SwitchToFileModeInternal();
+            }
             else
+            {
                 RealTimeDataSta = true;
+                // 实时模式：清除上方日志路径恢复时置位的文件模式标志——否则界面显示实时、点开始却按报文模式跑并断开硬件
+                _isFileMode = false;
+            }
 
             if (RealTimeDataSta)
             {
@@ -3356,26 +3362,29 @@ namespace PCAN_Client
             }
             return -1;
         }
-        private int GetChannelIndex(int messageId, int signalIndex)
+        /// <summary>按 CAN ID+信号索引找曲线通道；多通道模式下额外匹配信号所属逻辑通道（BusChannelIndex），同ID信号各归各的曲线（-1=兼容未分配通道，通配）</summary>
+        private int GetChannelIndex(int messageId, int signalIndex, byte logicChannel = 0)
         {
             for (int index = 0; index < Channels.Count; index++)
             {
-                if (Channels[index].DbcSignalIndex == signalIndex && Channels[index].DbcMessageId == messageId)
-                {
-                    return index;
-                }
+                if (Channels[index].DbcSignalIndex != signalIndex || Channels[index].DbcMessageId != messageId)
+                    continue;
+                if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
+                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != logicChannel - 1)
+                    continue; // 多通道同ID：只喂给信号所属通道的曲线
+                return index;
             }
             return -1;
         }
         private int _lastGridValueUpdateTick = 0;  // 上次信号列表数值刷新时间(TickCount),用于实时刷新节流
-        public void AddPoint(uint msgId, int signalIndex, double rawValue, uint cycleTime)
+        public void AddPoint(uint msgId, int signalIndex, double rawValue, uint cycleTime, byte logicChannel = 0)
         {
             // 文件模式下不接收实时数据
             if (!RunStatus || _isLoadingFile || _isFileMode)
             {
                 return;
             }
-            int channelIndex = Main.chartFromShow.GetChannelIndex((int)msgId, signalIndex);
+            int channelIndex = Main.chartFromShow.GetChannelIndex((int)msgId, signalIndex, logicChannel);
             if (-1 != channelIndex)
             {
                 TimeSpan elapsed = DateTime.Now - Main.chartFromShow.startTime;

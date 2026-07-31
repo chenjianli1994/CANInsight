@@ -206,20 +206,23 @@ namespace PCAN_Client
         internal static long MsgKey(uint msgId, byte channel) => ((long)channel << 32) | msgId;
 
         /// <summary>
-        /// 按逻辑通道查找报文定义：优先该通道自己的DBC（多通道同ID各自定义），
-        /// 通道未配置DBC或未定义该报文时回退全局聚合视图
+        /// 按逻辑通道查找报文定义：多通道模式严格用该通道自己的DBC（跨通道定义不回退，避免串扰显示）；
+        /// 无通道配置（单通道兼容）时用全局聚合视图
         /// </summary>
         internal static bool TryFindDbcMessage(uint canId, byte channel, out CAN_Data.Message dbcMsg)
         {
             dbcMsg = null;
-            var helper = BaseParamter.GetDbcHelperByChannel(channel) ?? BaseParamter.dbcHelper;
-            if (helper?.dbcFile?.messageDict != null &&
-                helper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+            if (BaseParamter.BusChannels.Count > 0)
             {
-                return true;
+                var helper = BaseParamter.GetDbcHelperByChannel(channel);
+                if (helper?.dbcFile?.messageDict != null &&
+                    helper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
+                {
+                    return true;
+                }
+                return false;
             }
-            if (!ReferenceEquals(helper, BaseParamter.dbcHelper) &&
-                BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
+            if (BaseParamter.dbcHelper?.dbcFile?.messageDict != null &&
                 BaseParamter.dbcHelper.dbcFile.messageDict.TryGetValue(canId, out dbcMsg))
             {
                 return true;
@@ -354,6 +357,9 @@ namespace PCAN_Client
                     if (info.SigChanged != null &&
                         TryFindDbcMessage(info.MsgId, channel, out var sigChangeMsg))
                     {
+                        // PrevSignalValues需与SigChanged成对存在：连接中后配DBC/更换DBC后切入本分支时可能尚未分配或长度不符，按需重建
+                        if (info.PrevSignalValues == null || info.PrevSignalValues.Length < sigChangeMsg.signals.Count)
+                            info.PrevSignalValues = new double[sigChangeMsg.signals.Count];
                         for (int s = 0; s < info.SigChanged.Length && s < sigChangeMsg.signals.Count; s++)
                         {
                             double curVal = sigChangeMsg.signals[s].result;
@@ -369,6 +375,7 @@ namespace PCAN_Client
                         if (info.SigChanged == null || info.SigChanged.Length < sigCount)
                         {
                             info.SigChanged = new int[sigCount];
+                            info.PrevSignalValues = new double[sigCount]; // 与SigChanged成对分配（之后配上DBC切入精确比对分支时要读）
                             // 新初始化的 SigChanged 数组元素全为0，即刚变化
                         }
                         for (int i = 0; i < msg.LEN; i++)
@@ -2189,7 +2196,7 @@ namespace PCAN_Client
                         pCAN_API.PCAN_ChannelUninitialize();
                         button1.Text = "连接";
                         pcanOpenFlag = false;
-                        GetPCAN_ComRefresh();
+                        RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                     else
                     {
@@ -2197,17 +2204,10 @@ namespace PCAN_Client
                         // 连接前清空数据（不改变scroll/fixed模式）；仅在两类硬件均未连接时清空（连第二类硬件时保留已有数据）
                         if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
 
-                        // 多通道模式：按通道管理窗口保存的映射直接连接（HwType=PCAN或未指定的通道由PCAN认领）
+                        // 多通道模式：按通道管理窗口保存的映射直接连接（HwType=PCAN或未指定的通道由PCAN认领）；
+                        // 不做硬件识别（识别只在通道管理窗口首开/手动刷新时进行），连接结果由ConnectMulti逐通道尝试得出
                         if (BaseParamter.BusChannels.Count > 0)
                         {
-                            var pcanList = pCAN_API.GetPCAN_ChannelRefresh();
-                            _lastPcanHwList = ParsePcanHwList(pcanList);
-                            if (_lastPcanHwList.Count == 0)
-                            {
-                                if (ShowFlag) MessageBox.Show("未识别到PCAN硬件通道");
-                                return;
-                            }
-
                             int connected = pCAN_API.ConnectMulti(CanFDFlag);
                             if (connected > 0)
                             {
@@ -2215,6 +2215,7 @@ namespace PCAN_Client
                                 pcanOpenFlag = true;
                                 // 固化"未指定类型"通道的认领（避免混合连接时CANoe重复认领）
                                 ClaimUntypedChannels(BaseParamter.HwTypePcan);
+                                RefreshHwConnectedStatusLocal();
                             }
                             else
                             {
@@ -2222,7 +2223,7 @@ namespace PCAN_Client
                                 pcanOpenFlag = false;
                                 if (ShowFlag)
                                 {
-                                    MessageBox.Show("多通道连接失败：所有映射通道均连接失败（请检查硬件通道映射与设备状态）");
+                                    MessageBox.Show("多通道连接失败：所有映射通道均连接失败（请在通道管理窗口\"刷新识别\"后检查硬件通道绑定与设备状态）");
                                 }
                             }
                             return;
@@ -2478,6 +2479,7 @@ namespace PCAN_Client
                         canoe_API.CANOE_Close();
                         button5.Text = "连接";
                         canoeOpenFlag = false;
+                        RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                     else
                     {
@@ -2485,15 +2487,13 @@ namespace PCAN_Client
                         // 连接前清空数据（不改变scroll/fixed模式）；仅在两类硬件均未连接时清空（连第二类硬件时保留已有数据）
                         if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
 
-                        // 点击连接时主动查询硬件（XL API约10ms，替代原热插拔自动识别），保证driverConfig为最新
-                        GetCanoe_ComRefresh();
-
-                        // 多通道模式：按通道管理窗口保存的映射直接连接（HwType=CANoe或未指定的通道由CANoe认领）
+                        // 多通道模式：按通道管理窗口保存的映射直接连接（HwType=CANoe或未指定的通道由CANoe认领）；
+                        // 不做硬件识别（识别只在通道管理窗口首开/手动刷新时进行）
                         if (BaseParamter.BusChannels.Count > 0)
                         {
                             if (_lastCanoeHwList.Count == 0)
                             {
-                                if (ShowFlag) MessageBox.Show("未识别到CANoe硬件通道");
+                                if (ShowFlag) MessageBox.Show("未识别到CANoe硬件通道，请在通道管理窗口点击\"刷新识别\"");
                                 return;
                             }
 
@@ -2512,6 +2512,7 @@ namespace PCAN_Client
                                 canoeOpenFlag = true;
                                 // 固化"未指定类型"通道的认领（避免混合连接时PCAN重复认领）
                                 ClaimUntypedChannels(BaseParamter.HwTypeCanoe);
+                                RefreshHwConnectedStatusLocal();
                             }
                             else
                             {
@@ -2519,7 +2520,7 @@ namespace PCAN_Client
                                 canoeOpenFlag = false;
                                 if (ShowFlag)
                                 {
-                                    MessageBox.Show("多通道连接失败（请检查硬件通道映射与设备状态）");
+                                    MessageBox.Show("多通道连接失败（请在通道管理窗口\"刷新识别\"后检查硬件通道绑定与设备状态）");
                                 }
                             }
                             return;
@@ -2621,6 +2622,141 @@ namespace PCAN_Client
             CanFDFlag = canFd;
         }
 
+        /// <summary>本地重算识别缓存中各硬件通道的"已连接"状态（不做硬件访问；空闲/已占用等其余状态保留上次识别结果）</summary>
+        internal void RefreshHwConnectedStatusLocal()
+        {
+            if (null != pCAN_API)
+            {
+                foreach (var hw in _lastPcanHwList)
+                {
+                    bool connected = pcanOpenFlag && pCAN_API.IsHwChannelConnected(hw.Hw);
+                    if (connected) hw.Status = "已连接";
+                    else if (hw.Status == "已连接") hw.Status = "空闲"; // 断开回落（刚被本程序释放，大概率为空闲）
+                }
+            }
+            if (null != canoe_API)
+            {
+                foreach (var hw in _lastCanoeHwList)
+                {
+                    bool opened = canoeOpenFlag && hw.Hw >= 1 && hw.Hw <= 64
+                        && (canoe_API.OpenedChannelMask & (1UL << (hw.Hw - 1))) != 0;
+                    if (opened) hw.Status = "已连接";
+                    else if (hw.Status == "已连接") hw.Status = "";
+                }
+            }
+        }
+
+        /// <summary>是否存在绑定到指定硬件类型的通道行（不连接哨兵除外；未指定类型的行两类都候选，由先连者认领）</summary>
+        private bool HasBindingFor(string hwType)
+        {
+            for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
+            {
+                if (BaseParamter.BusChannels[i].HwChannel == BaseParamter.HwNotConnect) continue;
+                string t = BaseParamter.GetEffectiveHwType(i);
+                if (t == "" || t == hwType) return true;
+            }
+            return false;
+        }
+
+        /// <summary>全部已绑定的通道是否都已连接（一键按钮文本判定）</summary>
+        internal bool AllBoundChannelsConnected()
+        {
+            bool needPcan = HasBindingFor(BaseParamter.HwTypePcan);
+            bool needCanoe = HasBindingFor(BaseParamter.HwTypeCanoe);
+            if (!needPcan && !needCanoe) return false;
+            return (!needPcan || pcanOpenFlag) && (!needCanoe || canoeOpenFlag);
+        }
+
+        /// <summary>一键连接所有通道（按各行绑定的硬件类型分别连接；已连的跳过）</summary>
+        internal void ConnectAllChannels()
+        {
+            if (!pcanOpenFlag && HasBindingFor(BaseParamter.HwTypePcan)) PCAN_Connect(true);
+            if (!canoeOpenFlag && HasBindingFor(BaseParamter.HwTypeCanoe)) CANoeConnect(true);
+        }
+
+        /// <summary>一键断开所有通道</summary>
+        internal void DisconnectAllChannels()
+        {
+            if (pcanOpenFlag) PCAN_Connect(true);   // 已连接状态下调用=断开（切换语义）
+            if (canoeOpenFlag) CANoeConnect(true);
+        }
+
+        /// <summary>某逻辑通道当前是否已连接（行级连接按钮状态判定）</summary>
+        internal bool GetChannelConnected(int logicIndex)
+        {
+            string t = BaseParamter.GetEffectiveHwType(logicIndex);
+            if (t == BaseParamter.HwTypePcan)
+                return pcanOpenFlag && pCAN_API != null && pCAN_API.IsLogicChannelConnected((byte)(logicIndex + 1));
+            if (t == BaseParamter.HwTypeCanoe)
+            {
+                byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
+                return canoeOpenFlag && canoe_API != null && hw >= 1 && hw <= 64
+                    && (canoe_API.OpenedChannelMask & (1UL << (hw - 1))) != 0;
+            }
+            return false;
+        }
+
+        /// <summary>连接单个逻辑通道（按其绑定的硬件类型增量连接，不影响其他已连接通道）</summary>
+        internal void ConnectSingleChannel(int logicIndex)
+        {
+            if (logicIndex < 0 || logicIndex >= BaseParamter.BusChannels.Count) return;
+            string t = BaseParamter.GetEffectiveHwType(logicIndex);
+            if (t == BaseParamter.HwTypePcan && pCAN_API != null)
+            {
+                if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
+                if (pCAN_API.ConnectOne(logicIndex, CanFDFlag))
+                {
+                    pcanOpenFlag = true;
+                    button1.Text = "已连接";
+                }
+                else
+                {
+                    MessageBox.Show($"通道 [{BaseParamter.BusChannels[logicIndex].Name}] 连接失败（请检查硬件通道绑定与设备状态）");
+                }
+            }
+            else if (t == BaseParamter.HwTypeCanoe && canoe_API != null)
+            {
+                if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
+                byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
+                if (canoe_API.ActivateChannel(hw, CanFDFlag))
+                {
+                    canoeOpenFlag = true;
+                    button5.Text = "已连接";
+                }
+                else
+                {
+                    MessageBox.Show($"通道 [{BaseParamter.BusChannels[logicIndex].Name}] 连接失败（请检查硬件通道绑定与设备状态）");
+                }
+            }
+            RefreshHwConnectedStatusLocal();
+        }
+
+        /// <summary>断开单个逻辑通道（不影响其他已连接通道）</summary>
+        internal void DisconnectSingleChannel(int logicIndex)
+        {
+            if (logicIndex < 0 || logicIndex >= BaseParamter.BusChannels.Count) return;
+            string t = BaseParamter.GetEffectiveHwType(logicIndex);
+            if (t == BaseParamter.HwTypePcan && pCAN_API != null)
+            {
+                if (pCAN_API.DisconnectOne(logicIndex) == 0)
+                {
+                    pcanOpenFlag = false;
+                    button1.Text = "连接";
+                }
+            }
+            else if (t == BaseParamter.HwTypeCanoe && canoe_API != null)
+            {
+                byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
+                canoe_API.DeactivateChannel(hw);
+                if (canoe_API.OpenedChannelMask == 0)
+                {
+                    canoeOpenFlag = false;
+                    button5.Text = "连接";
+                }
+            }
+            RefreshHwConnectedStatusLocal();
+        }
+
         /// <summary>断开PCAN连接并更新UI（供ChartFrom调用）</summary>
         internal void DisconnectPCAN()
         {
@@ -2633,7 +2769,7 @@ namespace PCAN_Client
                         pCAN_API.PCAN_ChannelUninitialize();
                         button1.Text = "连接";
                         pcanOpenFlag = false;
-                        GetPCAN_ComRefresh();
+                        RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                 }));
             }
@@ -2651,7 +2787,7 @@ namespace PCAN_Client
                         canoe_API.CANOE_Close();
                         button5.Text = "连接";
                         canoeOpenFlag = false;
-                        GetCanoe_ComRefresh();
+                        RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                 }));
             }
@@ -2669,7 +2805,7 @@ namespace PCAN_Client
                         canoe_API.CANOE_Close();
                         button5.Text = "连接";
                         canoeOpenFlag = false;
-                        GetCanoe_ComRefresh();
+                        RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                         MessageBox.Show("CANoe硬件连接已断开，请检查设备连接");
                     }
                 }));

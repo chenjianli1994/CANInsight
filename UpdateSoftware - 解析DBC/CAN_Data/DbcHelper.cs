@@ -96,9 +96,19 @@ namespace PCAN_Client.CAN_Data
             int index = 0;
             int index2 = 0;
             string rawValue = "";
-            // 按逻辑通道路由到对应通道的DBC解析实例（多通道同ID各自解析，互不串扰）；
-            // 该通道未配置DBC时回退全局聚合视图（保持单通道兼容行为）
-            DbcHelper routedHelper = BaseParamter.GetDbcHelperByChannel(channel) ?? this;
+            DbcHelper routedHelper;
+            if (BaseParamter.BusChannels.Count > 0)
+            {
+                // 多通道模式：严格按各自通道配置的DBC解析；未配置DBC的通道不解析（不回退聚合视图——
+                // 否则该通道报文会被其他通道DBC里的同ID报文解析，造成跨通道串扰）
+                routedHelper = BaseParamter.GetDbcHelperByChannel(channel);
+                if (routedHelper == null) return;
+            }
+            else
+            {
+                // 无通道配置（单通道兼容）：聚合视图（等于用户直接加载的DBC）
+                routedHelper = this;
+            }
             DbcFile routedDbc = routedHelper.dbcFile;
             if (routedDbc.messages.Count == 0)
             {
@@ -173,7 +183,8 @@ namespace PCAN_Client.CAN_Data
                         {
                             if (null != Main.chartFromShow)
                             {
-                                Main.chartFromShow.AddPoint(message.messgeId, index2, message.signals[index2].result, message.cycleTime);
+                                // 传入逻辑通道号：多通道同ID报文各自解析后，喂点必须匹配信号所属通道的曲线，避免跨通道串值
+                                Main.chartFromShow.AddPoint(message.messgeId, index2, message.signals[index2].result, message.cycleTime, channel);
                             }
                         }
                         else if(!Main.ChartShowOpenFlag && message.signals[index2].ChartShowFlag)

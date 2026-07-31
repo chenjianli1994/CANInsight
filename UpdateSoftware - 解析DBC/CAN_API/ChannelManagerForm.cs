@@ -35,8 +35,7 @@ namespace PCAN_Client
         private RadioButton _rbCanFd;
         private DataGridView _dgv;
         private TextBox _txtPreview;
-        private Button _btnConnectPcan;
-        private Button _btnConnectCanoe;
+        private Button _btnConnectAll;
         private Button _btnSave;
         private Timer _statusTimer;
 
@@ -46,6 +45,7 @@ namespace PCAN_Client
         private const int ColDbc = 3;
         private const int ColBrowse = 4;
         private const int ColDbcStatus = 5;
+        private const int ColConn = 6;
 
         /// <summary>绑定硬件下拉项（携带硬件类型+通道号，选中即固化二元组；Hw=0表示不连接）</summary>
         private class HwBindItem
@@ -73,7 +73,7 @@ namespace PCAN_Client
             }
             UpdateHwStatusLabel();
             LoadChannelRows();   // 从全局通道配置填充表格
-            RefreshConnButtons();
+            RefreshAllConnButtons();
             RefreshPreview();
             this.Shown += (s, e) => RefreshHardwareAsync();
         }
@@ -126,12 +126,13 @@ namespace PCAN_Client
                 AutoGenerateColumns = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect
             };
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 12 });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = BlfColumnTitle, FillWeight = 9 });
-            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 34, FlatStyle = FlatStyle.Flat });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 29 });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 11 });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = BlfColumnTitle, FillWeight = 8 });
+            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 32, FlatStyle = FlatStyle.Flat });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 27 });
             _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "browse", HeaderText = "浏览", Text = "...", UseColumnTextForButtonValue = true, FillWeight = 6 });
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbcStatus", HeaderText = "DBC状态", ReadOnly = true, FillWeight = 8 });
+            _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "conn", HeaderText = "操作", FillWeight = 8 });
             _dgv.CurrentCellDirtyStateChanged += Dgv_CurrentCellDirtyStateChanged;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CellContentClick += Dgv_CellContentClick;
@@ -165,13 +166,10 @@ namespace PCAN_Client
             };
             this.Controls.Add(_txtPreview);
 
-            // === 底部：连接操作 + 保存/关闭 ===
-            _btnConnectPcan = new Button { Text = "连接PCAN", Location = new Point(12, 516), Size = new Size(120, 36) };
-            _btnConnectPcan.Click += BtnConnectPcan_Click;
-            this.Controls.Add(_btnConnectPcan);
-            _btnConnectCanoe = new Button { Text = "连接CANoe", Location = new Point(140, 516), Size = new Size(120, 36) };
-            _btnConnectCanoe.Click += BtnConnectCanoe_Click;
-            this.Controls.Add(_btnConnectCanoe);
+            // === 底部：一键连接/断开所有通道 + 保存/关闭 ===
+            _btnConnectAll = new Button { Text = "一键连接所有通道", Location = new Point(12, 516), Size = new Size(170, 36) };
+            _btnConnectAll.Click += BtnConnectAll_Click;
+            this.Controls.Add(_btnConnectAll);
 
             _btnSave = new Button { Text = "保存配置", Location = new Point(652, 516), Size = new Size(100, 36) };
             _btnSave.Click += (s, e) => SaveConfig(true);
@@ -180,13 +178,20 @@ namespace PCAN_Client
             this.Controls.Add(btnClose);
             this.CancelButton = btnClose;
 
-            // 连接动作异步执行（Main内BeginInvoke），用一次性Timer延迟刷新窗口状态
+            // 连接动作异步执行（Main内BeginInvoke），用一次性Timer延迟刷新窗口状态（本地重算，不做硬件识别）
             _statusTimer = new Timer { Interval = 600 };
             _statusTimer.Tick += (s, e) =>
             {
                 _statusTimer.Stop();
-                RefreshHardwareAsync();
-                RefreshConnButtons();
+                if (_main == null) return;
+                _main.RefreshHwConnectedStatusLocal(); // 本地重算各硬件通道"已连接"状态（不访问硬件）
+                _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
+                // 非编辑状态下重建下拉数据源，同步选项里的"(已连接)"状态后缀（编辑中跳过避免打断）
+                if (!_dgv.IsCurrentCellInEditMode)
+                    foreach (DataGridViewRow row in _dgv.Rows) RebuildBindCellDataSource(row);
+                UpdateHwStatusLabel();
+                RefreshAllConnButtons();
+                RefreshPreview();
             };
             this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
         }
@@ -216,6 +221,7 @@ namespace PCAN_Client
                             _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
                             foreach (DataGridViewRow row in _dgv.Rows) RebuildBindCellDataSource(row);
                             UpdateHwStatusLabel();
+                            RefreshAllConnButtons();
                             RefreshPreview();
                         }));
                     }
@@ -238,10 +244,26 @@ namespace PCAN_Client
                 $"CANoe: {(canoeN > 0 ? $"已识别{canoeN}路" : "未识别到设备")}（{(Main.canoeOpenFlag ? "已连接" : "未连接")}）";
         }
 
-        private void RefreshConnButtons()
+        /// <summary>统一刷新连接按钮状态：一键按钮文本（全部已绑定通道都连上→"一键断开"）+ 各行操作按钮（已连接→"断开"，未连接→"连接"，无绑定→禁用灰显）</summary>
+        private void RefreshAllConnButtons()
         {
-            _btnConnectPcan.Text = Main.pcanOpenFlag ? "断开PCAN" : "连接PCAN";
-            _btnConnectCanoe.Text = Main.canoeOpenFlag ? "断开CANoe" : "连接CANoe";
+            if (_main == null) return;
+            _btnConnectAll.Text = _main.AllBoundChannelsConnected() ? "一键断开所有通道" : "一键连接所有通道";
+            for (int i = 0; i < _dgv.Rows.Count; i++)
+            {
+                var bind = GetRowBindItem(_dgv.Rows[i]);
+                var cell = (DataGridViewButtonCell)_dgv.Rows[i].Cells[ColConn];
+                if (bind.Hw == 0)
+                {
+                    cell.Value = "-";
+                    cell.Style.ForeColor = SystemColors.GrayText; // 无绑定硬件：禁用灰显（点击处理中同步拦截）
+                }
+                else
+                {
+                    cell.Value = _main.GetChannelConnected(i) ? "断开" : "连接";
+                    cell.Style.ForeColor = _dgv.DefaultCellStyle.ForeColor;
+                }
+            }
         }
 
         /// <summary>构建绑定下拉选项：不连接 + 识别到的全部硬件通道（带类型前缀与状态；冲突不限制选择，由标红提示+连接时拦截）</summary>
@@ -337,12 +359,23 @@ namespace PCAN_Client
         private void Dgv_CellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
+            // 绑定列变化后行操作按钮状态可能变化（无绑定↔有绑定）
+            if (e.ColumnIndex == ColHwBind) RefreshAllConnButtons();
             RefreshPreview();
         }
 
         private void Dgv_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0 || e.ColumnIndex != ColBrowse) return;
+            if (e.RowIndex < 0) return;
+            // "操作"列：行级连接/断开（无绑定行显示"-"，点击忽略）
+            if (e.ColumnIndex == ColConn)
+            {
+                var bindItem = GetRowBindItem(_dgv.Rows[e.RowIndex]);
+                if (bindItem.Hw == 0) return;
+                ConnectRowChannel(e.RowIndex);
+                return;
+            }
+            if (e.ColumnIndex != ColBrowse) return;
             var row = _dgv.Rows[e.RowIndex];
             using (var ofd = new OpenFileDialog { Filter = "DBC文件 (*.dbc)|*.dbc|所有文件 (*.*)|*.*" })
             {
@@ -374,6 +407,7 @@ namespace PCAN_Client
             row.Cells[ColHwBind].Value = FindBindKey(row, "", 0, n - 1); // 同号预选
             row.Cells[ColDbc].Value = "";
             row.Cells[ColDbcStatus].Value = "";
+            RefreshAllConnButtons();
             RefreshPreview();
         }
 
@@ -388,6 +422,7 @@ namespace PCAN_Client
             {
                 if (!row.IsNewRow) _dgv.Rows.Remove(row);
             }
+            RefreshAllConnButtons();
             RefreshPreview();
         }
 
@@ -573,21 +608,37 @@ namespace PCAN_Client
 
         // === 连接操作 ===
 
-        private void BtnConnectPcan_Click(object sender, EventArgs e)
+        /// <summary>一键连接/断开所有通道：全部已绑定通道都连上时执行全断，否则连接未连的（连接前固化并校验当前编辑）</summary>
+        private void BtnConnectAll_Click(object sender, EventArgs e)
         {
             if (_main == null) return;
-            // 连接动作前固化当前编辑并检查（连接使用全局配置）：保存校验发现冲突/DBC错误时弹窗告警并中止连接，需重新分配硬件
-            if (!Main.pcanOpenFlag && !SaveConfig(false)) return;
-            _main.PCAN_Connect(true); // 内部BeginInvoke异步执行 连接/断开 切换
+            if (_main.AllBoundChannelsConnected())
+            {
+                _main.DisconnectAllChannels();
+            }
+            else
+            {
+                // 连接动作前固化当前编辑并检查（连接使用全局配置）：保存校验发现冲突/DBC错误时弹窗告警并中止连接，需重新分配硬件
+                if (!SaveConfig(false)) return;
+                _main.ConnectAllChannels();
+            }
             _statusTimer.Stop();
-            _statusTimer.Start();   // 延迟刷新窗口状态（识别状态/按钮文本/预览）
+            _statusTimer.Start();   // 延迟刷新窗口状态（本地重算，不做硬件识别）
         }
 
-        private void BtnConnectCanoe_Click(object sender, EventArgs e)
+        /// <summary>行级连接/断开：点击该行"操作"列按钮（先固化并校验当前编辑，再按该行绑定的硬件类型增量连接/断开）</summary>
+        private void ConnectRowChannel(int rowIndex)
         {
             if (_main == null) return;
-            if (!Main.canoeOpenFlag && !SaveConfig(false)) return;
-            _main.CANoeConnect(true);
+            if (_main.GetChannelConnected(rowIndex))
+            {
+                _main.DisconnectSingleChannel(rowIndex);
+            }
+            else
+            {
+                if (!SaveConfig(false)) return;
+                _main.ConnectSingleChannel(rowIndex);
+            }
             _statusTimer.Stop();
             _statusTimer.Start();
         }

@@ -184,6 +184,36 @@ namespace PCAN_Client.Canoe_API
             return true;
         }
 
+        /// <summary>增量连接单个硬件通道：port未开时完整打开；已开时合并mask重开port
+        /// （XL限制：port的channelMask在OpenPort时固定，Activate mask外通道会被拒绝，只能重开）</summary>
+        internal bool ActivateChannel(byte hw, bool canFDFlag)
+        {
+            if (hw < 1 || hw > 64) return false;
+            ulong bit = 1UL << (hw - 1);
+            if (!aliveFlag)
+            {
+                return CANOE_Open(bit, canFDFlag); // port未开：完整打开（OpenedChannelMask在Open内赋值）
+            }
+            if ((OpenedChannelMask & bit) != 0) return true; // 该通道已在连接中
+            // 合并新通道到现有连接集合，重开port（Deactivate全部→Close→OpenPort(合并mask)→SetBitrate→Activate全部，
+            // 由CANOE_Open完整流程完成；接收短暂中断后自动恢复）
+            ulong newMask = OpenedChannelMask | bit;
+            CANOE_Close();
+            return CANOE_Open(newMask, canFDFlag);
+        }
+
+        /// <summary>增量断开单个硬件通道；全部断开后关闭port（aliveFlag=false、接收回调移除）</summary>
+        internal bool DeactivateChannel(byte hw)
+        {
+            if (hw < 1 || hw > 64 || !aliveFlag) return false;
+            ulong bit = 1UL << (hw - 1);
+            try { xlDriver.XL_DeactivateChannel(portHandle, bit); } catch { }
+            appChannelMask &= ~bit;
+            OpenedChannelMask &= ~bit;
+            if (OpenedChannelMask == 0) CANOE_Close();
+            return true;
+        }
+
         private XLDefine.XL_CANFD_DLC GetSendDataDlc(int len)
         {
             if (len <= 0)

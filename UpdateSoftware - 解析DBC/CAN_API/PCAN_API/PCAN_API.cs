@@ -130,6 +130,60 @@ namespace PCAN_Client.PCAN_API
             return PCAN_DeviceChannel;
         }
 
+        /// <summary>逻辑通道是否已连接（多通道字典）</summary>
+        internal bool IsLogicChannelConnected(byte logicChannel) => _connectedChannels.ContainsKey(logicChannel);
+
+        /// <summary>硬件通道号（USBBUS序号1-16）是否已连接（识别缓存"已连接"状态本地判定用，不做硬件访问）</summary>
+        internal bool IsHwChannelConnected(byte hw)
+        {
+            if (hw < 1 || hw > 16) return false;
+            return _connectedChannels.ContainsValue(PCAN_DeviceChannelBuf[hw - 1]);
+        }
+
+        /// <summary>增量连接单个逻辑通道（多通道模式）：Initialize该行绑定的硬件句柄并加入已连接字典；首个通道连接时启动接收调度</summary>
+        internal bool ConnectOne(int logicIndex, bool canFDFlag)
+        {
+            if (logicIndex < 0 || logicIndex >= BaseParamter.BusChannels.Count) return false;
+            this.CanFDFlag = canFDFlag;
+            byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
+            if (hw < 1 || hw > 16) return false;
+            ushort handle = PCAN_DeviceChannelBuf[hw - 1];
+
+            PCANBasic.Uninitialize(handle);
+            TPCANStatus result = canFDFlag
+                ? PCANBasic.InitializeFD(handle, bitrateFD)
+                : PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
+            if (TPCANStatus.PCAN_ERROR_OK != result)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PCAN] 通道{BaseParamter.BusChannels[logicIndex].Name}(USB_{hw})连接失败: {result}");
+                return false;
+            }
+            _connectedChannels[(byte)(logicIndex + 1)] = handle; // key=逻辑通道号（接收轮询按此上报）
+            if (PCAN_ReceiveThreadAlive == 0)
+            {
+                PCAN_ReceiveThreadAlive = 1;
+                multiMessageCANScheduler.Start();
+            }
+            return true;
+        }
+
+        /// <summary>增量断开单个逻辑通道；全部断开后停止接收调度。返回剩余已连接通道数</summary>
+        internal int DisconnectOne(int logicIndex)
+        {
+            byte key = (byte)(logicIndex + 1);
+            if (_connectedChannels.TryGetValue(key, out ushort handle))
+            {
+                _connectedChannels.Remove(key);
+                PCANBasic.Uninitialize(handle);
+            }
+            if (_connectedChannels.Count == 0)
+            {
+                PCAN_ReceiveThreadAlive = 0;
+                multiMessageCANScheduler.Stop();
+            }
+            return _connectedChannels.Count;
+        }
+
         /// <summary>已连接的（逻辑通道号,句柄）枚举，供接收轮询</summary>
         internal IEnumerable<KeyValuePair<byte, ushort>> ConnectedChannels => _connectedChannels;
         public List<string> GetPCAN_ChannelRefresh()
