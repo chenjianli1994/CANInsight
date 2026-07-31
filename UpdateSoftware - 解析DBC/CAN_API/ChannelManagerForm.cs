@@ -596,6 +596,8 @@ namespace PCAN_Client
             BaseParamter.BusChannels = channels;
             BaseParamter.SaveBusChannelsConfig();
             BaseParamter.RefreshGlobalDbcFromChannels();
+            // 通道列表整体重建后，绘图区信号的ChartShowFlag/周期调度注册（挂在旧Message对象上）已失效，按当前曲线重建
+            Main.chartFromShow?.RestoreChartShowFlags();
             ConfigSaved = true;
 
             for (int i = 0; i < _dgv.Rows.Count && i < channels.Count; i++)

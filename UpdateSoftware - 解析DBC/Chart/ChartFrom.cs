@@ -2871,7 +2871,7 @@ namespace PCAN_Client
                             out _, out _, out _);
                         if (dbcMsg != null)
                         {
-                            multiChartFromScheduler.AddMessage(dbcMsg, signal.CycleTime);
+                            multiChartFromScheduler.AddMessage(dbcMsg, signal.CycleTime, (byte)(signal.BusChannelIndex + 1));
                             if (signal.SignalIndex >= 0 && signal.SignalIndex < dbcMsg.signals.Count)
                                 dbcMsg.signals[signal.SignalIndex].ChartShowFlag = true;
                         }
@@ -3351,14 +3351,16 @@ namespace PCAN_Client
             DeleteSelectedChannel();
         }
 
-        private int GetChannelIndex(string signalName)
+        /// <summary>按信号名找曲线通道；多通道模式（同一份DBC配多路，信号名相同）额外匹配逻辑通道（-1=兼容未分配通道，通配）</summary>
+        private int GetChannelIndex(string signalName, byte logicChannel = 0)
         {
-            for(int index=0; index<Channels.Count; index++)
+            for (int index = 0; index < Channels.Count; index++)
             {
-                if (Channels[index].DbcSignalName.Equals(signalName))
-                {
-                    return index;
-                }
+                if (!Channels[index].DbcSignalName.Equals(signalName)) continue;
+                if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
+                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != logicChannel - 1)
+                    continue;
+                return index;
             }
             return -1;
         }
@@ -3411,7 +3413,13 @@ namespace PCAN_Client
                 public CAN_Data.Message Message { get; set; }
                 public long IntervalMs { get; set; }
                 public long NextTriggerTime { get; set; }
+                /// <summary>逻辑通道号（1-based，0=未指定/单通道兼容）；多通道同一份DBC给多路时按 通道+ID 区分注册</summary>
+                public byte LogicChannel { get; set; }
                 public uint CanId => Message.messgeId;
+                /// <summary>调度注册复合键：逻辑通道号(高32位)+CAN ID(低32位)；LogicChannel=0时退化为纯ID（兼容单通道）</summary>
+                public long ScheduleKey => ((long)LogicChannel << 32) | CanId;
+                /// <summary>入队序号（相同触发时间+相同键时保证SortedSet不丢元素）</summary>
+                public long Seq { get; set; }
                 public int CompareTo(CANMessageSchedule other)
                 {
                     return NextTriggerTime.CompareTo(other.NextTriggerTime);
@@ -3441,13 +3449,16 @@ namespace PCAN_Client
                         int timeCompare = x.NextTriggerTime.CompareTo(y.NextTriggerTime);
                         if (timeCompare != 0) return timeCompare;
 
-                        // 如果触发时间相同，使用CanId作为次要排序条件
-                        return x.CanId.CompareTo(y.CanId);
+                        // 触发时间相同：先按复合键（通道+ID），再按入队序号——多通道同ID同周期时也不会被SortedSet判重丢弃
+                        int keyCompare = x.ScheduleKey.CompareTo(y.ScheduleKey);
+                        if (keyCompare != 0) return keyCompare;
+                        return x.Seq.CompareTo(y.Seq);
                     }
                 }
 
                 public void Enqueue(CANMessageSchedule item)
                 {
+                    item.Seq = _sequenceNumber++;
                     _sortedSet.Add(item);
                 }
 
@@ -3475,8 +3486,8 @@ namespace PCAN_Client
             }
 
             private readonly CANMessageScheduleQueue _priorityQueue;
-            private readonly Dictionary<uint, CANMessageSchedule> _scheduleLookup;
-            private readonly List<CAN_Data.Message> _ChartfromBuffer;
+            private readonly Dictionary<long, CANMessageSchedule> _scheduleLookup; // key=ScheduleKey（逻辑通道<<32|CAN ID）
+            private readonly List<CANMessageSchedule> _ChartfromBuffer;
             private readonly object _lock = new object();
             private Stopwatch stopwatch = new Stopwatch();
             private bool _isStarted = false;
@@ -3485,11 +3496,11 @@ namespace PCAN_Client
             public MultiMessageCANScheduler()
             {
                 _priorityQueue = new CANMessageScheduleQueue();
-                _scheduleLookup = new Dictionary<uint, CANMessageSchedule>();
-                _ChartfromBuffer = new List<CAN_Data.Message>();
+                _scheduleLookup = new Dictionary<long, CANMessageSchedule>();
+                _ChartfromBuffer = new List<CANMessageSchedule>();
             }
 
-            public void AddMessage(CAN_Data.Message message, uint intervalMs)
+            public void AddMessage(CAN_Data.Message message, uint intervalMs, byte logicChannel = 0)
             {
                 intervalMs = (uint)((intervalMs <= 0) ? 1 : intervalMs*2);
                 lock (_lock)
@@ -3499,30 +3510,32 @@ namespace PCAN_Client
                     {
                         Message = message,
                         IntervalMs = intervalMs,
-                        NextTriggerTime = GetCurrentTime()
+                        NextTriggerTime = GetCurrentTime(),
+                        LogicChannel = logicChannel
                     };
                     if (null != schedule.Message)
                     {
-                        if (!_scheduleLookup.ContainsKey(schedule.Message.messgeId))
+                        if (!_scheduleLookup.ContainsKey(schedule.ScheduleKey))
                         {
-                            _scheduleLookup[schedule.Message.messgeId] = schedule;
+                            _scheduleLookup[schedule.ScheduleKey] = schedule;
                             _priorityQueue.Enqueue(schedule);
                         }
                         else
                         {
-                            UpdateMessageInterval(schedule.Message.messgeId, intervalMs);
+                            UpdateMessageInterval(message.messgeId, intervalMs, logicChannel);
                         }
                     }
                 }
             }
 
-            public void RemoveMessage(uint canId)
+            public void RemoveMessage(uint canId, byte logicChannel = 0)
             {
                 lock (_lock)
                 {
-                    if (_scheduleLookup.ContainsKey(canId))
+                    long key = ((long)logicChannel << 32) | canId;
+                    if (_scheduleLookup.ContainsKey(key))
                     {
-                        _scheduleLookup.Remove(canId);
+                        _scheduleLookup.Remove(key);
                     }
                 }
             }
@@ -3559,7 +3572,7 @@ namespace PCAN_Client
                         var nextSchedule = _priorityQueue.Peek();
 
                         // 检查该消息是否已被移除
-                        if (!_scheduleLookup.ContainsKey(nextSchedule.CanId))
+                        if (!_scheduleLookup.ContainsKey(nextSchedule.ScheduleKey))
                         {
                             _priorityQueue.Dequeue(); // 移除已删除的消息
                             continue;
@@ -3569,9 +3582,9 @@ namespace PCAN_Client
                         if (nextSchedule.NextTriggerTime > currentTime)
                             break;
 
-                        // 出队并处理
+                        // 出队并处理（缓存schedule：后续超时判定/曲线匹配需要LogicChannel区分多通道同ID）
                         var schedule = _priorityQueue.Dequeue();
-                        _ChartfromBuffer.Add(schedule.Message);
+                        _ChartfromBuffer.Add(schedule);
 
                         // 更新下次触发时间并重新入队
                         schedule.NextTriggerTime = currentTime + schedule.IntervalMs;
@@ -3585,9 +3598,10 @@ namespace PCAN_Client
                 {
                     TimeSpan elapsed = DateTime.Now - Main.chartFromShow.startTime;
                     Main.chartFromShow._currentTime = elapsed.TotalSeconds;
-                    
-                    foreach (var msg in _ChartfromBuffer)
+
+                    foreach (var sc in _ChartfromBuffer)
                     {
+                        var msg = sc.Message;
                         bool isLost = msg.receiveCnt == msg.ChartFromReceiveCnt;
                         if (!Main.chartFromShow.RunStatus)
                         {
@@ -3597,7 +3611,8 @@ namespace PCAN_Client
                         {
                             if (signal.ChartShowFlag)
                             {
-                                int index = Main.chartFromShow.GetChannelIndex(signal.signalName);
+                                // 多通道同名信号（同一份DBC配多路）：按逻辑通道匹配，超时丢失点插到各自通道的曲线
+                                int index = Main.chartFromShow.GetChannelIndex(signal.signalName, sc.LogicChannel);
                                 if (-1 != index)
                                 {
                                     ChannelData channel = Main.chartFromShow.Channels[index];
@@ -3607,7 +3622,7 @@ namespace PCAN_Client
                                         if (!channel.IsLost)
                                         {
                                             Main.chartFromShow.Channels[index].IsLost = true;
-                                            UpdateMessageInterval(msg.messgeId, msg.cycleTime);
+                                            UpdateMessageInterval(msg.messgeId, msg.cycleTime, sc.LogicChannel);
                                         }
                                     }
                                     else
@@ -3615,7 +3630,7 @@ namespace PCAN_Client
                                         if (channel.IsLost)
                                         {
                                             Main.chartFromShow.Channels[index].IsLost = false;
-                                            UpdateMessageInterval(msg.messgeId, msg.cycleTime * 2);
+                                            UpdateMessageInterval(msg.messgeId, msg.cycleTime * 2, sc.LogicChannel);
                                         }
                                     }
                                 }
@@ -3658,11 +3673,12 @@ namespace PCAN_Client
                 }
             }
 
-            public void UpdateMessageInterval(uint canId, uint newIntervalMs)
+            public void UpdateMessageInterval(uint canId, uint newIntervalMs, byte logicChannel = 0)
             {
                 lock (_lock)
                 {
-                    if (_scheduleLookup.TryGetValue(canId, out var schedule))
+                    long key = ((long)logicChannel << 32) | canId;
+                    if (_scheduleLookup.TryGetValue(key, out var schedule))
                     {
                         // 更新间隔时间
                         newIntervalMs = (newIntervalMs <= 0) ? 1 : newIntervalMs;
@@ -4288,6 +4304,26 @@ namespace PCAN_Client
             return null;
         }
 
+        /// <summary>通道配置(BusChannels)整体替换后，按当前曲线信号重新在各自通道DBC报文对象上置位ChartShowFlag并重建周期调度注册。
+        /// 替换会新建DbcHelper/Message对象（通道管理窗口每次保存/连接前保存都会重建），原置位丢失导致实时喂点中断——
+        /// 表现为报文列表解析正常但曲线"没收到报文"。</summary>
+        internal void RestoreChartShowFlags()
+        {
+            if (Channels == null) return;
+            foreach (var ch in Channels)
+            {
+                var msg = ResolveChannelDbcMessage(ch.BusChannelIndex, ch.DbcMessageIndex, (uint)ch.DbcMessageId, ch.DbcSignalName,
+                    out _, out _, out int sigIdx);
+                if (msg == null) continue;
+                int si = sigIdx >= 0 ? sigIdx : ch.DbcSignalIndex;
+                if (si >= 0 && si < msg.signals.Count)
+                    msg.signals[si].ChartShowFlag = true;
+                // 周期调度注册的旧Message对象已作废：Remove再Add换新对象（复合键按通道区分，同ID多通道互不干扰）
+                multiChartFromScheduler.RemoveMessage(msg.messgeId, (byte)(ch.BusChannelIndex + 1));
+                multiChartFromScheduler.AddMessage(msg, ch.CycleTime > 0 ? (uint)(ch.CycleTime * 1000) : 0, (byte)(ch.BusChannelIndex + 1));
+            }
+        }
+
         private void ApplySignalData(List<SignalPresetData> signals)
         {
             // 清空当前曲线
@@ -4348,7 +4384,7 @@ namespace PCAN_Client
                     signal.CycleTime / 1000.0, (int)signal.MsgId,
                     signal.MsgIndex, signal.SignalIndex, signal.SignalName,
                     signal.BusChannelIndex));
-                multiChartFromScheduler.AddMessage(msg, signal.CycleTime);
+                multiChartFromScheduler.AddMessage(msg, signal.CycleTime, (byte)(busIdx + 1));
 
                 // 设置ChartShowFlag到通道DBC实例
                 try
