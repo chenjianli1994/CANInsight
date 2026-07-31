@@ -113,9 +113,11 @@ namespace PCAN_Client.CAN_API
             }
             // BLF/ASC落盘统一使用BLF通道号（逻辑通道号→BlfChannelId转换；回放时按BlfChannelId匹配解析）
             byte blfCh = BaseParamter.GetBlfIdByLogicChannel(channel);
+            // 录制通道过滤（LoggingSet中勾选；未勾选通道的报文不落盘，UI/解析不受影响）
+            bool recordCh = LoggingSet.IsRecordChannel(channel);
             // 记录实时CAN原始报文（用于ChartFrom保存BLF）
             ChartFrom.RecordRealtimeRawMessage(ID, data, blfCh);
-            if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
+            if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int && recordCh)
             {
                 Log.AddCanMessageToWrite(ID, data, timestamp2, blfCh);
             }
@@ -145,7 +147,7 @@ namespace PCAN_Client.CAN_API
                     // 批量缓冲数据（ASC通道列写BLF通道号）
                     lock (_bufferLock)
                     {
-                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, blfCh);
+                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, blfCh, recordCh);
                     }
 
                     time_us_last = time_us;
@@ -223,26 +225,6 @@ namespace PCAN_Client.CAN_API
                 lock (_bufferLock)
                 {
                     Log.ContinuousWriteWorker();
-
-                    // 更新文件大小显示
-                    try
-                    {
-                        if (!string.IsNullOrEmpty(Logging.NowBLFFileAddr_str) && File.Exists(Logging.NowBLFFileAddr_str))
-                        {
-                            FileInfo fileInfo = new FileInfo(Logging.NowBLFFileAddr_str);
-                            float fileSizeMB = fileInfo.Length / 1048576.0f;
-                            bool isOverflow = fileSizeMB >= LoggingSet.SaveSize;
-
-                            if (null != Logging.log)
-                            {
-                                Logging.log.SafeFileSizeRefresh(isOverflow, (LoggingSet.SaveSize - fileSizeMB).ToString("F3"));
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"BLF文件大小检查失败: {ex.Message}");
-                    }
                 }
             });
         }
@@ -252,12 +234,6 @@ namespace PCAN_Client.CAN_API
             try
             {
                 Log.saveLog(ascText, Logging.NowASCFileAddr);
-                FileInfo fileInfo = new FileInfo(Logging.NowASCFileAddr);
-                float fileSizeMB = fileInfo.Length / 1048576.0f;
-                bool isOverflow = fileSizeMB >= LoggingSet.SaveSize;
-
-                // 使用线程安全的UI更新
-                Logging.log.SafeFileSizeRefresh(isOverflow, (LoggingSet.SaveSize - fileSizeMB).ToString("F3"));
             }
             catch (Exception ex)
             {
@@ -265,7 +241,7 @@ namespace PCAN_Client.CAN_API
             }
         }
         private static void FormatAndAppendMessage(StringBuilder str, StringBuilder ascString,
-            TPCANMsg msg, ulong time_us, ulong time_us_last, byte channel = 1)
+            TPCANMsg msg, ulong time_us, ulong time_us_last, byte channel = 1, bool recordCh = true)
         {
             ulong timeDiff = time_us - time_us_last;
 
@@ -274,8 +250,8 @@ namespace PCAN_Client.CAN_API
             string dataHex = string.Join(" ", msg.DATA.Take(msg.LEN).Select(b => b.ToString("X2")));
             string period = $"{timeDiff / 1000}.{timeDiff % 1000}ms";
 
-            // 分别格式化输出（ASC通道列写真实逻辑通道号）
-            if(Logging.SaveFlag && (0 == LoggingSet.SaveFileType_int))
+            // 分别格式化输出（ASC通道列写真实逻辑通道号；recordCh=false的通道不落盘）
+            if(recordCh && Logging.SaveFlag && (0 == LoggingSet.SaveFileType_int))
             {
                 ascString.AppendLine($"{timestamp} {channel} {msg.ID:X2}             Rx    d {msg.LEN} {dataHex}");
             }

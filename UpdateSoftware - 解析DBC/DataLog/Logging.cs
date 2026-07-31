@@ -66,41 +66,6 @@ namespace PCAN_Client.DataLog
             return week;
         }
 
-        internal void SafeFileSizeRefresh(bool isOverflow, string size)
-        {
-            if (this.InvokeRequired)
-            {
-                this.BeginInvoke(new Action<bool, string>(SafeFileSizeRefresh), isOverflow, size);
-            }
-            else
-            {
-                try
-                {
-                    FileSizeRefresh(isOverflow, size);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"文件大小更新失败: {ex.Message}");
-                }
-            }
-        }
-        internal void FileSizeRefresh(bool newfile, string str)
-        {
-            if (newfile)
-            {
-                newFile();
-            }
-            else
-            {
-                /* empty */
-            }
-            file_size_Text.Text = str;
-            //this.BeginInvoke(new EventHandler(delegate
-            //{
-            //    file_size_Text.Text = str;
-            //}));
-        }
-
         public void newFile()
         {
             if (LoggingSet.SaveFileType.Equals("ASC"))
@@ -192,12 +157,23 @@ namespace PCAN_Client.DataLog
 
         internal void MngLogging_StartSaveData()
         {
+            if (SaveFlag)
+            {
+                return; /* 已在录制中：防止重复开始导致timer叠加、文件被另开 */
+            }
             ResistanceSleep.PreventSleep(true); /* 阻止休眠 */
             newFile();
             timer1.Interval = 1000 / DataLog.LoggingSet.Frequency;
             timer1.Start();
+            // CSV信号快照保存（原在Logging_Load中启动，弹窗移除后Load不再触发，移至此）
+            if (LoggingSet.saveExcelFlag)
+            {
+                timer2.Interval = (int)LoggingSet.saveExcelTime;
+                timer2.Start();
+            }
             // BLF模式：启动定时器周期性刷新数据到磁盘
             timer3.Interval = 500;
+            timer3.Tick -= timer3_Tick;
             timer3.Tick += timer3_Tick;
             timer3.Start();
         }
@@ -205,11 +181,6 @@ namespace PCAN_Client.DataLog
         private void Logging_Load(object sender, EventArgs e)
         {
             UiTheme.StyleForm(this);
-            if (LoggingSet.saveExcelFlag)
-            {
-                timer2.Interval = (int)LoggingSet.saveExcelTime;
-                timer2.Start();
-            }
         }
 
         private void timer1_Tick(object sender, EventArgs e)
@@ -268,7 +239,28 @@ namespace PCAN_Client.DataLog
 #endif
         }
 
-        private void Logging_FormClosing(object sender, FormClosingEventArgs e)
+        /// <summary>停止录制：直接清理（弹窗已移除，不再依赖关窗触发）</summary>
+        internal static void StopRecording()
+        {
+            if (log != null)
+            {
+                log.CleanupRecording();
+                log.Dispose();
+                log = null;
+            }
+            else
+            {
+                SaveFlag = false; /* 防御：实例已不在但标志仍置位 */
+            }
+            // 录制状态变化，同步主界面及设置对话框按钮
+            if (Main.main != null && !Main.main.IsDisposed)
+            {
+                Main.main.UpdateRecordButtonState();
+            }
+        }
+
+        /// <summary>录制清理：停timer、刷BLF队列关句柄、复位标志、恢复休眠（FormClosing与主动停止共用）</summary>
+        internal void CleanupRecording()
         {
             timer1.Stop();
             timer2.Stop();
@@ -281,9 +273,19 @@ namespace PCAN_Client.DataLog
                 BLFAPI.BLCloseHandle(NowBLFFileHandle);
                 NowBLFFileHandle = IntPtr.Zero;
             }
-            Logging.log = null;
             SaveFlag = false;
             ResistanceSleep.ResotreSleep();
+        }
+
+        private void Logging_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            CleanupRecording();
+            Logging.log = null;
+            // 录制状态变化，同步主界面按钮（关闭软件过程中Main可能已销毁）
+            if (Main.main != null && !Main.main.IsDisposed)
+            {
+                Main.main.UpdateRecordButtonState();
+            }
         }
 
         private void timer3_Tick(object sender, EventArgs e)

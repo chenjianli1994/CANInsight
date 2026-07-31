@@ -163,6 +163,7 @@ namespace PCAN_Client
         // 工具栏控件
         internal ToolStrip _toolbarPanel;
         internal ToolStrip _connectionStrip;
+        internal ToolStripButton _btnRecordStart; /* 录制报文按钮（点击弹出录制配置窗口） */
         internal ToolStripButton _btnScroll;
         internal ToolStripButton _btnPause;
         internal ToolStripButton _btnClear;
@@ -1636,10 +1637,10 @@ namespace PCAN_Client
             var itemSend = new ToolStripButton("发送报文", ToolbarIcons.Get("swap"));
             itemSend.Alignment = ToolStripItemAlignment.Right;
             itemSend.Click += SendMsg_Click;
-            var itemSave = new ToolStripButton("存储数据", ToolbarIcons.Get("save"));
-            itemSave.Alignment = ToolStripItemAlignment.Right;
-            itemSave.Click += button3_Click;
-            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, itemSave });
+            _btnRecordStart = new ToolStripButton("录制报文", ToolbarIcons.Get("save"));
+            _btnRecordStart.Alignment = ToolStripItemAlignment.Right;
+            _btnRecordStart.Click += button3_Click;
+            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, _btnRecordStart });
 
             this.Controls.Add(_connectionStrip);
             _connectionStrip.BringToFront();
@@ -1843,8 +1844,8 @@ namespace PCAN_Client
                         /* empty */
                     }
                     Logging.SaveCSVPath = "";
-                    Logging.log.Show();
-                    Logging.log.MngLogging_StartSaveData();//开始保存数据
+                    Logging.log.MngLogging_StartSaveData();//开始保存数据（弹窗已移除，不再Show）
+                    UpdateRecordButtonState();//录制状态同步到工具条按钮
                 }));
             }
         }
@@ -2256,7 +2257,29 @@ namespace PCAN_Client
 
         private void button3_Click(object sender, EventArgs e)
         {
-            DataLog.LoggingSet.loggingSet.ShowDialog();
+            // 录制中报文配置窗口照常打开（对话框内有停止录制按钮）
+            DataLog.LoggingSet.loggingSet.Show(); /* 非模态：录制中可用对话框内停止按钮，也可操作主界面 */
+        }
+
+        /// <summary>按 Logging.SaveFlag 刷新录制报文按钮状态（录制中红色高亮作状态指示，始终可点开配置窗口）</summary>
+        internal void UpdateRecordButtonState()
+        {
+            if (this.IsDisposed || null == _btnRecordStart)
+            {
+                return;
+            }
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(UpdateRecordButtonState));
+                return;
+            }
+            bool recording = DataLog.Logging.SaveFlag;
+            _btnRecordStart.BackColor = recording ? Color.IndianRed : SystemColors.Control;
+            // 同步录制设置对话框内的开始/停止按钮
+            if (null != DataLog.LoggingSet.loggingSet && !DataLog.LoggingSet.loggingSet.IsDisposed)
+            {
+                DataLog.LoggingSet.loggingSet.SyncRecordButtons();
+            }
         }
 
         private void comboBox1_SelectedIndexChanged(object sender, EventArgs e)

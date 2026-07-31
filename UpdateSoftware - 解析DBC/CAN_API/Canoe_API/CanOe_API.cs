@@ -417,9 +417,11 @@ namespace PCAN_Client.Canoe_API
                                         TPCANMessageType msgType = ((int)xLcanRxEvent.tagData.canRxOkMsg.msgFlags & 0x01) != 0
                                             ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
                                             : TPCANMessageType.PCAN_MESSAGE_STANDARD;
+                                        // XL事件channelIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号（混合硬件时限定CANoe类型反查消除同号歧义）
+                                        byte logicCh = BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypeCanoe, (byte)(xLcanRxEvent.channelIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time);
+                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
                                         }
                                     }
                                     else
@@ -454,9 +456,11 @@ namespace PCAN_Client.Canoe_API
                                         TPCANMessageType msgType = ((int)xlEvent.tagData.can_Msg.flags & 0x04) != 0
                                             ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
                                             : TPCANMessageType.PCAN_MESSAGE_STANDARD;
+                                        // XL事件chanIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号（混合硬件时限定CANoe类型反查消除同号歧义）
+                                        byte logicCh = BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypeCanoe, (byte)(xlEvent.chanIndex + 1));
                                         lock (CAN_API.CAN_API._receiveCanDataLock)
                                         {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time);
+                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
                                         }
                                     }
                                     else
