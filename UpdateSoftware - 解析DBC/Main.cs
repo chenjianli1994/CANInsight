@@ -146,9 +146,6 @@ namespace PCAN_Client
         private bool _userScrolledAway = false;
         private int _lastScrollRowCount = 0;
 
-        // === 列宽度比例（用于自适应缩放） ===
-        internal Dictionary<string, float> _colWidthProportions = new Dictionary<string, float>();
-
         // 会话起始时间戳（微秒），用于将绝对时间戳归零显示
         private long _sessionStartUs = 0;
 
@@ -948,7 +945,7 @@ namespace PCAN_Client
                                     : "0";
                             }
                             break;
-                        case "colTx":        e.Value = frame.IsTx ? "Tx" : ""; break;
+                        case "colTx":        e.Value = frame.IsTx ? "Tx" : "Rx"; break;
                         case "colErr":       e.Value = ""; break;
                         case "colDesc":
                             {
@@ -993,7 +990,7 @@ namespace PCAN_Client
                     case "colFilter":    e.Value = ""; break;
                     case "colCount":     e.Value = info.Count.ToString(); break;
                     case "colTime":      e.Value = info.TimeGap; break;
-                    case "colTx":        e.Value = info.IsTx ? "Tx" : ""; break;
+                    case "colTx":        e.Value = info.IsTx ? "Tx" : "Rx"; break;
                     case "colErr":       e.Value = info.IsLost ? "Err" : ""; break;
                     case "colDesc":      e.Value = info.Description; break;
                     case "colMsgId":     e.Value = $"0x{info.MsgId:X3}"; break;
@@ -2015,59 +2012,52 @@ namespace PCAN_Client
             _dgvMessages.Columns["colFilter"].HeaderText = "";
 
             _dgvMessages.Columns.Add("colCount", "次数");
-            _dgvMessages.Columns["colCount"].Width = 46;
+            _dgvMessages.Columns["colCount"].Width = 70;
             _dgvMessages.Columns["colCount"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
-            _dgvMessages.Columns.Add("colTime", "时间 (abs|rel)");
+            _dgvMessages.Columns.Add("colTime", "时间");
             _dgvMessages.Columns["colTime"].Width = 95;
 
-            _dgvMessages.Columns.Add("colTx", "发送");
-            _dgvMessages.Columns["colTx"].Width = 40;
+            _dgvMessages.Columns.Add("colTx", "方向");
+            _dgvMessages.Columns["colTx"].Width = 60;
             _dgvMessages.Columns["colTx"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             _dgvMessages.Columns["colTx"].DefaultCellStyle.Font = new Font("Segoe UI", 9f);
 
             _dgvMessages.Columns.Add("colDesc", "报文名称");
-            _dgvMessages.Columns["colDesc"].Width = 90;
+            _dgvMessages.Columns["colDesc"].Width = 240;
 
             _dgvMessages.Columns.Add("colMsgId", "报文ID");
-            _dgvMessages.Columns["colMsgId"].Width = 70;
+            _dgvMessages.Columns["colMsgId"].Width = 80;
 
             _dgvMessages.Columns.Add("colLen", "长度");
-            _dgvMessages.Columns["colLen"].Width = 40;
+            _dgvMessages.Columns["colLen"].Width = 60;
             _dgvMessages.Columns["colLen"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
             _dgvMessages.Columns.Add("colData", "数据");
-            _dgvMessages.Columns["colData"].Width = 251;
+            _dgvMessages.Columns["colData"].Width = 240;
             _dgvMessages.Columns["colData"].DefaultCellStyle.Font = new Font("Consolas", 9f);
 
             _dgvMessages.Columns.Add("colNetwork", "帧类型");
-            _dgvMessages.Columns["colNetwork"].Width = 48;
+            _dgvMessages.Columns["colNetwork"].Width = 80;
 
             _dgvMessages.Columns.Add("colNode", "CAN通道");
-            _dgvMessages.Columns["colNode"].Width = 45;
+            _dgvMessages.Columns["colNode"].Width = 90;
 
             _dgvMessages.Columns.Add("colChangeCnt", "变化次数");
-            _dgvMessages.Columns["colChangeCnt"].Width = 60;
+            _dgvMessages.Columns["colChangeCnt"].Width = 90;
             _dgvMessages.Columns["colChangeCnt"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
             _dgvMessages.Columns.Add("colTimestamp", "时间戳");
-            _dgvMessages.Columns["colTimestamp"].Width = 75;
+            _dgvMessages.Columns["colTimestamp"].Width = 90;
             _dgvMessages.Columns["colTimestamp"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
 
             _dgvMessages.Columns.Add("colMaxGap", "最大间隔");
-            _dgvMessages.Columns["colMaxGap"].Width = 70;
+            _dgvMessages.Columns["colMaxGap"].Width = 90;
             _dgvMessages.Columns["colMaxGap"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
 
             _dgvMessages.Columns.Add("colMinGap", "最小间隔");
-            _dgvMessages.Columns["colMinGap"].Width = 70;
+            _dgvMessages.Columns["colMinGap"].Width = 90;
             _dgvMessages.Columns["colMinGap"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-            // 保存列宽度比例（用于自适应缩放）
-            float totalColWidth = 0;
-            foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                totalColWidth += col.Width;
-            foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                _colWidthProportions[col.Name] = col.Width / totalColWidth;
 
             this.Controls.Add(_dgvMessages);
 
@@ -3046,6 +3036,35 @@ namespace PCAN_Client
         }
 
         /// <summary>调整筛选行、工具栏、DGV大小以自适应窗口</summary>
+        /// <summary>窗口宽度变化时，仅"报文名称"与"数据"两列自动伸缩铺满，其余列宽度固定不联动</summary>
+        private int _lastFillClientWidth = -1;
+        private void AutoFillDescAndDataColumns()
+        {
+            if (_dgvMessages == null || _dgvMessages.IsDisposed) return;
+            int scrollBarWidth = SystemInformation.VerticalScrollBarWidth;
+            int rowHeaderWidth = _dgvMessages.RowHeadersVisible ? _dgvMessages.RowHeadersWidth : 0;
+            int availableWidth = _dgvMessages.ClientSize.Width - scrollBarWidth - rowHeaderWidth - 4;
+            if (availableWidth < 50) availableWidth = 50;
+            // 可用宽度未变化时不重排，保留用户对这两列的手动调整（仅窗口/滚动条变化时才重新铺满）
+            if (availableWidth == _lastFillClientWidth) return;
+            _lastFillClientWidth = availableWidth;
+
+            var colDesc = _dgvMessages.Columns["colDesc"];
+            var colData = _dgvMessages.Columns["colData"];
+            if (colDesc == null || colData == null) return;
+
+            int sumFixed = 0;
+            foreach (DataGridViewColumn col in _dgvMessages.Columns)
+            {
+                if (col != colDesc && col != colData) sumFixed += col.Width;
+            }
+            int remaining = availableWidth - sumFixed;
+            if (remaining < 80) remaining = 80; // 两列各保底40
+            int half = remaining / 2;
+            colDesc.Width = half;
+            colData.Width = remaining - half;
+        }
+
         private void RepositionFilterAndToolbar()
         {
             if (_dgvMessages == null || _dgvMessages.IsDisposed) return;
@@ -3068,55 +3087,8 @@ namespace PCAN_Client
             _dgvMessages.Width = newWidth;
             _dgvMessages.Height = newHeight;
 
-            // 按比例缩放各列宽度，使总列宽刚好填满DGV
-            if (_colWidthProportions.Count > 0)
-            {
-                // 先根据当前实际列宽刷新比例（避免初始比例与显示尺寸不匹配）
-                float curTotal = 0;
-                foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                    curTotal += col.Width;
-                if (curTotal > 0)
-                {
-                    foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                        _colWidthProportions[col.Name] = col.Width / curTotal;
-                }
-
-                // 可用宽度 = ClientSize - 垂直滚动条 - 行头(可见时) - 边框余量
-                // 始终预留滚动条宽度（数据加载后滚动条必然出现）
-                int scrollBarWidth = SystemInformation.VerticalScrollBarWidth;
-                int rowHeaderWidth = _dgvMessages.RowHeadersVisible ? _dgvMessages.RowHeadersWidth : 0;
-                int availableWidth = _dgvMessages.ClientSize.Width - scrollBarWidth - rowHeaderWidth - 4;
-                if (availableWidth < 50) availableWidth = 50;
-
-                // 按比例计算每列宽度
-                int[] widths = new int[_dgvMessages.Columns.Count];
-                int totalAllocated = 0;
-                int idx = 0;
-                foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                {
-                    if (_colWidthProportions.TryGetValue(col.Name, out float prop))
-                    {
-                        int w = (int)(availableWidth * prop);
-                        if (w < 20) w = 20;
-                        widths[idx] = w;
-                        totalAllocated += w;
-                    }
-                    idx++;
-                }
-
-                // 四舍五入导致的差额加到最后一列，确保总宽精确等于 availableWidth
-                int diff = availableWidth - totalAllocated;
-                if (diff != 0 && widths.Length > 0)
-                {
-                    widths[widths.Length - 1] += diff;
-                    if (widths[widths.Length - 1] < 20)
-                        widths[widths.Length - 1] = 20;
-                }
-
-                idx = 0;
-                foreach (DataGridViewColumn col in _dgvMessages.Columns)
-                    col.Width = widths[idx++];
-            }
+            // 窗口宽度变化时仅"报文名称"与"数据"两列自动伸缩铺满，其余列固定
+            AutoFillDescAndDataColumns();
 
             // 工具栏在最上方（紧贴DGV顶部，宽度在CreateMessageToolbar中按按钮总宽自适应）
             if (_toolbarPanel != null && !_toolbarPanel.IsDisposed)
