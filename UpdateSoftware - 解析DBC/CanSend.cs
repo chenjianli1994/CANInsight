@@ -65,6 +65,17 @@ namespace PCAN_Client
         // 在CanSend类中添加成员变量以跟踪当前活动的下拉框
         private ComboBox _currentComboBox;
 
+        /// <summary>左侧栏：CAN通道选择下拉框（按通道配置的BusChannels生成）</summary>
+        private ComboBox _cmbChannel;
+        /// <summary>左侧栏：报文ID筛选框（规则与接收页面一致，支持通配符*）</summary>
+        private TextBox _txtMsgFilter;
+        /// <summary>当前选中的通道索引（0-based，对应BusChannels序号）</summary>
+        private int _selectedChannelIdx = 0;
+        private readonly HashSet<uint> _filterIds = new HashSet<uint>();
+        private readonly List<(uint mask, uint value, uint maxId)> _filterWildcards = new List<(uint mask, uint value, uint maxId)>();
+        /// <summary>筛选输入项（同时用作报文名子串匹配，不区分大小写）</summary>
+        private readonly List<string> _filterNameTokens = new List<string>();
+
         MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
         /// <summary>正在手动连发中的发送列表行索引（防止重复点击）</summary>
         private readonly HashSet<int> _manualSendingRows = new HashSet<int>();
@@ -119,6 +130,7 @@ namespace PCAN_Client
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
+            EnsureRemoveColumn();
             dataGridView2.EditMode = DataGridViewEditMode.EditOnEnter; // 单击即可编辑周期/数据列
 
             addMessagesTable = new DataTable();
@@ -205,6 +217,31 @@ namespace PCAN_Client
             treeView1.Dock = DockStyle.Fill;
             dataGridView1.Dock = DockStyle.Fill;
 
+            // 左侧栏：CAN通道选择 + 报文ID筛选 + 报文树（通道下拉最上，筛选框其次，树填充剩余）
+            _cmbChannel = new ComboBox
+            {
+                Dock = DockStyle.Top,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = UiTheme.UiFont
+            };
+            _cmbChannel.SelectedIndexChanged += _cmbChannel_SelectedIndexChanged;
+            _txtMsgFilter = new TextBox
+            {
+                Dock = DockStyle.Top,
+                Height = 22,
+                Font = new Font("Consolas", 9f),
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(255, 255, 240)
+            };
+            _txtMsgFilter.TextChanged += _txtMsgFilter_TextChanged;
+            var leftToolTip = new System.Windows.Forms.ToolTip();
+            leftToolTip.SetToolTip(_cmbChannel, "选择CAN通道，下方列出该通道DBC的报文");
+            leftToolTip.SetToolTip(_txtMsgFilter, "按报文ID（十六进制，支持通配符如 3**）或报文名称筛选，逗号/空格分隔");
+            var leftPanel = new Panel { Dock = DockStyle.Fill };
+            leftPanel.Controls.Add(treeView1);
+            leftPanel.Controls.Add(_txtMsgFilter);
+            leftPanel.Controls.Add(_cmbChannel);
+
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -216,7 +253,7 @@ namespace PCAN_Client
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 70F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
-            layout.Controls.Add(treeView1, 0, 0);
+            layout.Controls.Add(leftPanel, 0, 0);
             layout.Controls.Add(dataGridView1, 1, 0);
 
             this.Controls.Remove(tabControl1);
@@ -309,6 +346,21 @@ namespace PCAN_Client
                         break;
                     }
                     NowSelectMessageIndex++;
+                }
+
+                // 点击移除列：将该报文移出发送列表（未匹配到报文时不误删）
+                if (dataGridView2.Columns["colRemove"] != null &&
+                    dataGridView2.Columns["colRemove"].Index == dataGridView2SelectColumnIndex)
+                {
+                    if (NowSelectMessageIndex < BaseParamter.dbcHelper.dbcFile.messages.Count)
+                    {
+                        Nowmessage.sendFalg = false;
+                        Nowmessage.enableFlag = false;
+                        multiMessageCANScheduler.RemoveMessage(ResolveTxChannel(Nowmessage), Nowmessage.messgeId);
+                        RebuildMessagesTable();
+                        UpdateDbcTreeview();
+                    }
+                    return;
                 }
 
                 // 点击任意单元格：上方信号表联动解析该报文
@@ -436,6 +488,7 @@ namespace PCAN_Client
             }
             dataGridView2.DataSource = messagesTable;
             EnsureSingleSendColumn();
+            EnsureRemoveColumn();
             // 列宽按内容分配：周期/使能/发送通道/手动次数/手动发送窄，宽度留给数据列
             SetColumnFill("MessageID", 55, true);
             SetColumnFill("MessageName", 105, true);
@@ -450,6 +503,8 @@ namespace PCAN_Client
             if (dataGridView2.Columns["SrcChannel"] != null)
                 dataGridView2.Columns["SrcChannel"].Visible = false;
             // 显示顺序：发送通道/手动次数紧随RawData，手动发送按钮列最后
+            if (dataGridView2.Columns["colRemove"] != null)
+                dataGridView2.Columns["colRemove"].DisplayIndex = 0;
             if (dataGridView2.Columns["TxChannel"] != null)
                 dataGridView2.Columns["TxChannel"].DisplayIndex = 6;
             if (dataGridView2.Columns["ManualSendCnt"] != null)
@@ -497,8 +552,9 @@ namespace PCAN_Client
 
         private void CanSend_Load(object sender, EventArgs e)
         {
-            treeView1.Nodes.Add("Nodes");
             treeView1.Nodes.Add("Message");
+            // 通道下拉框按通道配置填充（设置选中项会触发树刷新并自动选中首条报文）
+            RefreshChannelCombo();
             if (BaseParamter.dbcHelper.dbcFile.messages.Count != 0)
             {
                 UpdateDbcTreeview();
@@ -572,27 +628,115 @@ namespace PCAN_Client
             timer1.Start();
         }
 
+        /// <summary>按通道配置（BusChannels）填充CAN通道下拉框</summary>
+        private void RefreshChannelCombo()
+        {
+            _cmbChannel.Items.Clear();
+            if (BaseParamter.BusChannels.Count == 0)
+            {
+                _cmbChannel.Items.Add("CH1");
+            }
+            else
+            {
+                for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
+                {
+                    string name = BaseParamter.BusChannels[i].Name;
+                    _cmbChannel.Items.Add(string.IsNullOrEmpty(name) ? $"CH{i + 1}" : $"CH{i + 1} {name}");
+                }
+            }
+            if (_selectedChannelIdx >= _cmbChannel.Items.Count)
+            {
+                _selectedChannelIdx = 0;
+            }
+            _cmbChannel.SelectedIndex = _selectedChannelIdx;
+        }
+
+        /// <summary>当前选中通道的DBC报文列表（无通道配置时回退聚合视图；通道未配置DBC时为空）</summary>
+        private List<CAN_Data.Message> GetCurrentMessages()
+        {
+            if (BaseParamter.BusChannels.Count == 0)
+            {
+                return BaseParamter.dbcHelper.dbcFile.messages;
+            }
+            var dbc = BaseParamter.GetDbcHelperByChannel((byte)(_selectedChannelIdx + 1));
+            if (dbc == null)
+            {
+                return new List<CAN_Data.Message>();
+            }
+            return dbc.dbcFile.messages;
+        }
+
+        private void _cmbChannel_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            _selectedChannelIdx = _cmbChannel.SelectedIndex;
+            SelectMessageIndex = -1; /* 跨通道后索引失效，等待重新选择 */
+            dataTable.Rows.Clear();
+            dataGridView1.Refresh();
+            UpdateDbcTreeview();
+            if (treeView1.Nodes.Count > 0 && treeView1.Nodes[0].Nodes.Count > 0)
+            {
+                treeView1.SelectedNode = treeView1.Nodes[0].Nodes[0];
+            }
+        }
+
+        private void _txtMsgFilter_TextChanged(object sender, EventArgs e)
+        {
+            IdFilterRule.Parse(_txtMsgFilter.Text, _filterIds, _filterWildcards);
+            // 所有输入项同时作为报文名子串匹配项
+            _filterNameTokens.Clear();
+            foreach (string part in _txtMsgFilter.Text.Split(new[] { ',', '，', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                _filterNameTokens.Add(part.Trim());
+            }
+            UpdateDbcTreeview();
+        }
+
+        /// <summary>报文是否通过筛选：ID（精确/通配符）或报文名子串（不区分大小写），任一命中即通过；无条件时全部通过</summary>
+        private bool PassesMsgFilter(CAN_Data.Message m)
+        {
+            bool hasIdRule = _filterIds.Count > 0 || _filterWildcards.Count > 0;
+            if (!hasIdRule && _filterNameTokens.Count == 0)
+            {
+                return true;
+            }
+            if (hasIdRule && IdFilterRule.Match(m.messgeId, _filterIds, _filterWildcards))
+            {
+                return true;
+            }
+            foreach (var t in _filterNameTokens)
+            {
+                if (m.messageName.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         internal void UpdateDbcTreeview()
         {
-            for (int i = 0; i < treeView1.Nodes.Count; i++)
+            if (treeView1.Nodes.Count == 0)
             {
-                treeView1.Nodes[i].Nodes.Clear();
+                return;
             }
+            treeView1.Nodes[0].Nodes.Clear();
 
-            for (int i = 0; i < BaseParamter.dbcHelper.dbcFile.nodes.Count; i++)
+            // 树只列当前选中通道的DBC报文，并按ID筛选框过滤；Tag存聚合视图索引（多通道同名报文区分用）
+            var aggregate = BaseParamter.dbcHelper.dbcFile.messages;
+            foreach (var m in GetCurrentMessages())
             {
-                treeView1.Nodes[0].Nodes.Add(BaseParamter.dbcHelper.dbcFile.nodes[i]);
-            }
-            for (int i = 0; i < BaseParamter.dbcHelper.dbcFile.messages.Count; i++)
-            {
-                if (BaseParamter.dbcHelper.dbcFile.messages[i].sendFalg)
+                if (!PassesMsgFilter(m))
                 {
-                    treeView1.Nodes[1].Nodes.Add(BaseParamter.dbcHelper.dbcFile.messages[i].messageName +"(发送)");
+                    continue;
                 }
-                else
+                int aggIdx = aggregate.IndexOf(m);
+                if (aggIdx < 0)
                 {
-                    treeView1.Nodes[1].Nodes.Add(BaseParamter.dbcHelper.dbcFile.messages[i].messageName);
+                    continue;
                 }
+                string text = m.sendFalg ? m.messageName + "(发送)" : m.messageName;
+                var node = treeView1.Nodes[0].Nodes.Add(text);
+                node.Tag = aggIdx;
             }
 
             treeView1.ExpandAll();
@@ -636,28 +780,39 @@ namespace PCAN_Client
 
         private void treeView1_AfterSelect(object sender, TreeViewEventArgs e)
         {
-            if ((e.Node.Parent != null) && (e.Node.Parent.Text == "Message"))
+            if ((e.Node.Parent != null) && (e.Node.Parent.Text == "Message") && (e.Node.Tag is int))
             {
-                SwitchSignalTable(e.Node.Index);
+                SwitchSignalTable((int)e.Node.Tag);
             }
         }
 
         private void treeView1_DoubleClick(object sender, EventArgs e)
         {
-            if(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg)
+            var node = treeView1.SelectedNode;
+            if (node == null || node.Parent == null || node.Parent.Text != "Message" || !(node.Tag is int))
             {
-                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg = false;
-                multiMessageCANScheduler.RemoveMessage(ResolveTxChannel(BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex]),
-                    BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messgeId);
-                treeView1.Nodes[1].Nodes[SelectMessageIndex].Text = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messageName;
+                return;
+            }
+            int aggIdx = (int)node.Tag;
+            var messages = BaseParamter.dbcHelper.dbcFile.messages;
+            if (aggIdx < 0 || aggIdx >= messages.Count)
+            {
+                return;
+            }
+            var msg = messages[aggIdx];
+            if (msg.sendFalg)
+            {
+                msg.sendFalg = false;
+                multiMessageCANScheduler.RemoveMessage(ResolveTxChannel(msg), msg.messgeId);
+                node.Text = msg.messageName;
             }
             else
             {
-                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].sendFalg = true;
+                msg.sendFalg = true;
                 // 添加到发送列表默认不勾选使能（不注册周期调度），由用户勾选Enable后才启动周期发送
-                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].enableFlag = false;
-                BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].NextSendTime = 0;
-                treeView1.Nodes[1].Nodes[SelectMessageIndex].Text = BaseParamter.dbcHelper.dbcFile.messages[SelectMessageIndex].messageName + "(发送)";
+                msg.enableFlag = false;
+                msg.NextSendTime = 0;
+                node.Text = msg.messageName + "(发送)";
             }
             tabControl1.SelectedIndex = 0;
 
@@ -1521,6 +1676,24 @@ namespace PCAN_Client
                 FillWeight = 55
             };
             dataGridView2.Columns.Add(col);
+        }
+
+        /// <summary>发送列表最左侧的移除列（×图标，点击将该报文移出发送列表）</summary>
+        private void EnsureRemoveColumn()
+        {
+            if (dataGridView2.Columns["colRemove"] != null) return;
+            var col = new DataGridViewImageColumn
+            {
+                Name = "colRemove",
+                HeaderText = "",
+                Image = ToolbarIcons.Get("clear"),
+                ImageLayout = DataGridViewImageCellLayout.Zoom,
+                FillWeight = 24,
+                ReadOnly = true,
+                ToolTipText = "将该报文移出发送列表"
+            };
+            dataGridView2.Columns.Add(col);
+            col.DisplayIndex = 0;
         }
 
         /// <summary>按报文对象重写自定义报文行显示（非法输入回滚/持久化恢复用）</summary>

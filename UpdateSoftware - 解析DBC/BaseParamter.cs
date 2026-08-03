@@ -7,6 +7,62 @@ using System.Linq;
 
 namespace PCAN_Client
 {
+    /// <summary>ID筛选规则（报文接收/发送页面共用）：支持精确十六进制ID与通配符（*匹配任意一个十六进制位；ID位数与模式等长，如3**匹配0x300~0x3FF，不误中0x1300）</summary>
+    internal static class IdFilterRule
+    {
+        /// <summary>解析筛选文本（逗号/空格分隔），填充精确ID集合与通配符模式列表</summary>
+        internal static void Parse(string text, HashSet<uint> exact, List<(uint mask, uint value, uint maxId)> wildcards)
+        {
+            exact.Clear();
+            wildcards.Clear();
+            if (string.IsNullOrWhiteSpace(text)) return;
+            foreach (string part in text.Split(new[] { ',', '，', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string token = part.Trim();
+                if (token.IndexOf('*') >= 0)
+                {
+                    // 通配符模式：* 匹配任意一个十六进制位（如 3** 匹配0x300~0x3FF）
+                    if (token.Length > 8) continue;
+                    uint mask = 0, value = 0;
+                    bool valid = true;
+                    for (int i = 0; i < token.Length; i++)
+                    {
+                        char c = token[i];
+                        mask <<= 4;
+                        value <<= 4;
+                        if (c == '*') continue;
+                        int d;
+                        if (c >= '0' && c <= '9') d = c - '0';
+                        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                        else { valid = false; break; }
+                        mask |= 0xF;
+                        value |= (uint)d;
+                    }
+                    if (!valid) continue;
+                    uint maxId = token.Length >= 8 ? uint.MaxValue : (1u << (4 * token.Length)) - 1;
+                    wildcards.Add((mask, value, maxId));
+                }
+                else if (uint.TryParse(token, System.Globalization.NumberStyles.HexNumber, null, out uint id))
+                {
+                    exact.Add(id);
+                }
+            }
+        }
+
+        /// <summary>ID是否通过筛选（精确或通配；无筛选条件时全部通过）</summary>
+        internal static bool Match(uint id, HashSet<uint> exact, List<(uint mask, uint value, uint maxId)> wildcards)
+        {
+            if (exact.Count == 0 && wildcards.Count == 0) return true;
+            if (exact.Contains(id)) return true;
+            foreach (var w in wildcards)
+            {
+                if (id <= w.maxId && (id & w.mask) == w.value) return true;
+            }
+            return false;
+        }
+    }
+
     internal class BaseParamter
     {
         public static DbcHelper dbcHelper = new DbcHelper();

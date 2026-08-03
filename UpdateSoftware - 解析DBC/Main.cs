@@ -99,6 +99,14 @@ namespace PCAN_Client
         internal DataGridView _dgvMessages;
         internal System.Windows.Forms.TextBox _txtIdFilter;
         private HashSet<uint> _filterIds = new HashSet<uint>();
+        /// <summary>通配符筛选模式：mask的1位为必须匹配的十六进制位，value为对应位的值；maxId限制ID位数与模式等长（如3**只匹配0x300~0x3FF，不误中0x1300）</summary>
+        private readonly List<(uint mask, uint value, uint maxId)> _filterWildcards = new List<(uint mask, uint value, uint maxId)>();
+
+        /// <summary>ID是否通过筛选（精确匹配或通配符匹配；无筛选条件时全部通过）</summary>
+        private bool PassesIdFilter(uint id)
+        {
+            return IdFilterRule.Match(id, _filterIds, _filterWildcards);
+        }
         internal bool _msgDisplayRefreshPending = false;
         internal bool _scrollMode = false;  // false=按ID排序(Fixed); true=按时间顺序(Scroll)
         internal bool _pauseUpdate = false; // 暂停更新
@@ -761,8 +769,6 @@ namespace PCAN_Client
                         // ===== 确定显示帧范围 =====
                         // 未暂停（接收中）：全量重建，只显示最新SCROLL_LIVE_FRAMES条（仅20帧，极快）
                         // 暂停后：增量追加，显示全部匹配报文
-                        bool hasFilter = _filterIds.Count > 0;
-
                         if (_pauseUpdate)
                         {
                             // ====== 暂停模式：增量追加全部帧 ======
@@ -775,7 +781,7 @@ namespace PCAN_Client
                             for (int i = _scrollFramesLoaded; i < _scrollFrames.Count; i++)
                             {
                                 var frame = _scrollFrames[i];
-                                if (hasFilter && !_filterIds.Contains(frame.MsgId))
+                                if (!PassesIdFilter(frame.MsgId))
                                     continue;
                                 if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId))
                                     continue;
@@ -799,7 +805,7 @@ namespace PCAN_Client
                             for (int i = _scrollFrames.Count - 1; i >= 0 && matched < SCROLL_LIVE_FRAMES; i--)
                             {
                                 var f = _scrollFrames[i];
-                                if ((hasFilter && !_filterIds.Contains(f.MsgId)) ||
+                                if (!PassesIdFilter(f.MsgId) ||
                                     (_dbcOnlyMode && !ContainsDbcMessage(f.MsgId)))
                                     continue;
                                 matched++;
@@ -810,7 +816,7 @@ namespace PCAN_Client
                             for (int i = start; i < _scrollFrames.Count; i++)
                             {
                                 var frame = _scrollFrames[i];
-                                if (hasFilter && !_filterIds.Contains(frame.MsgId))
+                                if (!PassesIdFilter(frame.MsgId))
                                     continue;
                                 if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId))
                                     continue;
@@ -838,7 +844,7 @@ namespace PCAN_Client
                     for (int i = 0; i < _displayList.Count; i++)
                     {
                         var msg = _displayList[i];
-                        if (_filterIds.Count > 0 && !_filterIds.Contains(msg.MsgId))
+                        if (!PassesIdFilter(msg.MsgId))
                             continue;
                         if (_dbcOnlyMode && !ContainsDbcMessage(msg.MsgId))
                             continue;
@@ -1703,7 +1709,6 @@ namespace PCAN_Client
 
                 _userScrolledAway = false;
                 _lastScrollRowCount = 0;
-                bool hasFilter = _filterIds.Count > 0;
 
                 // 直接从 _scrollFrames 构建 _flatRows，不经过 RebuildFlatRows
                 lock (_scrollFrames)
@@ -1716,7 +1721,7 @@ namespace PCAN_Client
                         for (int i = 0; i < _scrollFrames.Count; i++)
                         {
                             var frame = _scrollFrames[i];
-                            if (hasFilter && !_filterIds.Contains(frame.MsgId)) continue;
+                            if (!PassesIdFilter(frame.MsgId)) continue;
                             if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId)) continue;
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
@@ -1739,7 +1744,7 @@ namespace PCAN_Client
                         for (int i = _scrollFrames.Count - 1; i >= 0 && matched < SCROLL_LIVE_FRAMES; i--)
                         {
                             var f = _scrollFrames[i];
-                            if ((hasFilter && !_filterIds.Contains(f.MsgId)) ||
+                            if (!PassesIdFilter(f.MsgId) ||
                                 (_dbcOnlyMode && !ContainsDbcMessage(f.MsgId)))
                                 continue;
                             matched++;
@@ -1748,7 +1753,7 @@ namespace PCAN_Client
                         for (int i = start; i < _scrollFrames.Count; i++)
                         {
                             var frame = _scrollFrames[i];
-                            if (hasFilter && !_filterIds.Contains(frame.MsgId)) continue;
+                            if (!PassesIdFilter(frame.MsgId)) continue;
                             if (_dbcOnlyMode && !ContainsDbcMessage(frame.MsgId)) continue;
                             _flatRows.Add(new FlatRowInfo { Type = FlatRowType.Message, ScrollFrameIndex = i, FlatIndex = _flatRows.Count });
                             if (_expandedScrollFrames.Contains(i))
@@ -3131,16 +3136,7 @@ namespace PCAN_Client
 
         private void _txtIdFilter_TextChanged(object sender, EventArgs e)
         {
-            _filterIds.Clear();
-            string text = _txtIdFilter.Text.Trim();
-            if (!string.IsNullOrEmpty(text))
-            {
-                foreach (string part in text.Split(new[] { ',', '，', ' ' }, StringSplitOptions.RemoveEmptyEntries))
-                {
-                    if (uint.TryParse(part.Trim(), System.Globalization.NumberStyles.HexNumber, null, out uint id))
-                        _filterIds.Add(id);
-                }
-            }
+            IdFilterRule.Parse(_txtIdFilter.Text, _filterIds, _filterWildcards);
             _flatRowsDirty = true;
             _msgDisplayRefreshPending = true;
 
