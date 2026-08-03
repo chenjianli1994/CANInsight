@@ -340,7 +340,10 @@ namespace PCAN_Client.PCAN_API
                 TPCANMsgFD tPCANMsgFD = new TPCANMsgFD();
                 tPCANMsgFD.DATA = new byte[64];
                 Array.Copy(tPCANMsg.DATA, 0, tPCANMsgFD.DATA, 0, tPCANMsg.LEN);
-                tPCANMsgFD.MSGTYPE = TPCANMessageType.PCAN_MESSAGE_FD;
+                // 自动降级：≤8字节按经典CAN格式发送（不带FD标志，兼容纯经典CAN节点）；>8字节必须FD格式（保留扩展帧位）
+                tPCANMsgFD.MSGTYPE = tPCANMsg.LEN <= 8
+                    ? tPCANMsg.MSGTYPE
+                    : (TPCANMessageType.PCAN_MESSAGE_FD | (tPCANMsg.MSGTYPE & TPCANMessageType.PCAN_MESSAGE_EXTENDED));
                 tPCANMsgFD.DLC = GetSendDataDlc(tPCANMsg.LEN);
                 tPCANMsgFD.ID = tPCANMsg.ID;
                 return PCANBasic.WriteFD(handle, ref tPCANMsgFD);

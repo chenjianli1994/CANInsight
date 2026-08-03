@@ -296,6 +296,12 @@ namespace PCAN_Client.Canoe_API
 
             if (CanFDFlag)
             {
+                // 自动降级：≤8字节按经典CAN格式发送（不带EDL/BRS，兼容纯经典CAN节点）；>8字节必须FD格式
+                int txFlags = (ID > 0x7FF ? 0x0001 : 0); /* 0x0001=扩展帧 */
+                if (len > 8)
+                {
+                    txFlags |= (int)(XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_EDL | XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_BRS);
+                }
                 uint msgCnt = 1;
                 XLClass.XLcanTxEvent xLcanTxEvent = new XLClass.XLcanTxEvent
                 {
@@ -304,7 +310,7 @@ namespace PCAN_Client.Canoe_API
                     tagData = new XLClass.XL_CAN_TX_MSG
                     {
                         canId = ID,
-                        msgFlags = (XLDefine.XL_CANFD_TX_MessageFlags)((int)(XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_EDL | XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_BRS) | (ID > 0x7FF ? 0x0001 : 0)),
+                        msgFlags = (XLDefine.XL_CANFD_TX_MessageFlags)txFlags,
                         dlc = GetSendDataDlc(len),
                         data = new byte[len],
                     }

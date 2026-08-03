@@ -414,25 +414,6 @@
       <DesignTime>True</DesignTime>
     </Compile>
     <None Include="packages.config" />
-    <!-- 强制将NuGet版System.Memory.dll(4.0.5.0)复制到输出目录：
-         .NET 4.7.2 targeting pack含System.Memory facade(4.0.1.1)，MSBuild会误判为框架程序集不复制NuGet版本 -->
-    <None Include="..\packages\System.Memory.4.6.3\lib\net462\System.Memory.dll">
-      <Link>System.Memory.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <!-- 同理强制复制System.Memory依赖链（targeting pack facade会阻止NuGet版复制） -->
-    <None Include="..\packages\System.Buffers.4.6.1\lib\net462\System.Buffers.dll">
-      <Link>System.Buffers.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\packages\System.Numerics.Vectors.4.6.1\lib\net462\System.Numerics.Vectors.dll">
-      <Link>System.Numerics.Vectors.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="..\packages\System.Runtime.CompilerServices.Unsafe.6.1.2\lib\net462\System.Runtime.CompilerServices.Unsafe.dll">
-      <Link>System.Runtime.CompilerServices.Unsafe.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
@@ -505,5 +486,15 @@
     </PropertyGroup>
     <WriteLinesToFile File="$(OutDir)version.txt" Lines="$(_SoftVersion)" Overwrite="true" />
     <Message Text="已生成 version.txt：$(_SoftVersion)" Importance="high" />
+    <!-- 清理输出目录冗余文件：NuGet程序集已由Costura嵌入exe（含System.Memory依赖链），删除松散副本及文档/XML/PDB，
+         仅保留运行必需的 exe/config/json(用户配置)/version.txt 与 ChartPresets.xml/模板文件.pptx/ReportAuto工况文件夹 -->
+    <ItemGroup>
+      <_RedundantFiles Include="$(OutDir)*.dll" />
+      <_RedundantFiles Include="$(OutDir)DocumentFormat.OpenXml*.xml" />
+      <_RedundantFiles Include="$(OutDir)System.*.xml" />
+      <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_RedundantFiles)" />
+    <Message Text="已清理输出目录冗余 DLL/文档/PDB" Importance="high" />
   </Target>
 </Project>
