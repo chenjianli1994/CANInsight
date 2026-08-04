@@ -618,15 +618,15 @@ namespace PCAN_Client.CAN_Data
             }
         }
         // 发送方法（channel为逻辑发送通道号，按通道配置路由到对应物理通道）
-        public void SendCanMessage(uint messageId, byte channel = 1)
+        public bool SendCanMessage(uint messageId, byte channel = 1)
         {
-            SendCanMessage(dbcFile.messages.FirstOrDefault(m => m.messgeId == messageId), channel);
+            return SendCanMessage(dbcFile.messages.FirstOrDefault(m => m.messgeId == messageId), channel);
         }
 
-        /// <summary>发送报文（直接传Message引用，多通道同ID时避免按ID查找歧义；含信号编码与CRC/校验逐帧重算）</summary>
-        public void SendCanMessage(Message messageDef, byte channel = 1)
+        /// <summary>发送报文（直接传Message引用，多通道同ID时避免按ID查找歧义；含信号编码与CRC/校验逐帧重算）；返回底层发送是否成功</summary>
+        public bool SendCanMessage(Message messageDef, byte channel = 1)
         {
-            if (messageDef == null) return;
+            if (messageDef == null) return false;
 
             // DBC报文（有信号定义）才做编码与CRC；自定义报文sendBuf由用户直接编辑，不可覆盖
             if (messageDef.signals != null && messageDef.signals.Count > 0)
@@ -657,8 +657,9 @@ namespace PCAN_Client.CAN_Data
                     }
                 }
             }
-            CAN_API.CAN_API.CanTransmit(messageDef.messgeId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf, channel);
+            bool result = CAN_API.CAN_API.CanTransmit(messageDef.messgeId, (ushort)messageDef.sendBuf.Length, messageDef.sendBuf, channel);
             messageDef.sendCnt++;
+            return result;
         }
     }
 

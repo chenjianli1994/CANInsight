@@ -219,7 +219,7 @@ namespace PCAN_Client
             this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(902, 682);
+            this.ClientSize = new System.Drawing.Size(1200, 780);
             this.Controls.Add(this.tabControl1);
             this.Controls.Add(this.readCfgButton);
             this.Controls.Add(this.saveCfgButton);

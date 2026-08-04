@@ -70,7 +70,7 @@ namespace PCAN_Client
         /// 全局唯一CAN通道列表（DBC唯一数据源，仅在通道配置/工况应用/启动恢复时修改）
         /// </summary>
         public static List<CanBusChannel> BusChannels = new List<CanBusChannel>();
-        public static readonly string softVersion = "V3.01.13 -- 2026-08-03";
+        public static readonly string softVersion = "V3.01.14 -- 2026-08-03";
 
         /// <summary>
         /// 通道配置持久化文件（exe目录下）

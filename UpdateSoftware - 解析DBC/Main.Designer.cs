@@ -267,7 +267,7 @@ namespace PCAN_Client
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(1193, 641);
+            this.ClientSize = new System.Drawing.Size(1440, 780);
             this.Controls.Add(this.dataGridView1);
             this.Controls.Add(this.textBox__txtIdFilter);
             this.Controls.Add(this.button7);

@@ -303,6 +303,11 @@
     <Compile Include="CanSend.Designer.cs">
       <DependentUpon>CanSend.cs</DependentUpon>
     </Compile>
+    <Compile Include="CanSend.ScriptTab.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="ScriptEngine\ScriptModel.cs" />
+    <Compile Include="ScriptEngine\ScriptRunner.cs" />
     <Compile Include="CAN_API\Canoe_API\CanOe_API.cs" />
     <Compile Include="CAN_API\CAN_API.cs" />
     <Compile Include="CAN_API\HwChannelInfo.cs" />

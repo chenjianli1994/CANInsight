@@ -166,15 +166,22 @@ namespace PCAN_Client
             UiTheme.StyleButton(saveCfgButton, "save");
             UiTheme.StyleButton(readCfgButton, "folder");
 
-            // 发送列表右键菜单：添加自定义报文
+            // 发送列表右键菜单：添加自定义报文 / 添加到脚本发送
             var ctxMenu = new ContextMenuStrip();
             ctxMenu.Items.Add("添加自定义报文", null, (s, args) => AddCustomMessage());
+            ctxMenu.Items.Add("添加到脚本发送", null, (s, args) =>
+            {
+                // 取当前选中行的报文生成脚本发送步骤并切到脚本页签
+                if (dataGridView2SelectRowIndex < 0 || dataGridView2SelectRowIndex >= messagesTable.Rows.Count) return;
+                var msg = FindMessageByRow(messagesTable.Rows[dataGridView2SelectRowIndex]);
+                if (msg != null) AddStepFromMessage(msg, ResolveTxChannel(msg));
+            });
             dataGridView2.ContextMenuStrip = ctxMenu;
 
             // ===== 布局重做：窗口可缩放 + Dock 自适应 =====
             this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = true;
-            this.MinimumSize = new Size(902, 682);
+            this.MinimumSize = new Size(1000, 700);
 
             // 顶部按钮行（配置按钮右对齐）
             var topPanel = new Panel { Dock = DockStyle.Top, Height = 36 };
@@ -259,6 +266,9 @@ namespace PCAN_Client
             // 窗口尺寸变化时报文名称/数据列自动铺满（其余列固定不联动）
             this.Resize += (s, e) => AutoFillFlexibleColumns();
             this.ResizeEnd += (s, e) => AutoFillFlexibleColumns();
+
+            // 脚本发送页签（partial，CanSend.ScriptTab.cs）
+            InitScriptTab();
         }
 
         /// <summary>解析报文实际发送通道（TxChannel=0时自动跟随来源DBC通道）</summary>
@@ -1102,6 +1112,7 @@ namespace PCAN_Client
         private void CanSend_FormClosed(object sender, FormClosedEventArgs e)
         {
             aliveFlag = false;
+            DisposeScriptRunner(); // 停脚本+移除"CAN_Script"调度动作+退订接收事件
             multiMessageCANScheduler.Dispose();
             Main.canSend = null;
             Main.canSendOpenFlag = false;
@@ -1278,6 +1289,7 @@ namespace PCAN_Client
             public int SelectedMessageIndex { get; set; }
             public DbcFile DbcData { get; set; } // 直接保存DBC文件对象
             public List<CustomMessageCfg> CustomMessages { get; set; } // 自定义报文（持久化，关窗不丢）
+            public PCAN_Client.ScriptEngine.CanScript Script { get; set; } // 脚本发送（可选，旧配置无此字段）
         }
 
         /// <summary>自定义报文的持久化形式</summary>
@@ -1310,7 +1322,8 @@ namespace PCAN_Client
                     Data = m.sendBuf?.ToArray(),
                     CycleEnabled = m.enableFlag,
                     TxChannel = m.TxChannel
-                }).ToList()
+                }).ToList(),
+                Script = GetScriptForSave() // 脚本发送一并存入配置
             };
 
 
@@ -1343,6 +1356,12 @@ namespace PCAN_Client
                 if (0 == BaseParamter.dbcHelper.dbcFile.messages.Count)
                 {
                     MessageBox.Show("请先在通道配置中为CAN通道加载DBC文件，再导入发送配置");
+                    return;
+                }
+                // 脚本运行中加载配置会替换脚本模型(运行/编辑状态不一致),拒绝并提示
+                if (_runner != null && _runner.State != ScriptEngine.RunnerState.Stopped)
+                {
+                    MessageBox.Show("脚本正在运行,请先停止再加载配置", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
@@ -1412,6 +1431,12 @@ namespace PCAN_Client
                 sw = new Stopwatch();
                 sw.Start();
 
+                // 恢复脚本发送（旧配置无此字段时跳过）
+                if (config.Script != null)
+                {
+                    LoadScriptFromConfig(config.Script);
+                }
+
                 if (Main.canSendOpenFlag)
                 {
                     Main.canSend.UpdateDbcTreeview();
@@ -1439,10 +1464,14 @@ namespace PCAN_Client
 
         private void LoadFilePath(string filePath)
         {
-            // 仅支持拖入.dbccfg发送配置；.dbc统一在"通道配置"中加载
+            // 仅支持拖入.dbccfg发送配置 / .canscript脚本；.dbc统一在"通道配置"中加载
             if (filePath.Contains(".dbccfg"))
             {
                 loadCfgFile(filePath);
+            }
+            else if (filePath.EndsWith(".canscript", StringComparison.OrdinalIgnoreCase))
+            {
+                LoadScriptFile(filePath);
             }
         }
         private void CanSend_DragDrop(object sender, DragEventArgs e)

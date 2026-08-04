@@ -1923,7 +1923,7 @@ namespace PCAN_Client
             // 顶部区域：与绘图页面一致的ToolStrip工具栏（原控件托管迁入，逻辑不变）
             CreateConnectionStrip();
             // 防止窗口过窄挤压工具栏
-            this.MinimumSize = new Size(1024, 500);
+            this.MinimumSize = new Size(1200, 600);
 
             // 绘图主页面已由Program入口预建并显示(秒开优化),此处直接接管;
             // 未预建时(兼容路径)现场创建,保证绘图窗口关闭时退出程序

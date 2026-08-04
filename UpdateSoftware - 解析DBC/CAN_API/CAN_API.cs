@@ -39,6 +39,14 @@ namespace PCAN_Client.CAN_API
 
         public static object _receiveCanDataLock = new object();
 
+        /// <summary>
+        /// 统一接收帧事件(ID,len,data,逻辑通道,isTx本端发送回灌)。
+        /// 在 CanReceive 汇聚点转发,供脚本引擎(帧统计/触发启动)等订阅;
+        /// 订阅者必须快速返回,禁止阻塞接收链路。
+        /// 注:isTx按 PendingTxId==ID 判定,本端发送瞬间总线上同ID的真实RX帧会被误判为回灌(边缘场景,帧统计可能漏计1帧)。
+        /// </summary>
+        internal static event Action<uint, ushort, byte[], byte, bool> RawFrameReceived;
+
         internal static Boolean CanTransmit(uint ID, ushort len, byte[] data, byte channel = 1)
         {
             Boolean result = false;
@@ -111,6 +119,9 @@ namespace PCAN_Client.CAN_API
             {
                 BaseParamter.dbcHelper.CANDataDeal(ID, len, data, timestamp2, channel);
             }
+            // 脚本引擎等订阅者(帧统计/触发启动);本端发送回灌帧带isTx标记
+            try { RawFrameReceived?.Invoke(ID, len, data, channel, PendingTxId == ID); }
+            catch { /* 订阅者异常不影响接收链路 */ }
             // BLF/ASC落盘统一使用BLF通道号（逻辑通道号→BlfChannelId转换；回放时按BlfChannelId匹配解析）
             byte blfCh = BaseParamter.GetBlfIdByLogicChannel(channel);
             // 录制通道过滤（LoggingSet中勾选；未勾选通道的报文不落盘，UI/解析不受影响）
