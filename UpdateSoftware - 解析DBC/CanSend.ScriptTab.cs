@@ -7,6 +7,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Message = PCAN_Client.CAN_Data.Message;
 
@@ -33,6 +34,9 @@ namespace PCAN_Client
         private bool _suppressRawSync; // 程序化刷新RawData框时抑制TextChanged回写(防$变量绑定被解码值覆盖)
         private string _clipboardStepJson;
         private TreeNode _lastHighlightNode;
+        private List<ScriptSelectionItem> _operandItemsCache;
+        private int _operandItemsCacheVersion;
+        private Task<List<ScriptSelectionItem>> _operandItemsLoadTask;
         private readonly Dictionary<ScriptStepType, string> _stepTypeNames = new Dictionary<ScriptStepType, string>
         {
             { ScriptStepType.SendMessage, "发送报文" },
@@ -221,7 +225,7 @@ namespace PCAN_Client
         private bool _suppressProps; // RebuildStepTree恢复选中时不触发AfterSelect属性面板重建(调用方显式刷新,避免双重构建)
         private void RebuildStepTree(Guid? selectId = null)
         {
-            _operandItemsCache = null; // 操作数下拉缓存随脚本结构失效(变量/信号清单重建)
+            InvalidateOperandItemsCache(); // 操作数下拉缓存随脚本结构失效(变量/信号清单重建)
             // 记录展开状态
             var expanded = new HashSet<Guid>();
             foreach (TreeNode n in _treeSteps.Nodes) CollectExpanded(n, expanded);
@@ -768,7 +772,7 @@ namespace PCAN_Client
                 if (script == null) throw new Exception("脚本文件格式无效");
                 _script = script;
                 ScriptMessageHelper.RelinkAll(_script); // 预重建,供属性面板数据编辑
-                _operandItemsCache = null;
+                InvalidateOperandItemsCache();
                 RebuildStepTree();
                 SyncRunnerScript(); // 武装触发启动
                 ShowScriptProps();
@@ -786,7 +790,7 @@ namespace PCAN_Client
             if (script == null) return;
             _script = script;
             ScriptMessageHelper.RelinkAll(_script);
-            _operandItemsCache = null;
+            InvalidateOperandItemsCache();
             RebuildStepTree();
             SyncRunnerScript(); // 武装触发启动
             ShowScriptProps(); // 属性面板切到脚本设置,避免残留旧脚本步骤绑定
@@ -1054,17 +1058,18 @@ namespace PCAN_Client
         /// <summary>脚本报文/信号选择窗口：筛选框只在用户展开选择时显示。</summary>
         private sealed class ScriptSelectionDialog : Form
         {
-            private readonly List<ScriptSelectionItem> _items;
+            private List<ScriptSelectionItem> _items;
+            private List<ScriptSelectionItem> _matches = new List<ScriptSelectionItem>();
             private readonly TextBox _filterBox;
-            private readonly ListBox _list;
+            private readonly DataGridView _list;
             private readonly Label _countLabel;
             private readonly string _initialText;
 
             public ScriptSelectionItem SelectedItem { get; private set; }
 
-            public ScriptSelectionDialog(string title, IEnumerable<ScriptSelectionItem> items, string initialText = null)
+            public ScriptSelectionDialog(string title, IEnumerable<ScriptSelectionItem> items, string initialText = null, bool loading = false)
             {
-                _items = (items ?? Enumerable.Empty<ScriptSelectionItem>()).ToList();
+                _items = items as List<ScriptSelectionItem> ?? (items ?? Enumerable.Empty<ScriptSelectionItem>()).ToList();
                 _initialText = initialText ?? "";
 
                 Text = title;
@@ -1100,13 +1105,31 @@ namespace PCAN_Client
                 filterPanel.Controls.Add(_countLabel);
                 filterPanel.Controls.Add(filterLabel);
 
-                _list = new ListBox
+                _list = new DataGridView
                 {
                     Dock = DockStyle.Fill,
-                    IntegralHeight = false,
-                    HorizontalScrollbar = true,
-                    SelectionMode = SelectionMode.One,
+                    AllowUserToAddRows = false,
+                    AllowUserToDeleteRows = false,
+                    AllowUserToResizeRows = false,
+                    AutoGenerateColumns = false,
+                    ColumnHeadersVisible = false,
+                    MultiSelect = false,
+                    ReadOnly = true,
+                    RowHeadersVisible = false,
+                    SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                    VirtualMode = true,
                     Font = UiTheme.UiFont
+                };
+                _list.Columns.Add(new DataGridViewTextBoxColumn
+                {
+                    Name = "Display",
+                    AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill,
+                    SortMode = DataGridViewColumnSortMode.NotSortable
+                });
+                _list.CellValueNeeded += (s, e) =>
+                {
+                    if (e.ColumnIndex == 0 && e.RowIndex >= 0 && e.RowIndex < _matches.Count)
+                        e.Value = _matches[e.RowIndex].Display;
                 };
 
                 var buttons = new FlowLayoutPanel
@@ -1140,7 +1163,7 @@ namespace PCAN_Client
                         ConfirmSelection();
                     }
                 };
-                _list.DoubleClick += (s, e) => ConfirmSelection();
+                _list.CellDoubleClick += (s, e) => ConfirmSelection();
                 _list.KeyDown += (s, e) =>
                 {
                     if (e.KeyCode == Keys.Enter)
@@ -1151,31 +1174,64 @@ namespace PCAN_Client
                 };
                 Shown += (s, e) => _filterBox.Focus();
 
+                if (loading)
+                {
+                    _filterBox.Enabled = false;
+                    _list.Enabled = false;
+                    _countLabel.Text = "加载中...";
+                }
+                else
+                {
+                    RefreshItems();
+                }
+            }
+
+            public void SetItems(IEnumerable<ScriptSelectionItem> items)
+            {
+                _items = items as List<ScriptSelectionItem> ?? (items ?? Enumerable.Empty<ScriptSelectionItem>()).ToList();
+                _filterBox.Enabled = true;
+                _list.Enabled = true;
                 RefreshItems();
             }
 
             private void RefreshItems()
             {
-                string currentText = (_list.SelectedItem as ScriptSelectionItem)?.Text;
-                var matches = _items.Where(item => PassesScriptSelectionFilter(item, _filterBox.Text)).ToList();
-                _list.BeginUpdate();
-                _list.Items.Clear();
-                _list.Items.AddRange(matches.ToArray());
-                _list.EndUpdate();
+                string currentText = null;
+                int currentIndex = _list.CurrentCell?.RowIndex ?? -1;
+                if (currentIndex >= 0 && currentIndex < _matches.Count)
+                    currentText = _matches[currentIndex].Text;
+
+                string[] tokens = SplitSelectionFilter(_filterBox.Text);
+                var exactIds = new HashSet<uint>();
+                var wildcardIds = new List<(uint mask, uint value, uint maxId)>();
+                string normalizedIds = string.Join(" ", tokens.Select(token =>
+                    token.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? token.Substring(2) : token));
+                IdFilterRule.Parse(normalizedIds, exactIds, wildcardIds);
+                bool hasIdRule = exactIds.Count > 0 || wildcardIds.Count > 0;
+                var matches = _items.Where(item => PassesScriptSelectionFilter(item, tokens, exactIds, wildcardIds, hasIdRule)).ToList();
+
+                _list.CurrentCell = null;
+                _matches = matches;
+                _list.RowCount = matches.Count;
+                _list.ClearSelection();
+                _list.Invalidate();
                 _countLabel.Text = $"{matches.Count}/{_items.Count}";
 
                 if (matches.Count == 0) return;
                 int index = matches.FindIndex(item =>
                     (!string.IsNullOrEmpty(currentText) && item.Text == currentText) ||
                     (string.IsNullOrEmpty(currentText) && !string.IsNullOrEmpty(_initialText) && item.Text == _initialText));
-                _list.SelectedIndex = index >= 0 ? index : 0;
+                index = index >= 0 ? index : 0;
+                _list.CurrentCell = _list.Rows[index].Cells[0];
+                _list.Rows[index].Selected = true;
             }
 
             private void ConfirmSelection()
             {
-                if (_list.SelectedItem is ScriptSelectionItem item)
+                int index = _list.CurrentCell?.RowIndex ?? -1;
+                if (index >= 0 && index < _matches.Count)
                 {
-                    SelectedItem = item;
+                    SelectedItem = _matches[index];
                     DialogResult = DialogResult.OK;
                 }
             }
@@ -1186,18 +1242,12 @@ namespace PCAN_Client
             return (text ?? "").Split(new[] { ',', '，', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
         }
 
-        private static bool PassesScriptSelectionFilter(ScriptSelectionItem item, string filter)
+        private static bool PassesScriptSelectionFilter(ScriptSelectionItem item, string[] tokens,
+            HashSet<uint> exactIds, List<(uint mask, uint value, uint maxId)> wildcardIds, bool hasIdRule)
         {
             if (item.Value is NewCustomMsgItem) return true;
-            var tokens = SplitSelectionFilter(filter);
             if (tokens.Length == 0) return true;
 
-            var exactIds = new HashSet<uint>();
-            var wildcardIds = new List<(uint mask, uint value, uint maxId)>();
-            var normalizedIds = string.Join(" ", tokens.Select(token =>
-                token.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? token.Substring(2) : token));
-            IdFilterRule.Parse(normalizedIds, exactIds, wildcardIds);
-            bool hasIdRule = exactIds.Count > 0 || wildcardIds.Count > 0;
             if (item.MessageId.HasValue && hasIdRule && IdFilterRule.Match(item.MessageId.Value, exactIds, wildcardIds))
                 return true;
 
@@ -1220,6 +1270,38 @@ namespace PCAN_Client
         {
             using (var dlg = new ScriptSelectionDialog(title, items, initialText))
                 return dlg.ShowDialog(this) == DialogResult.OK ? dlg.SelectedItem : null;
+        }
+
+        private ScriptSelectionItem ChooseScriptItemAsync(string title, Func<Task<List<ScriptSelectionItem>>> loadItems,
+            Action<List<ScriptSelectionItem>> onLoaded, string initialText = null)
+        {
+            using (var dlg = new ScriptSelectionDialog(title, null, initialText, true))
+            {
+                dlg.Shown += (s, e) =>
+                {
+                    loadItems().ContinueWith(task =>
+                    {
+                        if (dlg.IsDisposed || !dlg.IsHandleCreated) return;
+                        try
+                        {
+                            dlg.BeginInvoke(new Action(() =>
+                            {
+                                if (dlg.IsDisposed) return;
+                                var items = task.Status == TaskStatus.RanToCompletion
+                                    ? task.Result
+                                    : new List<ScriptSelectionItem>();
+                                onLoaded?.Invoke(items);
+                                dlg.SetItems(items);
+                            }));
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            // 选择窗口已关闭时忽略后台结果
+                        }
+                    }, TaskScheduler.Default);
+                };
+                return dlg.ShowDialog(this) == DialogResult.OK ? dlg.SelectedItem : null;
+            }
         }
 
         /// <summary>报文源下拉的特殊项:新建自定义报文</summary>
@@ -1715,7 +1797,7 @@ namespace PCAN_Client
                 if (ScriptOperand.IsValidVarName(txtName.Text.Trim()) || txtName.Text == "")
                 {
                     step.VarName = txtName.Text.Trim(); txtName.BackColor = Color.White;
-                    _operandItemsCache = null; // 变量重命名后条件下拉清单需重建
+                    InvalidateOperandItemsCache(); // 变量重命名后条件下拉清单需重建
                     RefreshNodeText(node);
                     SyncRunnerScript();
                 }
@@ -1804,22 +1886,45 @@ namespace PCAN_Client
         }
 
         // ===================== 条件构造器 =====================
-        private class OperandItem
+        private void InvalidateOperandItemsCache()
         {
-            public string Display;
-            public string Text;
-            public uint? MessageId;
-            public string SignalName;
-            public string MessageName;
-            public override string ToString() => Display;
+            _operandItemsCache = null;
+            _operandItemsCacheVersion++;
+            _operandItemsLoadTask = null;
         }
 
-        private List<OperandItem> _operandItemsCache; // 实例缓存;RebuildStepTree/加载脚本时置null重建
+        private Task<List<ScriptSelectionItem>> GetOperandItemsTask()
+        {
+            if (_operandItemsCache != null)
+                return Task.FromResult(_operandItemsCache);
+            if (_operandItemsLoadTask == null)
+            {
+                int cacheVersion = _operandItemsCacheVersion;
+                _operandItemsLoadTask = Task.Run(BuildOperandItems);
+                _operandItemsLoadTask.ContinueWith(task =>
+                {
+                    if (task.Status != TaskStatus.RanToCompletion || IsDisposed || !IsHandleCreated) return;
+                    try
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            if (!IsDisposed && cacheVersion == _operandItemsCacheVersion)
+                                _operandItemsCache = task.Result;
+                        }));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 窗体关闭时忽略后台缓存结果
+                    }
+                }, TaskScheduler.Default);
+            }
+            return _operandItemsLoadTask;
+        }
 
         /// <summary>操作数下拉项:变量/信号/帧统计(常量直接输入数字即可)</summary>
-        private List<OperandItem> BuildOperandItems()
+        private List<ScriptSelectionItem> BuildOperandItems()
         {
-            var items = new List<OperandItem>();
+            var items = new List<ScriptSelectionItem>();
             // 脚本变量
             var varNames = new HashSet<string>();
             var queue = new Queue<ScriptStep>(_script.Steps);
@@ -1830,7 +1935,7 @@ namespace PCAN_Client
                 foreach (var c in s.Children) queue.Enqueue(c);
             }
             foreach (var name in varNames.OrderBy(x => x))
-                items.Add(new OperandItem { Display = $"变量 ${name}", Text = "$" + name });
+                items.Add(new ScriptSelectionItem { Display = $"变量 ${name}", Text = "$" + name });
             // 各通道DBC信号
             for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
             {
@@ -1839,14 +1944,14 @@ namespace PCAN_Client
                 byte logicCh = (byte)(i + 1);
                 foreach (var m in ch.DbcHelper.dbcFile.messages)
                 {
-                    items.Add(new OperandItem
+                    items.Add(new ScriptSelectionItem
                     {
                         Display = $"帧数 CH{logicCh} 0x{m.messgeId:X3} {m.messageName}",
                         Text = $"#CNT:CH{logicCh}.{m.messgeId:X}",
                         MessageId = m.messgeId,
                         MessageName = m.messageName
                     });
-                    items.Add(new OperandItem
+                    items.Add(new ScriptSelectionItem
                     {
                         Display = $"字节 CH{logicCh} 0x{m.messgeId:X3}[0] {m.messageName}",
                         Text = $"#BYTE:CH{logicCh}.{m.messgeId:X}[0]",
@@ -1855,7 +1960,7 @@ namespace PCAN_Client
                     });
                     foreach (var sig in m.signals)
                     {
-                        items.Add(new OperandItem
+                        items.Add(new ScriptSelectionItem
                         {
                             Display = $"信号 CH{logicCh} {m.messageName}.{sig.signalName}",
                             Text = $"@CH{logicCh}.{m.messgeId:X}.{sig.signalName}",
@@ -1869,28 +1974,29 @@ namespace PCAN_Client
             return items;
         }
 
-        private static ScriptSelectionItem ToScriptSelectionItem(OperandItem item)
-        {
-            return new ScriptSelectionItem
-            {
-                Display = item.Display,
-                Text = item.Text,
-                MessageId = item.MessageId,
-                SignalName = item.SignalName,
-                MessageName = item.MessageName,
-                Value = item
-            };
-        }
-
         /// <summary>操作数编辑器:可手输数字/$变量，点击按钮后在带筛选的列表中选择信号/报文。</summary>
         private ScriptPickerControl BuildOperandEditor(ScriptOperand bindTo, Action onChanged)
         {
             Action commit = null;
+            GetOperandItemsTask();
             var picker = new ScriptPickerControl(bindTo.ToText(), valueBox =>
             {
                 if (_uiLocked) return;
-                if (_operandItemsCache == null) _operandItemsCache = BuildOperandItems();
-                var selected = ChooseScriptItem("选择信号/报文", _operandItemsCache.Select(ToScriptSelectionItem), valueBox.Text);
+                ScriptSelectionItem selected;
+                var items = _operandItemsCache;
+                if (items != null)
+                {
+                    selected = ChooseScriptItem("选择信号/报文", items, valueBox.Text);
+                }
+                else
+                {
+                    int cacheVersion = _operandItemsCacheVersion;
+                    selected = ChooseScriptItemAsync("选择信号/报文", GetOperandItemsTask, loaded =>
+                    {
+                        if (cacheVersion == _operandItemsCacheVersion)
+                            _operandItemsCache = loaded;
+                    }, valueBox.Text);
+                }
                 if (selected == null) return;
                 valueBox.Text = selected.Text;
                 commit();
