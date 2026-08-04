@@ -901,6 +901,8 @@ namespace PCAN_Client
             ctrl.Location = new Point(x, _propY);
             ctrl.Size = new Size(width, height);
             ctrl.Font = UiTheme.UiFont;
+            if (ctrl is ComboBox combo)
+                EnableComboBoxClickDropDown(combo);
             _propPanel.Controls.Add(ctrl);
             return ctrl;
         }
@@ -908,6 +910,16 @@ namespace PCAN_Client
         private void NextPropRow(int height = 28) => _propY += height;
 
         private int PropWidth => Math.Max(200, _propPanel.ClientSize.Width - 130);
+
+        private static void EnableComboBoxClickDropDown(ComboBox combo)
+        {
+            if (combo == null) return;
+            combo.Click += (s, e) =>
+            {
+                if (combo.Enabled && combo.Items.Count > 0)
+                    combo.DroppedDown = true;
+            };
+        }
 
         /// <summary>数值钳制到[min,max],防手改JSON后属性面板NumericUpDown越界异常</summary>
         private static decimal ClampDec(long value, long min, long max)
@@ -1083,9 +1095,11 @@ namespace PCAN_Client
                     Dock = DockStyle.Fill,
                     BorderStyle = BorderStyle.FixedSingle,
                     Margin = new Padding(0),
-                    Font = UiTheme.UiFont
+                    Font = UiTheme.UiFont,
+                    Cursor = Cursors.Hand
                 };
                 btn.Click += (s, e) => choose?.Invoke(ValueBox);
+                ValueBox.Click += (s, e) => choose?.Invoke(ValueBox);
 
                 Controls.Add(ValueBox);
                 Controls.Add(btn);
@@ -1444,7 +1458,7 @@ namespace PCAN_Client
                     BuildSendProps(step);
                     RefreshNodeText(node);
                 }
-            }), 110, PropWidth);
+            }), 110, Math.Max(260, PropWidth - 60));
             srcPicker.ValueBox.ReadOnly = true;
             NextPropRow();
 
@@ -1710,6 +1724,25 @@ namespace PCAN_Client
             {
                 if (dgv.CurrentCell is DataGridViewComboBoxCell && e.Control is ComboBox combo)
                     combo.DropDownStyle = ComboBoxStyle.DropDown;
+            };
+            dgv.CellClick += (s, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != 1 ||
+                    !(dgv.Rows[e.RowIndex].Cells[e.ColumnIndex] is DataGridViewComboBoxCell)) return;
+                if (!dgv.BeginEdit(true)) return;
+                try
+                {
+                    dgv.BeginInvoke(new Action(() =>
+                    {
+                        if (dgv.IsDisposed || !(dgv.CurrentCell is DataGridViewComboBoxCell) ||
+                            !(dgv.EditingControl is ComboBox combo)) return;
+                        combo.DroppedDown = true;
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                    // 表格重建/窗体关闭时忽略延迟展开
+                }
             };
             dgv.CellEndEdit += (s, e) =>
             {
@@ -2286,6 +2319,7 @@ namespace PCAN_Client
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 1, 2, 0)
             };
+            EnableComboBoxClickDropDown(cmbOp);
             cmbOp.Items.AddRange(ScriptCondition.ValidOps);
             cmbOp.SelectedItem = ScriptCondition.ValidOps.Contains(cond.Op) ? cond.Op : ">";
             cmbOp.SelectedIndexChanged += (s, e) => { if (!_uiLocked) { cond.Op = cmbOp.SelectedItem.ToString(); condChanged(); } };
@@ -2402,6 +2436,7 @@ namespace PCAN_Client
                     RefreshNodeText(node);
                     SyncRunnerScript();
                 };
+                EnableComboBoxClickDropDown(cmbLogic);
                 action.Controls.Add(cmbLogic);
             }
             condPanel.Controls.Add(action);
