@@ -133,8 +133,26 @@ namespace PCAN_Client
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
-                SplitterDistance = 380,
                 FixedPanel = FixedPanel.None
+            };
+            // 首次显示时右侧详情面板占脚本页可用宽度的40%;用户后续拖动分隔条不被重置
+            this.Shown += (s, e) =>
+            {
+                int totalWidth = split.ClientSize.Width;
+                int availableWidth = totalWidth - split.SplitterWidth;
+                if (availableWidth < 50) return; // 保留Panel1/Panel2默认最小尺寸各25像素
+
+                int panel1MinSize = Math.Min(260, Math.Max(25, availableWidth / 2));
+                int panel2MinSize = Math.Min(320, Math.Max(25, availableWidth - panel1MinSize));
+                int rightWidth = (int)Math.Round(totalWidth * 0.4);
+                int distance = availableWidth - rightWidth;
+                distance = Math.Max(panel1MinSize,
+                    Math.Min(distance, availableWidth - panel2MinSize));
+
+                // 先设置分隔位置，再设置最小尺寸，避免设置最小尺寸时校验当前距离失败。
+                split.SplitterDistance = distance;
+                split.Panel1MinSize = panel1MinSize;
+                split.Panel2MinSize = panel2MinSize;
             };
             _treeSteps = new TreeView
             {
@@ -1527,11 +1545,58 @@ namespace PCAN_Client
                 BuildScriptRawEditor(step, snap, 120);
         }
 
+        private sealed class SignalEnumOption
+        {
+            public string ValueText { get; set; }
+            public string Display { get; set; }
+        }
+
+        private static string GetSignalUnit(Signal signal)
+        {
+            string unit = (signal?.unitStr ?? "").Trim();
+            if (unit == "-" || unit == "\"\"" || string.IsNullOrWhiteSpace(unit)) return "";
+            return unit.Trim('"');
+        }
+
+        private static string GetSignalDisplayName(Signal signal)
+        {
+            string unit = GetSignalUnit(signal);
+            return string.IsNullOrEmpty(unit) ? signal.signalName : $"{signal.signalName} [{unit}]";
+        }
+
+        private static List<SignalEnumOption> BuildSignalEnumOptions(Signal signal, string currentText)
+        {
+            var options = new List<SignalEnumOption>();
+            if (signal?.enumDefinitions != null)
+            {
+                foreach (var item in signal.enumDefinitions.OrderBy(kv => kv.Key))
+                {
+                    string valueText = item.Key.ToString("G", CultureInfo.InvariantCulture);
+                    options.Add(new SignalEnumOption
+                    {
+                        ValueText = valueText,
+                        Display = $"{valueText} - {item.Value}"
+                    });
+                }
+            }
+
+            // 保留当前$变量或未出现在枚举表中的当前值，避免加载脚本后下拉单元格变成非法值。
+            if (!string.IsNullOrWhiteSpace(currentText) && !options.Any(item => item.ValueText == currentText))
+            {
+                options.Insert(0, new SignalEnumOption
+                {
+                    ValueText = currentText,
+                    Display = currentText.StartsWith("$", StringComparison.Ordinal) ? currentText : $"{currentText} - 当前值"
+                });
+            }
+            return options;
+        }
+
         /// <summary>脚本发送步骤的信号编辑表(复用编码/解码链路,支持$变量引用)</summary>
         private void BuildScriptSignalTable(ScriptStep step, ScriptMessageSnapshot snap)
         {
             var msg = snap.RuntimeMessage;
-            AddPropLabel("信号数据(物理值可输数字或$变量)");
+            AddPropLabel("信号数据（单位按DBC显示；枚举信号可下拉选择）");
             NextPropRow(22);
 
             var table = new DataTable();
@@ -1541,7 +1606,7 @@ namespace PCAN_Client
             foreach (var sig in msg.signals)
             {
                 var r = table.NewRow();
-                r["SignalName"] = sig.signalName;
+                r["SignalName"] = GetSignalDisplayName(sig);
                 if (snap.SignalExprs.TryGetValue(sig.signalName, out string expr) && expr.StartsWith("$"))
                 {
                     r["Value"] = expr;
@@ -1549,7 +1614,7 @@ namespace PCAN_Client
                 }
                 else
                 {
-                    r["Value"] = sig.cmdValue.ToString("G");
+                    r["Value"] = sig.cmdValue.ToString("G", CultureInfo.InvariantCulture);
                     try { r["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(sig.cmdValue, sig)).ToString("X"); }
                     catch { r["RawValue"] = "-"; }
                 }
@@ -1564,16 +1629,70 @@ namespace PCAN_Client
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 RowHeadersVisible = false,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
                 EditMode = DataGridViewEditMode.EditOnEnter,
                 Location = new Point(4, _propY),
-                Size = new Size(PropWidth + 100, 180),
+                Size = new Size(Math.Max(260, _propPanel.ClientSize.Width - 14), 180),
+                Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right,
+                ScrollBars = ScrollBars.Vertical,
                 Font = UiTheme.UiFont
             };
             UiTheme.StyleGrid(dgv);
             dgv.Columns["SignalName"].ReadOnly = true;
             dgv.Columns["RawValue"].ReadOnly = true;
-            UiTheme.SetGridHeaders(dgv, ("SignalName", "信号名"), ("Value", "物理值(数字或$变量)"), ("RawValue", "原始值"));
+            dgv.Columns["SignalName"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dgv.Columns["SignalName"].Width = 180;
+            dgv.Columns["SignalName"].MinimumWidth = 120;
+            dgv.Columns["Value"].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dgv.Columns["Value"].MinimumWidth = 140;
+            dgv.Columns["RawValue"].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            dgv.Columns["RawValue"].Width = 84;
+            dgv.Columns["RawValue"].MinimumWidth = 70;
+            UiTheme.SetGridHeaders(dgv, ("SignalName", "信号名/单位"), ("Value", "物理值（DBC枚举可选）"), ("RawValue", "原始值"));
+
+            for (int i = 0; i < msg.signals.Count; i++)
+            {
+                var sig = msg.signals[i];
+                string currentText = table.Rows[i]["Value"]?.ToString() ?? "";
+                string unit = GetSignalUnit(sig);
+                if (!string.IsNullOrEmpty(unit))
+                {
+                    dgv.Rows[i].Cells["SignalName"].ToolTipText = "DBC单位: " + unit;
+                    dgv.Rows[i].Cells["Value"].ToolTipText = "单位: " + unit;
+                }
+                if (sig.enumDefinitions != null && sig.enumDefinitions.Count > 0)
+                {
+                    var combo = new DataGridViewComboBoxCell
+                    {
+                        DataSource = BuildSignalEnumOptions(sig, currentText),
+                        DisplayMember = "Display",
+                        ValueMember = "ValueText",
+                        FlatStyle = FlatStyle.Flat,
+                        DisplayStyle = DataGridViewComboBoxDisplayStyle.DropDownButton,
+                        ValueType = typeof(string)
+                    };
+                    dgv.Rows[i].Cells["Value"] = combo;
+                    combo.Value = currentText;
+                }
+            }
+            dgv.DataError += (s, e) => { e.ThrowException = false; };
+            dgv.CellParsing += (s, e) =>
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != 1 || e.Value == null) return;
+                string text = e.Value.ToString().Trim();
+                if (text.StartsWith("$", StringComparison.Ordinal) ||
+                    double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) ||
+                    double.TryParse(text, out parsed))
+                {
+                    e.Value = text;
+                    e.ParsingApplied = true;
+                }
+            };
+            dgv.EditingControlShowing += (s, e) =>
+            {
+                if (dgv.CurrentCell is DataGridViewComboBoxCell && e.Control is ComboBox combo)
+                    combo.DropDownStyle = ComboBoxStyle.DropDown;
+            };
             dgv.CellEndEdit += (s, e) =>
             {
                 if (_uiLocked || e.RowIndex < 0 || e.ColumnIndex != 1) return;
@@ -1603,7 +1722,7 @@ namespace PCAN_Client
                     sig.cmdValue = num;
                     msg.updateFlag = true;
                     snap.SignalExprs[sig.signalName] = num.ToString("G", CultureInfo.InvariantCulture);
-                    table.Rows[e.RowIndex]["Value"] = num.ToString("G");
+                    table.Rows[e.RowIndex]["Value"] = num.ToString("G", CultureInfo.InvariantCulture);
                     table.Rows[e.RowIndex]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(num, sig)).ToString("X");
                 }
                 else
@@ -1653,7 +1772,8 @@ namespace PCAN_Client
                 Text = snap.DataHex,
                 Font = new Font("Consolas", 9f),
                 Location = new Point(4, _propY),
-                Size = new Size(PropWidth + 100, height),
+                Size = new Size(Math.Max(260, _propPanel.ClientSize.Width - 14), height),
+                Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right,
                 ScrollBars = ScrollBars.Vertical
             };
             _propPanel.Tag = txt; // RefreshScriptRawFromSignals 同步用
@@ -1677,7 +1797,7 @@ namespace PCAN_Client
                             var sig = msg.signals[i];
                             if (snap.SignalExprs.TryGetValue(sig.signalName, out string bound) && bound.StartsWith("$"))
                                 continue; // $变量绑定不被解码值覆盖
-                            table.Rows[i]["Value"] = sig.cmdValue.ToString("G");
+                            table.Rows[i]["Value"] = sig.cmdValue.ToString("G", CultureInfo.InvariantCulture);
                             snap.SignalExprs[sig.signalName] = sig.cmdValue.ToString("G", CultureInfo.InvariantCulture);
                             try { table.Rows[i]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(sig.cmdValue, sig)).ToString("X"); }
                             catch { }
