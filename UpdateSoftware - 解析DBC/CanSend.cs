@@ -85,7 +85,6 @@ namespace PCAN_Client
         {
             InitializeComponent();
 
-            dataGridView2.CellClick += DataGridView2_CellClick;
             dataGridView1.Scroll += DataGridView1_Scroll; // 添加滚动事件监听
             dataTable = new DataTable();
             dataGridView1Column = 3;
@@ -111,7 +110,8 @@ namespace PCAN_Client
                 }
                 else if(column.GetType().ToString().Contains("DataGridViewCheckBoxColumn"))
                 {
-                    messagesTable.Columns.Add(column.HeaderText, typeof(bool));
+                    var boolColumn = messagesTable.Columns.Add(column.HeaderText, typeof(bool));
+                    boolColumn.DefaultValue = false;
                 }
                 else
                 {
@@ -128,9 +128,11 @@ namespace PCAN_Client
             // 隐藏列：报文来源DBC通道（多通道同名报文区分用）
             messagesTable.Columns.Add("SrcChannel", typeof(string));
             // 隐藏列：是否自定义报文行（true=自定义，按CustomIdx取customMessagesList）
-            messagesTable.Columns.Add("IsCustom", typeof(bool));
+            var isCustomColumn = messagesTable.Columns.Add("IsCustom", typeof(bool));
+            isCustomColumn.DefaultValue = false;
             // 隐藏列：自定义报文在customMessagesList中的索引
-            messagesTable.Columns.Add("CustomIdx", typeof(int));
+            var customIndexColumn = messagesTable.Columns.Add("CustomIdx", typeof(int));
+            customIndexColumn.DefaultValue = -1;
             // 绑定DataTable到DataGridView
             dataGridView2.Columns.Clear();
             dataGridView2.DataSource = messagesTable;
@@ -315,7 +317,7 @@ namespace PCAN_Client
                 dataGridView2SelectRowIndex = e.RowIndex;
                 dataGridView2SelectColumnIndex = e.ColumnIndex;
                 DataRow row = messagesTable.Rows[dataGridView2SelectRowIndex];
-                bool isCustom = row.Table.Columns.Contains("IsCustom") && row.Field<bool>("IsCustom");
+                bool isCustom = row.Table.Columns.Contains("IsCustom") && row.Field<bool?>("IsCustom") == true;
                 var msg = FindMessageByRow(row);
                 if (msg == null) return;
                 _selectedDgv2Row = e.RowIndex;
@@ -402,7 +404,7 @@ namespace PCAN_Client
                 else if (dataGridView2.Columns["Enable"].Index == dataGridView2SelectColumnIndex)
                 {
                     // Enable为bool复选框列，直接取反；自定义报文走customFlag=true
-                    bool enabled = row.Field<bool>("Enable");
+                    bool enabled = row.Field<bool?>("Enable") == true;
                     messagesTable.Rows[dataGridView2SelectRowIndex].SetField("Enable", !enabled);
                     var enableMsg = msg;
                     SetCANMessageSendENable(ref enableMsg, !enabled, isCustom);
@@ -922,7 +924,7 @@ namespace PCAN_Client
         private static CAN_Data.Message FindMessageByRow(DataRow row)
         {
             // 自定义报文行：按CustomIdx直接取customMessagesList
-            if (row.Table.Columns.Contains("IsCustom") && row.Field<bool>("IsCustom"))
+            if (row.Table.Columns.Contains("IsCustom") && row.Field<bool?>("IsCustom") == true)
             {
                 int idx = row.Field<int>("CustomIdx");
                 if (idx >= 0 && idx < customMessagesList.Count) return customMessagesList[idx];
@@ -949,7 +951,7 @@ namespace PCAN_Client
                 string cellValue = dataGridView2.Rows[e.RowIndex].Cells[e.ColumnIndex].Value?.ToString() ?? "";
                 var msg = FindMessageByRow(row);
                 if (msg == null) return;
-                bool isCustom = row.Table.Columns.Contains("IsCustom") && row.Field<bool>("IsCustom");
+                bool isCustom = row.Table.Columns.Contains("IsCustom") && row.Field<bool?>("IsCustom") == true;
 
                 if (colName == "MessageID")
                 {
