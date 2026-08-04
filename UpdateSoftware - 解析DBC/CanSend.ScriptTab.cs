@@ -1733,10 +1733,30 @@ namespace PCAN_Client
                     e.ParsingApplied = true;
                 }
             };
+            EventHandler liveValueChanged = (s, e) =>
+            {
+                if (_uiLocked || dgv.CurrentCell == null || dgv.CurrentCell.ColumnIndex != 1) return;
+                int rowIndex = dgv.CurrentCell.RowIndex;
+                if (rowIndex < 0) return;
+                TryApplyScriptSignalValue(dgv, table, msg, snap, rowIndex,
+                    GetScriptSignalEditorText(dgv, rowIndex), false);
+            };
             dgv.EditingControlShowing += (s, e) =>
             {
-                if (dgv.CurrentCell is DataGridViewComboBoxCell && e.Control is ComboBox combo)
+                if (dgv.CurrentCell?.ColumnIndex != 1) return;
+                if (e.Control is ComboBox combo)
+                {
                     combo.DropDownStyle = ComboBoxStyle.DropDown;
+                    combo.TextChanged -= liveValueChanged;
+                    combo.SelectedValueChanged -= liveValueChanged;
+                    combo.TextChanged += liveValueChanged;
+                    combo.SelectedValueChanged += liveValueChanged;
+                }
+                else if (e.Control is TextBoxBase textBox)
+                {
+                    textBox.TextChanged -= liveValueChanged;
+                    textBox.TextChanged += liveValueChanged;
+                }
             };
             dgv.CellClick += (s, e) =>
             {
@@ -1760,46 +1780,91 @@ namespace PCAN_Client
             dgv.CellEndEdit += (s, e) =>
             {
                 if (_uiLocked || e.RowIndex < 0 || e.ColumnIndex != 1) return;
-                var sig = msg.signals[e.RowIndex];
-                string text = dgv.Rows[e.RowIndex].Cells[1].Value?.ToString().Trim() ?? "";
-                if (text.StartsWith("$"))
-                {
-                    string varName = text.Substring(1);
-                    if (!ScriptOperand.IsValidVarName(varName))
-                    {
-                        MessageBox.Show("变量名非法(字母/下划线开头,字母数字下划线组成)", "提示");
-                        dgv.Rows[e.RowIndex].Cells[1].Value = table.Rows[e.RowIndex]["Value"];
-                        return;
-                    }
-                    snap.SignalExprs[sig.signalName] = text;
-                    table.Rows[e.RowIndex]["Value"] = text;
-                    table.Rows[e.RowIndex]["RawValue"] = "$";
-                }
-                else if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double num) || double.TryParse(text, out num))
-                {
-                    if (num < sig.minimum || num > sig.maximum)
-                    {
-                        MessageBox.Show($"输入值 {num} 超出信号范围 [{sig.minimum}, {sig.maximum}]", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        dgv.Rows[e.RowIndex].Cells[1].Value = table.Rows[e.RowIndex]["Value"];
-                        return;
-                    }
-                    sig.cmdValue = num;
-                    msg.updateFlag = true;
-                    snap.SignalExprs[sig.signalName] = num.ToString("G", CultureInfo.InvariantCulture);
-                    table.Rows[e.RowIndex]["Value"] = num.ToString("G", CultureInfo.InvariantCulture);
-                    table.Rows[e.RowIndex]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(num, sig)).ToString("X");
-                }
-                else
-                {
-                    dgv.Rows[e.RowIndex].Cells[1].Value = table.Rows[e.RowIndex]["Value"];
-                    return;
-                }
-                RefreshScriptRawFromSignals(msg, snap);
+                TryApplyScriptSignalValue(dgv, table, msg, snap, e.RowIndex,
+                    GetScriptSignalEditorText(dgv, e.RowIndex), true);
             };
             _propPanel.Controls.Add(dgv);
             NextPropRow(186);
 
             BuildScriptRawEditor(step, snap, 54, dgv, table);
+        }
+
+        private static string GetScriptSignalEditorText(DataGridView dgv, int rowIndex)
+        {
+            if (dgv.CurrentCell != null && dgv.CurrentCell.RowIndex == rowIndex)
+            {
+                if (dgv.EditingControl is ComboBox combo)
+                {
+                    if (combo.SelectedItem is SignalEnumOption option &&
+                        string.Equals(combo.Text, option.Display, StringComparison.Ordinal))
+                        return option.ValueText?.Trim() ?? "";
+                    return combo.Text?.Trim() ?? "";
+                }
+
+                if (dgv.EditingControl is TextBoxBase textBox)
+                    return textBox.Text?.Trim() ?? "";
+            }
+            return dgv.Rows[rowIndex].Cells["Value"].Value?.ToString().Trim() ?? "";
+        }
+
+        private void TryApplyScriptSignalValue(DataGridView dgv, DataTable table, Message msg,
+            ScriptMessageSnapshot snap, int rowIndex, string text, bool finalize)
+        {
+            if (msg?.signals == null || rowIndex < 0 || rowIndex >= msg.signals.Count) return;
+            var sig = msg.signals[rowIndex];
+            text = (text ?? "").Trim();
+
+            if (text.StartsWith("$", StringComparison.Ordinal))
+            {
+                string varName = text.Substring(1);
+                if (!ScriptOperand.IsValidVarName(varName))
+                {
+                    if (finalize)
+                    {
+                        MessageBox.Show("变量名非法(字母/下划线开头,字母数字下划线组成)", "提示");
+                        dgv.Rows[rowIndex].Cells[1].Value = table.Rows[rowIndex]["Value"];
+                    }
+                    return;
+                }
+
+                snap.SignalExprs[sig.signalName] = text;
+                if (finalize)
+                {
+                    table.Rows[rowIndex]["Value"] = text;
+                    table.Rows[rowIndex]["RawValue"] = "$";
+                }
+            }
+            else if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double num) ||
+                     double.TryParse(text, out num))
+            {
+                if (num < sig.minimum || num > sig.maximum)
+                {
+                    if (finalize)
+                    {
+                        MessageBox.Show($"输入值 {num} 超出信号范围 [{sig.minimum}, {sig.maximum}]", "提示",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        dgv.Rows[rowIndex].Cells[1].Value = table.Rows[rowIndex]["Value"];
+                    }
+                    return;
+                }
+
+                sig.cmdValue = num;
+                msg.updateFlag = true;
+                snap.SignalExprs[sig.signalName] = num.ToString("G", CultureInfo.InvariantCulture);
+                if (finalize)
+                {
+                    table.Rows[rowIndex]["Value"] = num.ToString("G", CultureInfo.InvariantCulture);
+                    table.Rows[rowIndex]["RawValue"] = "0x" + ((long)CanMessageBuilder.ConvertToRawValue(num, sig)).ToString("X");
+                }
+            }
+            else
+            {
+                if (finalize)
+                    dgv.Rows[rowIndex].Cells[1].Value = table.Rows[rowIndex]["Value"];
+                return;
+            }
+
+            RefreshScriptRawFromSignals(msg, snap);
         }
 
         /// <summary>信号编码后刷新RawData框(发送步骤编辑用);程序化赋值须抑制TextChanged回写,防$变量绑定被覆盖</summary>
@@ -2193,6 +2258,7 @@ namespace PCAN_Client
                 }
                 else textBox.BackColor = Color.MistyRose;
             };
+            textBox.TextChanged += (s, e) => commit();
             textBox.Leave += (s, e) => commit();
             textBox.KeyDown += (s, e) =>
             {
