@@ -566,7 +566,8 @@ namespace PCAN_Client
                 var newStep = new ScriptStep
                 {
                     Type = ScriptStepType.SendMessage,
-                    Msg = ScriptMessageHelper.SnapshotFromMessage(msg, ResolveTxChannel(msg))
+                    Msg = ScriptMessageHelper.SnapshotFromMessage(msg, ResolveTxChannel(msg)),
+                    RepeatIntervalMs = GetScriptRepeatIntervalMs(msg)
                 };
                 InsertStepAtTarget(newStep, target);
                 RebuildStepTree(newStep.Id);
@@ -854,7 +855,8 @@ namespace PCAN_Client
             var step = new ScriptStep
             {
                 Type = ScriptStepType.SendMessage,
-                Msg = ScriptMessageHelper.SnapshotFromMessage(msg, channel)
+                Msg = ScriptMessageHelper.SnapshotFromMessage(msg, channel),
+                RepeatIntervalMs = GetScriptRepeatIntervalMs(msg)
             };
             _script.Steps.Add(step);
             RebuildStepTree(step.Id);
@@ -910,6 +912,15 @@ namespace PCAN_Client
         private void NextPropRow(int height = 28) => _propY += height;
 
         private int PropWidth => Math.Max(200, _propPanel.ClientSize.Width - 130);
+
+        private const int DefaultScriptRepeatIntervalMs = 100;
+        private const int MaxScriptRepeatIntervalMs = 3600000;
+
+        private static int GetScriptRepeatIntervalMs(Message msg)
+        {
+            if (msg == null || msg.cycleTime == 0) return DefaultScriptRepeatIntervalMs;
+            return (int)Math.Min((long)msg.cycleTime, MaxScriptRepeatIntervalMs);
+        }
 
         private static void EnableComboBoxClickDropDown(ComboBox combo)
         {
@@ -1446,6 +1457,7 @@ namespace PCAN_Client
                 if (selected.Value is NewCustomMsgItem)
                 {
                     step.Msg = NewCustomSnapshot();
+                    step.RepeatIntervalMs = DefaultScriptRepeatIntervalMs;
                     ScriptMessageHelper.RelinkFromDbc(step.Msg);
                     BuildSendProps(step);
                     RefreshNodeText(node);
@@ -1454,6 +1466,7 @@ namespace PCAN_Client
                 if (selected.Value is MsgSourceItem item)
                 {
                     step.Msg = ScriptMessageHelper.SnapshotFromMessage(item.Msg, item.Channel);
+                    step.RepeatIntervalMs = GetScriptRepeatIntervalMs(item.Msg);
                     ScriptMessageHelper.RelinkFromDbc(step.Msg);
                     BuildSendProps(step);
                     RefreshNodeText(node);
