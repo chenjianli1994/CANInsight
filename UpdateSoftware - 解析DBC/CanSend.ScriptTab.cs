@@ -89,7 +89,7 @@ namespace PCAN_Client
             });
 
             // --- 底部:状态 + 变量表 + 日志 ---
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 132 };
+            var bottom = new Panel { Dock = DockStyle.Fill };
             _scriptStatusLabel = new Label
             {
                 Dock = DockStyle.Left,
@@ -135,6 +135,12 @@ namespace PCAN_Client
                 Orientation = Orientation.Vertical,
                 FixedPanel = FixedPanel.None
             };
+            var contentSplit = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Horizontal,
+                FixedPanel = FixedPanel.None
+            };
             // 首次显示时右侧详情面板占脚本页可用宽度的40%;用户后续拖动分隔条不被重置
             this.Shown += (s, e) =>
             {
@@ -153,6 +159,26 @@ namespace PCAN_Client
                 split.SplitterDistance = distance;
                 split.Panel1MinSize = panel1MinSize;
                 split.Panel2MinSize = panel2MinSize;
+            };
+            // 底部状态/变量/日志区域默认较矮,通过水平分隔条可随时拖动调整高度
+            this.Shown += (s, e) =>
+            {
+                int totalHeight = contentSplit.ClientSize.Height;
+                int availableHeight = totalHeight - contentSplit.SplitterWidth;
+                if (availableHeight < 50) return;
+
+                int panel1MinSize = Math.Min(180, Math.Max(25, availableHeight / 2));
+                int panel2MinSize = Math.Min(68, Math.Max(25, availableHeight - panel1MinSize));
+                int bottomHeight = Math.Max(panel2MinSize,
+                    Math.Min(84, availableHeight - panel1MinSize));
+                int distance = availableHeight - bottomHeight;
+                distance = Math.Max(panel1MinSize,
+                    Math.Min(distance, availableHeight - panel2MinSize));
+
+                // 先设置分隔位置,再设置最小尺寸,避免布局尚未完成时触发范围校验。
+                contentSplit.SplitterDistance = distance;
+                contentSplit.Panel1MinSize = panel1MinSize;
+                contentSplit.Panel2MinSize = panel2MinSize;
             };
             _treeSteps = new TreeView
             {
@@ -203,9 +229,11 @@ namespace PCAN_Client
                 null, _propPanel, new object[] { true });
             split.Panel2.Controls.Add(_propPanel);
 
-            // Dock顺序:Fill最先,Top/Bottom最后(后Add先停靠)
-            _tabPageScript.Controls.Add(split);
-            _tabPageScript.Controls.Add(bottom);
+            contentSplit.Panel1.Controls.Add(split);
+            contentSplit.Panel2.Controls.Add(bottom);
+
+            // Dock顺序:Fill最先,Top最后(后Add先停靠)
+            _tabPageScript.Controls.Add(contentSplit);
             _tabPageScript.Controls.Add(tool);
 
             // --- UI刷新定时器(100ms):状态/变量/日志/高亮 ---
@@ -920,15 +948,6 @@ namespace PCAN_Client
 
         private TreeNode CurrentNode() => _treeSteps.SelectedNode;
 
-        private void AddCommentRow(ScriptStep step)
-        {
-            AddPropLabel("注释");
-            var txt = AddPropControl(new TextBox(), 110, PropWidth);
-            txt.Text = step.Comment;
-            txt.TextChanged += (s, e) => { if (_uiLocked) return; step.Comment = txt.Text; RefreshNodeText(CurrentNode()); };
-            NextPropRow();
-        }
-
         // ---------- 脚本级属性 ----------
         private void ShowScriptProps()
         {
@@ -1537,7 +1556,6 @@ namespace PCAN_Client
             }
 
             // 数据编辑区
-            AddCommentRow(step);
             NextPropRow(6);
             if (snap.RuntimeMessage != null && snap.RuntimeMessage.signals.Count > 0)
                 BuildScriptSignalTable(step, snap);
@@ -1820,7 +1838,6 @@ namespace PCAN_Client
             var num = AddPropControl(new NumericUpDown { Minimum = 1, Maximum = 3600000, Value = ClampDec(step.DelayMs, 1, 3600000) }, 110, 90);
             num.ValueChanged += (s, e) => { if (!_uiLocked) { step.DelayMs = (int)num.Value; RefreshNodeText(node); } };
             NextPropRow();
-            AddCommentRow(step);
         }
 
         // ---------- 等待条件 ----------
@@ -1837,7 +1854,6 @@ namespace PCAN_Client
             cmbTimeout.SelectedIndex = ClampIdx((int)step.OnTimeout, 1);
             cmbTimeout.SelectedIndexChanged += (s, e) => { if (!_uiLocked) { step.OnTimeout = (TimeoutAction)cmbTimeout.SelectedIndex; RefreshNodeText(node); } };
             NextPropRow();
-            AddCommentRow(step);
             NextPropRow(6);
             AddPropLabel("等待条件(满足即继续)");
             NextPropRow(22);
@@ -1849,7 +1865,6 @@ namespace PCAN_Client
         {
             ClearProps("条件分支(如果) — 满足时执行子步骤");
             var node = CurrentNode();
-            AddCommentRow(step);
             NextPropRow(6);
             BuildCondGroup(step.Conditions, () => step.Logic, l => { step.Logic = l; }, node);
         }
@@ -1900,7 +1915,6 @@ namespace PCAN_Client
                 _propPanel.Controls.Add(warn);
                 NextPropRow();
             }
-            AddCommentRow(step);
         }
 
         // ---------- 变量赋值 ----------
@@ -1972,7 +1986,6 @@ namespace PCAN_Client
                 };
                 NextPropRow();
             }
-            AddCommentRow(step);
         }
 
         // ---------- 日志输出 ----------
@@ -2002,7 +2015,6 @@ namespace PCAN_Client
             };
             _propPanel.Controls.Add(lbl);
             NextPropRow();
-            AddCommentRow(step);
         }
 
         // ===================== 条件构造器 =====================
