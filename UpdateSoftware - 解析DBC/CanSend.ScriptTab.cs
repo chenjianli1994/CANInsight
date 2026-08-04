@@ -1026,7 +1026,7 @@ namespace PCAN_Client
 
                 var btn = new Button
                 {
-                    Text = "...",
+                    Text = "选",
                     Width = 30,
                     Dock = DockStyle.Right,
                     TabStop = false,
@@ -1034,7 +1034,7 @@ namespace PCAN_Client
                 };
                 UiTheme.StyleButton(btn);
                 var tip = new ToolTip();
-                tip.SetToolTip(btn, "打开筛选选择");
+                tip.SetToolTip(btn, "打开筛选选择信号/报文");
 
                 ValueBox = new TextBox
                 {
@@ -1896,6 +1896,8 @@ namespace PCAN_Client
                 commit();
             });
             var textBox = picker.ValueBox;
+            var operandTip = new ToolTip();
+            operandTip.SetToolTip(textBox, "可输入数字或$变量；点击右侧“选”按钮可筛选选择信号/报文");
             commit = () =>
             {
                 if (_uiLocked) return;
@@ -1932,7 +1934,7 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 条件组编辑区(增量更新设计):每行一个TableLayoutPanel(且/或 | 左操作数50% | 操作符60px | 右操作数50% | 删除28px 自适应),
+        /// 条件组编辑区(增量更新设计):列头+每行一个TableLayoutPanel(条件/且或46px | 左操作数50% | 操作符60px | 右操作数50% | 删除28px),
         /// 增删条件只插入/移除对应行,不做全量重建——消除"整页从上到下重刷"的闪烁;删除按钮固定列宽,面板再窄也不被裁剪
         /// </summary>
         private void BuildCondGroup(List<ScriptCondition> conds, Func<CondLogicOp> getLogic, Action<CondLogicOp> setLogic, TreeNode node)
@@ -1940,17 +1942,68 @@ namespace PCAN_Client
             var condPanel = new Panel
             {
                 Location = new Point(4, _propY),
-                Size = new Size(PropWidth + 106, Math.Max(34, conds.Count * CondRowHeight + 34)),
-                Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right
+                Size = new Size(PropWidth + 106, GetCondPanelHeight(conds.Count)),
+                Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.White
             };
             _propPanel.Controls.Add(condPanel);
             NextPropRow(condPanel.Height + 6);
+            AddCondHeader(condPanel);
             for (int i = 0; i < conds.Count; i++)
                 AddCondRow(condPanel, conds, i, getLogic, setLogic, node);
             RefreshCondActionRow(condPanel, conds, getLogic, setLogic, node);
         }
 
-        private const int CondRowHeight = 30;
+        private const int CondHeaderHeight = 26;
+        private const int CondRowHeight = 32;
+
+        private static int GetCondPanelHeight(int conditionCount)
+        {
+            return Math.Max(CondHeaderHeight + 34, CondHeaderHeight + conditionCount * CondRowHeight + 34);
+        }
+
+        private static void ConfigureCondColumns(TableLayoutPanel table)
+        {
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46)); // 条件编号/且或
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));  // 左操作数
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60)); // 操作符
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));  // 右操作数
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 28)); // 删除
+        }
+
+        private void AddCondHeader(Panel condPanel)
+        {
+            var header = new TableLayoutPanel
+            {
+                Location = new Point(0, 0),
+                Size = new Size(condPanel.Width - 4, CondHeaderHeight),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
+                ColumnCount = 5,
+                RowCount = 1,
+                Margin = new Padding(0),
+                Padding = new Padding(0),
+                Name = "condHeader",
+                BackColor = UiTheme.HeaderBack
+            };
+            ConfigureCondColumns(header);
+            header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+            foreach (string text in new[] { "条件", "左值", "比较", "右值", "" })
+            {
+                var label = new Label
+                {
+                    Text = text,
+                    Dock = DockStyle.Fill,
+                    Font = UiTheme.HeaderFont,
+                    ForeColor = Color.FromArgb(70, 70, 70),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Margin = new Padding(0, 0, 1, 0)
+                };
+                header.Controls.Add(label);
+            }
+            condPanel.Controls.Add(header);
+        }
 
         /// <summary>追加一行条件(index=conds中的序号);行Tag持有条件对象引用,后续按引用定位</summary>
         private void AddCondRow(Panel condPanel, List<ScriptCondition> conds, int index,
@@ -1960,8 +2013,8 @@ namespace PCAN_Client
             Action condChanged = () => { RefreshNodeText(node); SyncRunnerScript(); };
             var row = new TableLayoutPanel
             {
-                Location = new Point(0, index * CondRowHeight),
-                Size = new Size(condPanel.Width - 4, 26),
+                Location = new Point(0, CondHeaderHeight + index * CondRowHeight),
+                Size = new Size(condPanel.Width - 4, CondRowHeight - 4),
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
                 ColumnCount = 5,
                 RowCount = 1,
@@ -1970,18 +2023,14 @@ namespace PCAN_Client
                 Tag = cond,
                 Name = "condRow"
             };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30)); // 且/或标签
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));  // 左操作数
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60)); // 操作符
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));  // 右操作数
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 28)); // 删除
+            ConfigureCondColumns(row);
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             var lblLogic = new Label
             {
-                Text = index == 0 ? "" : (getLogic() == CondLogicOp.And ? "且" : "或"),
+                Text = index == 0 ? "条件1" : (getLogic() == CondLogicOp.And ? "且" : "或"),
                 Font = UiTheme.HeaderFont,
-                ForeColor = UiTheme.Accent,
+                ForeColor = index == 0 ? UiTheme.Accent : Color.Gray,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter
             };
@@ -2011,6 +2060,8 @@ namespace PCAN_Client
 
             var btnDel = new Button { Text = "×", ForeColor = Color.Red, Dock = DockStyle.Fill, Margin = new Padding(0, 1, 0, 0) };
             UiTheme.StyleButton(btnDel);
+            var deleteTip = new ToolTip();
+            deleteTip.SetToolTip(btnDel, "删除此条件");
             btnDel.Click += (s, e) =>
             {
                 if (_uiLocked) return;
@@ -2034,7 +2085,7 @@ namespace PCAN_Client
             }
             RelayoutCondRows(condPanel, conds, getLogic);
             RefreshCondActionRow(condPanel, conds, getLogic, setLogic, node);
-            condPanel.Height = Math.Max(34, conds.Count * CondRowHeight + 34);
+            condPanel.Height = GetCondPanelHeight(conds.Count);
             RefreshNodeText(node);
             SyncRunnerScript();
         }
@@ -2046,9 +2097,12 @@ namespace PCAN_Client
             {
                 var row = FindCondRow(condPanel, conds[i]);
                 if (row == null) continue;
-                row.Location = new Point(0, i * CondRowHeight);
+                row.Location = new Point(0, CondHeaderHeight + i * CondRowHeight);
                 if (row.GetControlFromPosition(0, 0) is Label lbl)
-                    lbl.Text = i == 0 ? "" : (getLogic() == CondLogicOp.And ? "且" : "或");
+                {
+                    lbl.Text = i == 0 ? "条件1" : (getLogic() == CondLogicOp.And ? "且" : "或");
+                    lbl.ForeColor = i == 0 ? UiTheme.Accent : Color.Gray;
+                }
             }
         }
 
@@ -2073,7 +2127,7 @@ namespace PCAN_Client
             var action = new Panel
             {
                 Name = "condActionRow",
-                Location = new Point(0, conds.Count * CondRowHeight + 4),
+                Location = new Point(0, CondHeaderHeight + conds.Count * CondRowHeight + 4),
                 Size = new Size(condPanel.Width - 4, 26),
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
@@ -2086,7 +2140,7 @@ namespace PCAN_Client
                 AddCondRow(condPanel, conds, conds.Count - 1, getLogic, setLogic, node); // 增量追加,不重建
                 RelayoutCondRows(condPanel, conds, getLogic); // 第2行起显示且/或标签
                 RefreshCondActionRow(condPanel, conds, getLogic, setLogic, node); // 操作行下移
-                condPanel.Height = Math.Max(34, conds.Count * CondRowHeight + 34);
+                condPanel.Height = GetCondPanelHeight(conds.Count);
                 RefreshNodeText(node);
                 SyncRunnerScript();
             };
