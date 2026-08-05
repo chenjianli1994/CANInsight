@@ -37,6 +37,7 @@ namespace PCAN_Client
                     return Assembly.Load(assemblyData);
                 }
             };
+            PrepareEmbeddedNativeLibraries();
             //ExtractEmbeddedDLL();
             HideRelatedFiles();
             /* 首次打开或版本更新后首次打开：弹窗提示（/updated 为更新批处理重启时携带的参数） */
@@ -80,6 +81,60 @@ namespace PCAN_Client
             mainForm.ShowInTaskbar = false;
             Application.Run(mainForm);
         }
+
+        /// <summary>将 exe 内嵌的 x64 原生库解压到临时目录，供 DllImport 使用。</summary>
+        private static void PrepareEmbeddedNativeLibraries()
+        {
+            try
+            {
+                Assembly assembly = Assembly.GetExecutingAssembly();
+                string resourceName = null;
+                foreach (string name in assembly.GetManifestResourceNames())
+                {
+                    if (name.EndsWith("costura_win_x64.binlog.dll", StringComparison.OrdinalIgnoreCase))
+                    {
+                        resourceName = name;
+                        break;
+                    }
+                }
+                if (resourceName == null) return;
+
+                string nativeDir = Path.Combine(Path.GetTempPath(), "CANInsight", "native");
+                Directory.CreateDirectory(nativeDir);
+                string nativePath = Path.Combine(nativeDir, "binlog.dll");
+                using (Stream source = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (source == null) return;
+                    if (!File.Exists(nativePath) || new FileInfo(nativePath).Length != source.Length)
+                    {
+                        using (var target = new FileStream(nativePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                        {
+                            source.CopyTo(target);
+                        }
+                    }
+                }
+
+                string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+                bool alreadyPresent = false;
+                foreach (string item in path.Split(new[] { Path.PathSeparator }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (string.Equals(item.TrimEnd('\\'), nativeDir.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    {
+                        alreadyPresent = true;
+                        break;
+                    }
+                }
+                if (!alreadyPresent)
+                {
+                    Environment.SetEnvironmentVariable("PATH", nativeDir + Path.PathSeparator + path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[EmbeddedNative] 解压 binlog.dll 失败: " + ex.Message);
+            }
+        }
+
         /// <summary>入口预建并已显示的绘图窗口,供Main_Load接管(避免重复创建)</summary>
         internal static ChartFrom PreloadedChart = null;
         public static void ExtractEmbeddedDLL()

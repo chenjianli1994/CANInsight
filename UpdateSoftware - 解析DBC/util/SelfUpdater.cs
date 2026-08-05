@@ -22,7 +22,7 @@ namespace PCAN_Client.util
     internal static class SelfUpdater
     {
         /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
-        private const string UpdateDir = @"\\update-server\company-share\I-文件中转站\新建文件夹\CANInsight";
+        private const string UpdateDir = @"\\update-server\company-share\dept\group\其他资料\project\transfer\developer\CANInsight";
 
         /// <summary>程序启动时调用，后台静默检查，失败（无网络/无权限）不影响正常使用</summary>
         public static void CheckOnStartup()

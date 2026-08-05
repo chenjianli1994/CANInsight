@@ -463,9 +463,15 @@
   <ItemGroup>
     <EmbeddedResource Include="Lib\PCANBasic.NET.dll" />
     <Content Include="icon.ico" />
-    <Content Include="Resources\FodyWeavers.xml" />
     <EmbeddedResource Include="costura-win-x64\binlog.dll" />
     <EmbeddedResource Include="Lib\CSScriptLibrary.dll" />
+    <Content Include="ReportAuto\templates\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\模板文件.pptx">
+      <Link>模板文件.pptx</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
@@ -484,22 +490,24 @@
   </Target>
   <Import Project="..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets" Condition="Exists('..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets')" />
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
+  <Target Name="CleanBundledArtifacts" AfterTargets="Build">
+    <ItemGroup>
+      <_RedundantFiles Include="$(OutDir)*.dll" />
+      <_RedundantFiles Include="$(OutDir)*.xml" />
+      <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
+      <_RedundantFiles Include="$(OutDir)costura-win-x64\*.dll" />
+      <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_RedundantFiles)" />
+    <RemoveDir Directories="$(OutDir)costura-win-x64" Condition="Exists('$(OutDir)costura-win-x64')" />
+    <Message Text="清理输出目录冗余 DLL/XML/PDB" Importance="high" />
+  </Target>
   <!-- Release 编译后自动生成 version.txt（内容取自 BaseParamter.softVersion），供局域网自更新发布使用 -->
-  <Target Name="GenerateVersionTxt" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+  <Target Name="GenerateVersionTxt" AfterTargets="CleanBundledArtifacts" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <_SoftVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\BaseParamter.cs')), 'softVersion = "([^"]+)"').Groups[1].Value)</_SoftVersion>
     </PropertyGroup>
     <WriteLinesToFile File="$(OutDir)version.txt" Lines="$(_SoftVersion)" Overwrite="true" />
     <Message Text="已生成 version.txt：$(_SoftVersion)" Importance="high" />
-    <!-- 清理输出目录冗余文件：NuGet程序集已由Costura嵌入exe（含System.Memory依赖链），删除松散副本及文档/XML/PDB，
-         仅保留运行必需的 exe/config/json(用户配置)/version.txt 与 ChartPresets.xml/模板文件.pptx/ReportAuto工况文件夹 -->
-    <ItemGroup>
-      <_RedundantFiles Include="$(OutDir)*.dll" />
-      <_RedundantFiles Include="$(OutDir)DocumentFormat.OpenXml*.xml" />
-      <_RedundantFiles Include="$(OutDir)System.*.xml" />
-      <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
-    </ItemGroup>
-    <Delete Files="@(_RedundantFiles)" />
-    <Message Text="已清理输出目录冗余 DLL/文档/PDB" Importance="high" />
   </Target>
 </Project>

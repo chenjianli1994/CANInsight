@@ -107,19 +107,20 @@ namespace PCAN_Client.ReportAuto
     /// </summary>
     public static class AnalysisTypeLoader
     {
-        /// <summary>
         /// 加载 dir 目录下所有 *.json 模板。
-        /// 目录不存在或为空时返回空列表，不抛异常；
+        /// 目录不存在或为空时返回空列表；
         /// 单个文件解析失败时跳过该文件并记录到 Debug，继续加载其余文件。
-        /// </summary>
         /// <param name="dir">templates 目录路径</param>
         /// <returns>所有加载成功的工况分类；无任何成功时返回空列表</returns>
         public static List<AnalysisType> LoadAll(string dir)
         {
             List<AnalysisType> result = new List<AnalysisType>();
 
-            // 目录不存在或为空，直接返回空列表
-            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+            if (string.IsNullOrEmpty(dir))
+            {
+                return result;
+            }
+            if (!Directory.Exists(dir))
             {
                 return result;
             }
@@ -188,6 +189,7 @@ namespace PCAN_Client.ReportAuto
             return result;
         }
     }
+
 
     /// <summary>
     /// PPT模板中固定Shape的标识符常量。编辑器不再让用户选择Shape，
