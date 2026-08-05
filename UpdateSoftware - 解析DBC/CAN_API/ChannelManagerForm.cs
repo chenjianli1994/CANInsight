@@ -396,9 +396,27 @@ namespace PCAN_Client
             }
         }
 
+        private int GetNextChannelNumber()
+        {
+            var usedNumbers = new HashSet<int>();
+            foreach (DataGridViewRow row in _dgv.Rows)
+            {
+                string name = row.Cells[ColName].Value?.ToString()?.Trim() ?? "";
+                if (name.StartsWith("CAN", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(name.Substring(3), out int number) && number > 0)
+                {
+                    usedNumbers.Add(number);
+                }
+            }
+
+            int next = 1;
+            while (usedNumbers.Contains(next)) next++;
+            return next;
+        }
+
         private void BtnAdd_Click(object sender, EventArgs e)
         {
-            int n = _dgv.Rows.Count + 1;
+            int n = GetNextChannelNumber();
             int r = _dgv.Rows.Add();
             var row = _dgv.Rows[r];
             row.Cells[ColName].Value = "CAN" + n;
@@ -425,6 +443,7 @@ namespace PCAN_Client
             RefreshAllConnButtons();
             RefreshPreview();
         }
+
 
         // === 映射预览 ===
 
@@ -532,6 +551,7 @@ namespace PCAN_Client
             _dgv.EndEdit();
             var channels = new List<CanBusChannel>();
             var hwUsed = new Dictionary<string, string>(); // 映射一一对应检测
+            var channelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             for (int i = 0; i < _dgv.Rows.Count; i++)
             {
@@ -544,6 +564,11 @@ namespace PCAN_Client
                 if (string.IsNullOrWhiteSpace(name))
                 {
                     MessageBox.Show($"第{i + 1}行：通道名称不能为空", "验证错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+                if (!channelNames.Add(name))
+                {
+                    MessageBox.Show($"第{i + 1}行：通道名称 [{name}] 重复，请修改后再保存", "验证错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return false;
                 }
                 if (!byte.TryParse(blfStr, out byte blfChannelId))
