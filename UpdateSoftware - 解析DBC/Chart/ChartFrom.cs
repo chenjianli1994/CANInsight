@@ -1110,15 +1110,55 @@ namespace PCAN_Client
             }
         }
 
-        /// <summary>更多→版本信息:显示当前版本号与发布日期(取自 BaseParamter.softVersion)</summary>
+        /// <summary>更多→版本信息:显示当前版本号、发布日期，并提供主动检查更新入口</summary>
         private void _menuVersionInfo_Click(object sender, EventArgs e)
         {
             var parts = BaseParamter.softVersion.Split(new[] { "--" }, StringSplitOptions.None);
             string ver = parts[0].Trim();
             string date = parts.Length > 1 ? parts[1].Trim() : "未知";
-            MessageBox.Show("当前版本：" + ver + "\r\n发布日期：" + date,
-                "版本信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            using (var dlg = new Form())
+            {
+                dlg.Text = "版本信息";
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+                dlg.ClientSize = new Size(330, 145);
+
+                var label = new Label
+                {
+                    Text = "当前版本：" + ver + "\r\n发布日期：" + date,
+                    AutoSize = true,
+                    Location = new Point(20, 20)
+                };
+                var buttonCheck = new Button
+                {
+                    Text = "检查更新",
+                    Size = new Size(100, 30),
+                    Location = new Point(100, 92)
+                };
+                var buttonClose = new Button
+                {
+                    Text = "关闭",
+                    DialogResult = DialogResult.Cancel,
+                    Size = new Size(80, 30),
+                    Location = new Point(215, 92)
+                };
+                buttonCheck.Click += (s, args) =>
+                {
+                    dlg.Close();
+                    PCAN_Client.util.SelfUpdater.CheckNow(this);
+                };
+
+                dlg.Controls.Add(label);
+                dlg.Controls.Add(buttonCheck);
+                dlg.Controls.Add(buttonClose);
+                dlg.CancelButton = buttonClose;
+                dlg.ShowDialog(this);
+            }
         }
+
 
         /// <summary>更多→流式阈值设置:弹小对话框修改并持久化(下次加载生效)</summary>
         private void _menuStreamingThreshold_Click(object sender, EventArgs e)

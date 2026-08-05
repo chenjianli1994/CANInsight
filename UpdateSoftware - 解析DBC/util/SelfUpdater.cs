@@ -19,19 +19,27 @@ namespace PCAN_Client.util
     ///   CANInsight.exe —— 新版程序本体。
     ///   更新说明.txt —— （可选）本次更新的内容说明，会在更新确认弹窗中展示给用户。
     /// </summary>
+
+    internal enum UpdateDialogResult
+    {
+        Later,
+        Update,
+        Ignore
+    }
+
     internal static class SelfUpdater
     {
         /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
         private const string UpdateDir = @"\\update-server\company-share\dept\group\其他资料\project\transfer\developer\CANInsight";
 
-        /// <summary>程序启动时调用，后台静默检查，失败（无网络/无权限）不影响正常使用</summary>
+        /// <summary>程序启动时调用，后台静默检查；自动检查会尊重用户设置的忽略版本。</summary>
         public static void CheckOnStartup()
         {
             Task.Run(() =>
             {
                 try
                 {
-                    Check();
+                    Check(false, null);
                 }
                 catch
                 {
@@ -40,51 +48,145 @@ namespace PCAN_Client.util
             });
         }
 
-        private static void Check()
+        /// <summary>由界面主动触发版本检查；手动检查不受忽略版本设置影响。</summary>
+        internal static void CheckNow(Form owner)
         {
-            /* 先快速探测服务器可达性，避免不可达时 SMB 长时间挂起拖慢进程 */
-            if (!QuickProbe(UpdateDir, 1500))
+            Task.Run(() =>
             {
-                return;
-            }
-            string versionFile = Path.Combine(UpdateDir, "version.txt");
-            if (!File.Exists(versionFile))
-            {
-                return;
-            }
+                try
+                {
+                    Check(true, owner);
+                }
+                catch (Exception ex)
+                {
+                    InvokeOnOwner(owner, () => MessageBox.Show(owner,
+                        "检查更新失败：" + ex.Message, "检查更新",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning));
+                }
+            });
+        }
 
-            var lines = File.ReadAllLines(versionFile);
-            if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0]))
+        private static void Check(bool manual, Form owner)
+        {
+            UpdateInfo update;
+            bool isLatest;
+            string error;
+            if (!TryReadUpdateInfo(out update, out isLatest, out error))
             {
-                return;
-            }
-            string remoteVersionText = lines[0].Trim();
-            string exeName = lines.Length > 1 && !string.IsNullOrWhiteSpace(lines[1])
-                ? lines[1].Trim()
-                : Path.GetFileName(Application.ExecutablePath);
-
-            if (CompareVersion(remoteVersionText, BaseParamter.softVersion) <= 0)
-            {
-                return; /* 已是最新 */
-            }
-
-            string remoteExe = Path.Combine(UpdateDir, exeName);
-            if (!File.Exists(remoteExe))
-            {
-                return;
-            }
-
-            string notes = ReadNotes(Path.Combine(UpdateDir, "更新说明.txt"));
-
-            if (!UpdateDialog.Show(remoteVersionText, notes))
-            {
+                if (manual)
+                {
+                    InvokeOnOwner(owner, () => MessageBox.Show(owner,
+                        "检查更新失败：" + error, "检查更新",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning));
+                }
                 return;
             }
 
-            string tempExe = Path.Combine(Path.GetTempPath(), Path.GetFileNameWithoutExtension(exeName) + "_new.exe");
+            if (isLatest)
+            {
+                if (manual)
+                {
+                    InvokeOnOwner(owner, () => MessageBox.Show(owner,
+                        "当前已是最新版本。", "检查更新",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information));
+                }
+                return;
+            }
+
+            if (!manual && IsIgnoredVersion(update.RemoteVersionText))
+            {
+                return;
+            }
+
+            Action showPrompt = () => HandleUpdatePrompt(update, manual);
+            if (manual)
+            {
+                InvokeOnOwner(owner, showPrompt);
+            }
+            else
+            {
+                showPrompt();
+            }
+        }
+
+        private static bool TryReadUpdateInfo(out UpdateInfo update, out bool isLatest, out string error)
+        {
+            update = null;
+            isLatest = false;
+            error = "无法访问更新服务器。";
             try
             {
-                File.Copy(remoteExe, tempExe, true);
+                /* 先快速探测服务器可达性，避免不可达时 SMB 长时间挂起拖慢进程 */
+                if (!QuickProbe(UpdateDir, 1500))
+                {
+                    return false;
+                }
+
+                string versionFile = Path.Combine(UpdateDir, "version.txt");
+                if (!File.Exists(versionFile))
+                {
+                    error = "更新服务器上不存在 version.txt。";
+                    return false;
+                }
+
+                var lines = File.ReadAllLines(versionFile);
+                if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0]))
+                {
+                    error = "更新服务器上的版本信息无效。";
+                    return false;
+                }
+
+                string remoteVersionText = lines[0].Trim();
+                string exeName = lines.Length > 1 && !string.IsNullOrWhiteSpace(lines[1])
+                    ? lines[1].Trim()
+                    : Path.GetFileName(Application.ExecutablePath);
+                if (CompareVersion(remoteVersionText, BaseParamter.softVersion) <= 0)
+                {
+                    isLatest = true;
+                    return true;
+                }
+
+                string remoteExe = Path.Combine(UpdateDir, exeName);
+                if (!File.Exists(remoteExe))
+                {
+                    error = "更新服务器上不存在新版程序文件：" + exeName;
+                    return false;
+                }
+
+                update = new UpdateInfo
+                {
+                    RemoteVersionText = remoteVersionText,
+                    ExeName = exeName,
+                    RemoteExe = remoteExe,
+                    Notes = ReadNotes(Path.Combine(UpdateDir, "更新说明.txt"))
+                };
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
+
+        private static void HandleUpdatePrompt(UpdateInfo update, bool manual)
+        {
+            UpdateDialogResult result = UpdateDialog.Show(update.RemoteVersionText, update.Notes, !manual);
+            if (result == UpdateDialogResult.Ignore)
+            {
+                IgnoreVersion(update.RemoteVersionText);
+                return;
+            }
+            if (result != UpdateDialogResult.Update)
+            {
+                return;
+            }
+
+            string tempExe = Path.Combine(Path.GetTempPath(),
+                Path.GetFileNameWithoutExtension(update.ExeName) + "_new.exe");
+            try
+            {
+                File.Copy(update.RemoteExe, tempExe, true);
             }
             catch (Exception ex)
             {
@@ -95,6 +197,56 @@ namespace PCAN_Client.util
 
             StartReplaceAndExit(tempExe, Application.ExecutablePath);
         }
+
+        private static bool IsIgnoredVersion(string remoteVersionText)
+        {
+            string ignored = Properties.Settings.Default.IgnoredUpdateVersion;
+            if (string.IsNullOrWhiteSpace(ignored)
+                || !Regex.IsMatch(remoteVersionText ?? "", @"\d+\.\d+\.\d+")
+                || !Regex.IsMatch(ignored, @"\d+\.\d+\.\d+"))
+            {
+                return false;
+            }
+            return CompareVersion(remoteVersionText, ignored) == 0;
+        }
+
+        private static void IgnoreVersion(string remoteVersionText)
+        {
+            try
+            {
+                Properties.Settings.Default.IgnoredUpdateVersion = remoteVersionText;
+                Properties.Settings.Default.Save();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[SelfUpdater] 保存忽略版本失败：" + ex.Message);
+            }
+        }
+
+        private static void InvokeOnOwner(Form owner, Action action)
+        {
+            if (owner == null || owner.IsDisposed || !owner.IsHandleCreated)
+            {
+                action();
+                return;
+            }
+            try
+            {
+                owner.BeginInvoke(action);
+            }
+            catch
+            {
+                action();
+            }
+        }
+        private sealed class UpdateInfo
+        {
+            public string RemoteVersionText;
+            public string ExeName;
+            public string RemoteExe;
+            public string Notes;
+        }
+
 
         /// <summary>快速探测 UNC 主机的 445 端口可达性；非 UNC 路径（本地/映射盘）直接返回 true</summary>
         private static bool QuickProbe(string uncPath, int timeoutMs)
@@ -208,10 +360,10 @@ namespace PCAN_Client.util
         }
     }
 
-    /// <summary>更新确认对话框：展示版本变化与更新说明，用户确认后才执行更新</summary>
+    /// <summary>更新确认对话框：自动检查支持忽略版本，手动检查只提供更新或不更新。</summary>
     internal class UpdateDialog : Form
     {
-        private UpdateDialog(string remoteVersionText, string notes)
+        private UpdateDialog(string remoteVersionText, string notes, bool allowIgnore)
         {
             this.Text = "检查更新";
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -219,7 +371,7 @@ namespace PCAN_Client.util
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.TopMost = true;
-            this.ClientSize = new Size(460, 320);
+            this.ClientSize = new Size(560, 320);
             this.Font = new Font("微软雅黑", 9F);
 
             var labelTitle = new Label
@@ -243,38 +395,50 @@ namespace PCAN_Client.util
                 BackColor = Color.White,
                 Text = string.IsNullOrWhiteSpace(notes) ? "（本次更新未提供说明）" : notes,
                 Location = new Point(15, 82),
-                Size = new Size(430, 185)
+                Size = new Size(530, 185)
             };
             var buttonUpdate = new Button
             {
                 Text = "立即更新",
                 DialogResult = DialogResult.OK,
                 Size = new Size(100, 30),
-                Location = new Point(235, 278)
+                Location = allowIgnore ? new Point(235, 278) : new Point(345, 278)
+            };
+            var buttonIgnore = new Button
+            {
+                Text = "忽略此版本",
+                DialogResult = DialogResult.Ignore,
+                Size = new Size(100, 30),
+                Location = new Point(345, 278),
+                Visible = allowIgnore
             };
             var buttonLater = new Button
             {
-                Text = "稍后再说",
+                Text = allowIgnore ? "稍后再说" : "不更新",
                 DialogResult = DialogResult.Cancel,
                 Size = new Size(100, 30),
-                Location = new Point(345, 278)
+                Location = new Point(455, 278)
             };
 
             this.Controls.Add(labelTitle);
             this.Controls.Add(labelVersion);
             this.Controls.Add(textNotes);
             this.Controls.Add(buttonUpdate);
+            this.Controls.Add(buttonIgnore);
             this.Controls.Add(buttonLater);
             this.AcceptButton = buttonUpdate;
             this.CancelButton = buttonLater;
         }
 
-        /// <summary>弹出更新确认框，返回 true 表示用户选择立即更新</summary>
-        public static bool Show(string remoteVersionText, string notes)
+        /// <summary>弹出更新确认框，返回用户选择。</summary>
+        public static UpdateDialogResult Show(string remoteVersionText, string notes, bool allowIgnore)
         {
-            using (var dialog = new UpdateDialog(remoteVersionText, notes))
+            using (var dialog = new UpdateDialog(remoteVersionText, notes, allowIgnore))
             {
-                return dialog.ShowDialog() == DialogResult.OK;
+                DialogResult result = dialog.ShowDialog();
+                if (result == DialogResult.OK) return UpdateDialogResult.Update;
+                if (result == DialogResult.Ignore) return UpdateDialogResult.Ignore;
+                return UpdateDialogResult.Later;
             }
         }
     }

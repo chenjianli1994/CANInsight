@@ -466,6 +466,17 @@ namespace PCAN_Client.Properties {
                 this["NoticeShownVersion"] = value;
             }
         }
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string IgnoredUpdateVersion {
+            get {
+                return ((string)(this["IgnoredUpdateVersion"]));
+            }
+            set {
+                this["IgnoredUpdateVersion"] = value;
+            }
+        }
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
