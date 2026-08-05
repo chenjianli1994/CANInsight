@@ -133,7 +133,7 @@ namespace PCAN_Client.DataLog
             }
             for (int i = 0; i < chCount; i++)
             {
-                byte logicCh = (byte)(i + 1);
+                byte logicCh = BaseParamter.GetLogicChannel(i);
                 string name = BaseParamter.BusChannels[i].Name;
                 string text = string.IsNullOrEmpty(name) ? $"CH{logicCh}" : $"CH{logicCh} {name}";
                 bool isChecked = RecordLogicChannels.Count == 0 || RecordLogicChannels.Contains(logicCh);

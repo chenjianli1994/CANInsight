@@ -317,8 +317,8 @@ namespace PCAN_Client
                 var m = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == hwChannel && (hwType == "" || x.HwType == hwType));
                 return (m ?? NotConnectItem).Key;
             }
-            // HwChannel=0（跟随）：预选同号硬件（逻辑序号=索引+1），找不到则不连接
-            byte sameNo = (byte)(logicIndex + 1);
+            // HwChannel=0（跟随）：预选同号硬件，找不到则不连接
+            byte sameNo = BaseParamter.GetLogicChannel(logicIndex);
             var same = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == sameNo);
             return (same ?? NotConnectItem).Key;
         }

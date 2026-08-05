@@ -695,7 +695,7 @@ namespace PCAN_Client.CAN_Data
         public bool updateFlag = true;
         public byte[] sendBuf = null;
         public MsgReceive msgReceive = null;
-        public byte TxChannel = 1; // 逻辑发送通道号（按通道配置路由到物理通道，默认1）
+        public byte TxChannel = 0; // 逻辑发送通道号（0=跟随报文所属通道）
     }
 
     public class Signal

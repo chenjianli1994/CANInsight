@@ -53,7 +53,7 @@ namespace PCAN_Client.CAN_API
             TPCANMsg tPCANMsg = new TPCANMsg();
 
             // 混合硬件：按逻辑通道配置的硬件类型路由；未指定类型时按现状兜底（PCAN优先）
-            string hwType = BaseParamter.GetEffectiveHwType(channel - 1);
+            string hwType = BaseParamter.GetEffectiveHwTypeByChannel(channel);
             bool usePcan = hwType == BaseParamter.HwTypePcan || (hwType == "" && Main.pcanOpenFlag);
             bool useCanoe = !usePcan && (hwType == BaseParamter.HwTypeCanoe || hwType == "");
 

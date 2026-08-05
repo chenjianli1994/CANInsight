@@ -2925,7 +2925,7 @@ namespace PCAN_Client
                             out _, out _, out _);
                         if (dbcMsg != null)
                         {
-                            multiChartFromScheduler.AddMessage(dbcMsg, signal.CycleTime, (byte)(signal.BusChannelIndex + 1));
+                            multiChartFromScheduler.AddMessage(dbcMsg, signal.CycleTime, BaseParamter.GetLogicChannel(signal.BusChannelIndex));
                             if (signal.SignalIndex >= 0 && signal.SignalIndex < dbcMsg.signals.Count)
                                 dbcMsg.signals[signal.SignalIndex].ChartShowFlag = true;
                         }
@@ -3409,11 +3409,13 @@ namespace PCAN_Client
         /// <summary>按信号名找曲线通道；多通道模式（同一份DBC配多路，信号名相同）额外匹配逻辑通道（-1=兼容未分配通道，通配）</summary>
         private int GetChannelIndex(string signalName, byte logicChannel = 0)
         {
+            int targetBusIndex = logicChannel > 0 ? BaseParamter.GetChannelIndex(logicChannel) : -1;
+            if (targetBusIndex < 0 && logicChannel > 0) targetBusIndex = logicChannel - 1;
             for (int index = 0; index < Channels.Count; index++)
             {
                 if (!Channels[index].DbcSignalName.Equals(signalName)) continue;
                 if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
-                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != logicChannel - 1)
+                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != targetBusIndex)
                     continue;
                 return index;
             }
@@ -3422,12 +3424,14 @@ namespace PCAN_Client
         /// <summary>按 CAN ID+信号索引找曲线通道；多通道模式下额外匹配信号所属逻辑通道（BusChannelIndex），同ID信号各归各的曲线（-1=兼容未分配通道，通配）</summary>
         private int GetChannelIndex(int messageId, int signalIndex, byte logicChannel = 0)
         {
+            int targetBusIndex = logicChannel > 0 ? BaseParamter.GetChannelIndex(logicChannel) : -1;
+            if (targetBusIndex < 0 && logicChannel > 0) targetBusIndex = logicChannel - 1;
             for (int index = 0; index < Channels.Count; index++)
             {
                 if (Channels[index].DbcSignalIndex != signalIndex || Channels[index].DbcMessageId != messageId)
                     continue;
                 if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
-                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != logicChannel - 1)
+                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != targetBusIndex)
                     continue; // 多通道同ID：只喂给信号所属通道的曲线
                 return index;
             }
@@ -4378,8 +4382,9 @@ namespace PCAN_Client
                 if (si >= 0 && si < msg.signals.Count)
                     msg.signals[si].ChartShowFlag = true;
                 // 周期调度注册的旧Message对象已作废：Remove再Add换新对象（复合键按通道区分，同ID多通道互不干扰）
-                multiChartFromScheduler.RemoveMessage(msg.messgeId, (byte)(ch.BusChannelIndex + 1));
-                multiChartFromScheduler.AddMessage(msg, ch.CycleTime > 0 ? (uint)(ch.CycleTime * 1000) : 0, (byte)(ch.BusChannelIndex + 1));
+                byte logicCh = BaseParamter.GetLogicChannel(ch.BusChannelIndex);
+                multiChartFromScheduler.RemoveMessage(msg.messgeId, logicCh);
+                multiChartFromScheduler.AddMessage(msg, ch.CycleTime > 0 ? (uint)(ch.CycleTime * 1000) : 0, logicCh);
             }
         }
 

@@ -675,9 +675,11 @@ namespace PCAN_Client.ScriptEngine
 
         private static bool IsChannelConnected(byte logicChannel)
         {
-            string hwType = BaseParamter.GetEffectiveHwType(logicChannel - 1);
-            if (hwType == BaseParamter.HwTypePcan) return Main.pcanOpenFlag;
-            if (hwType == BaseParamter.HwTypeCanoe) return Main.canoeOpenFlag;
+            if (BaseParamter.BusChannels.Count > 0)
+            {
+                int channelIndex = BaseParamter.GetChannelIndex(logicChannel);
+                return channelIndex >= 0 && Main.main != null && Main.main.GetChannelConnected(channelIndex);
+            }
             return Main.pcanOpenFlag || Main.canoeOpenFlag; // 未指定类型:任一硬件连接即可
         }
 

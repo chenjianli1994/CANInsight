@@ -419,6 +419,9 @@ namespace PCAN_Client
             uint newId = 0x100;
             var used = new HashSet<uint>(customMessagesList.Select(m => m.messgeId));
             while (used.Contains(newId)) newId++;
+            byte defaultChannel = BaseParamter.BusChannels.Count > 0
+                ? BaseParamter.GetLogicChannel(_selectedChannelIdx)
+                : (byte)1;
             var msg = new CAN_Data.Message
             {
                 messgeId = newId,
@@ -426,7 +429,7 @@ namespace PCAN_Client
                 sendBuf = new byte[8],
                 sendFalg = true,
                 enableFlag = false,
-                TxChannel = 1
+                TxChannel = defaultChannel
             };
             customMessagesList.Add(msg);
             RebuildMessagesTable();
@@ -741,8 +744,10 @@ namespace PCAN_Client
             {
                 for (int i = 0; i < BaseParamter.BusChannels.Count; i++)
                 {
-                    string name = BaseParamter.BusChannels[i].Name;
-                    _cmbChannel.Items.Add(string.IsNullOrEmpty(name) ? $"CH{i + 1}" : $"CH{i + 1} {name}");
+                    var ch = BaseParamter.BusChannels[i];
+                    byte channelId = BaseParamter.GetLogicChannel(i);
+                    string name = ch.Name;
+                    _cmbChannel.Items.Add(string.IsNullOrEmpty(name) ? $"CH{channelId}" : $"CH{channelId} {name}");
                 }
             }
             if (_selectedChannelIdx >= _cmbChannel.Items.Count)
@@ -759,7 +764,7 @@ namespace PCAN_Client
             {
                 return BaseParamter.dbcHelper.dbcFile.messages;
             }
-            var dbc = BaseParamter.GetDbcHelperByChannel((byte)(_selectedChannelIdx + 1));
+            var dbc = BaseParamter.GetDbcHelperByChannel(BaseParamter.GetLogicChannel(_selectedChannelIdx));
             if (dbc == null)
             {
                 return new List<CAN_Data.Message>();

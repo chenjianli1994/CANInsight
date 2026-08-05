@@ -289,8 +289,8 @@ namespace PCAN_Client.Canoe_API
 
             // 逻辑通道号 → 硬件通道 → 发送mask（越界或未配置时hw=channel）
             byte hw = channel;
-            int chIdx = channel - 1;
-            if (chIdx >= 0 && chIdx < BaseParamter.BusChannels.Count)
+            int chIdx = BaseParamter.GetChannelIndex(channel);
+            if (chIdx >= 0)
                 hw = BaseParamter.GetEffectiveHwChannel(chIdx);
             ulong txMask = (hw >= 1 && hw <= 64) ? (1UL << (hw - 1)) : appChannelMask;
 

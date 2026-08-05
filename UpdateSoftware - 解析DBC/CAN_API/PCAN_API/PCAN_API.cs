@@ -107,7 +107,7 @@ namespace PCAN_Client.PCAN_API
                     : PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
-                    _connectedChannels[(byte)(i + 1)] = handle; // key=逻辑通道号（接收轮询按此上报）
+                    _connectedChannels[BaseParamter.GetLogicChannel(i)] = handle; // key=配置通道号（接收轮询按此上报）
                 }
                 else
                 {
@@ -158,7 +158,7 @@ namespace PCAN_Client.PCAN_API
                 System.Diagnostics.Debug.WriteLine($"[PCAN] 通道{BaseParamter.BusChannels[logicIndex].Name}(USB_{hw})连接失败: {result}");
                 return false;
             }
-            _connectedChannels[(byte)(logicIndex + 1)] = handle; // key=逻辑通道号（接收轮询按此上报）
+            _connectedChannels[BaseParamter.GetLogicChannel(logicIndex)] = handle; // key=配置通道号（接收轮询按此上报）
             if (PCAN_ReceiveThreadAlive == 0)
             {
                 PCAN_ReceiveThreadAlive = 1;
@@ -170,7 +170,7 @@ namespace PCAN_Client.PCAN_API
         /// <summary>增量断开单个逻辑通道；全部断开后停止接收调度。返回剩余已连接通道数</summary>
         internal int DisconnectOne(int logicIndex)
         {
-            byte key = (byte)(logicIndex + 1);
+            byte key = BaseParamter.GetLogicChannel(logicIndex);
             if (_connectedChannels.TryGetValue(key, out ushort handle))
             {
                 _connectedChannels.Remove(key);

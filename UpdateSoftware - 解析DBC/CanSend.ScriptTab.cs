@@ -1389,7 +1389,8 @@ namespace PCAN_Client
                 foreach (var m in ch.DbcHelper.dbcFile.messages)
                 {
                     if (m.sendFalg) continue; // 已在发送列表分组
-                    items.Add(new MsgSourceItem { Display = $"[CH{i + 1} DBC] {m.messageName} 0x{m.messgeId:X3}", Msg = m, Channel = (byte)(i + 1) });
+                    byte logicCh = BaseParamter.GetLogicChannel(i);
+                    items.Add(new MsgSourceItem { Display = $"[CH{logicCh} DBC] {m.messageName} 0x{m.messgeId:X3}", Msg = m, Channel = logicCh });
                 }
             }
             return items;
@@ -2184,7 +2185,7 @@ namespace PCAN_Client
             {
                 var ch = BaseParamter.BusChannels[i];
                 if (!ch.IsConfigured) continue;
-                byte logicCh = (byte)(i + 1);
+                byte logicCh = BaseParamter.GetLogicChannel(i);
                 foreach (var m in ch.DbcHelper.dbcFile.messages)
                 {
                     items.Add(new ScriptSelectionItem
