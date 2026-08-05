@@ -152,6 +152,7 @@ namespace PCAN_Client
             // 
             this.dgvSignals.AllowUserToAddRows = false;
             this.dgvSignals.AllowUserToDeleteRows = false;
+            this.dgvSignals.AllowUserToResizeRows = false;
             this.dgvSignals.AutoSizeColumnsMode = System.Windows.Forms.DataGridViewAutoSizeColumnsMode.Fill;
             this.dgvSignals.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.AutoSize;
             this.dgvSignals.Columns.AddRange(new System.Windows.Forms.DataGridViewColumn[] {
@@ -179,11 +180,13 @@ namespace PCAN_Client
             // 
             this.colSignalName.HeaderText = "信号名";
             this.colSignalName.Name = "colSignalName";
+            this.colSignalName.ReadOnly = true;
             // 
             // colSignalComment
             // 
             this.colSignalComment.HeaderText = "中文注释";
             this.colSignalComment.Name = "colSignalComment";
+            this.colSignalComment.ReadOnly = true;
             // 
             // colMessageId
             // 
@@ -196,18 +199,21 @@ namespace PCAN_Client
             // 
             this.colMsgIndex.HeaderText = "MsgIndex";
             this.colMsgIndex.Name = "colMsgIndex";
+            this.colMsgIndex.ReadOnly = true;
             this.colMsgIndex.Width = 80;
             // 
             // colSignalIndex
             // 
             this.colSignalIndex.HeaderText = "SignalIndex";
             this.colSignalIndex.Name = "colSignalIndex";
+            this.colSignalIndex.ReadOnly = true;
             this.colSignalIndex.Width = 80;
             // 
             // colSelect
             // 
             this.colSelect.HeaderText = "选择";
             this.colSelect.Name = "colSelect";
+            this.colSelect.ReadOnly = false;
             this.colSelect.Width = 50;
             // 
             // panelSelected
