@@ -406,9 +406,12 @@ namespace PCAN_Client
             Region prevClip = g.Clip;
             g.SetClip(new Rectangle(_graySeparatorAbsX, rect.Top - 10, rect.Left - _graySeparatorAbsX + 10, rect.Height + 20));
             Font scaledFont = GetScaledFont(_axisFont);
+            float minLabelGap = scaledFont.Height + 6; // 相邻标签最小垂直间距，避免重叠
             if (channel.EnumDefinitions != null && channel.EnumDefinitions.Count > 0)
             {
                 // 枚举类型：在每个枚举值位置显示描述
+                // 面板过矮时跳过与已绘制标签重叠的枚举值，避免标签堆叠
+                float lastEnumY = float.NaN;
                 foreach (var kvp in channel.EnumDefinitions)
                 {
                     double enumValue = kvp.Key;
@@ -416,6 +419,9 @@ namespace PCAN_Client
                     if (enumValue < yMin || enumValue > yMax) continue;
 
                     int y = ValueToScreenY(enumValue, yMin, yMax, rect);
+                    // 与上一个已绘制标签过近则跳过（枚举值密集时只保留间隔足够的）
+                    if (!float.IsNaN(lastEnumY) && Math.Abs(y - lastEnumY) < minLabelGap) continue;
+
                     string label = kvp.Value;
                     SizeF labelSize = g.MeasureString(label, scaledFont);
 
@@ -425,16 +431,27 @@ namespace PCAN_Client
 
                     g.DrawLine(_axisPen, rect.Left - 4, y, rect.Left, y);
                     g.DrawString(label, scaledFont, _textBrush, rect.Left - labelSize.Width - 6, labelY);
+                    lastEnumY = y;
                 }
             }
             else
             {
-                int yLabelCount = 3;
+                // 根据面板高度自适应刻度标签数量：面板越矮标签越少，避免信号多时标签重叠
+                // 阈值按标签字体高度+间距估算：常规4个 / 较矮3个 / 很矮2个 / 极矮1个
+                int yLabelCount;
+                if (rect.Height >= 90) yLabelCount = 3;
+                else if (rect.Height >= 55) yLabelCount = 2;
+                else if (rect.Height >= 30) yLabelCount = 1;
+                else yLabelCount = 0;
+
                 for (int i = 0; i <= yLabelCount; i++)
                 {
-                    double yValue = yMin + (yMax - yMin) * i / yLabelCount;
+                    // yLabelCount==0 时只画中间一个标签（面板极矮）
+                    double yValue = yLabelCount == 0
+                        ? (yMin + yMax) / 2
+                        : yMin + (yMax - yMin) * i / yLabelCount;
                     int y = ValueToScreenY(yValue, yMin, yMax, rect);
-                    double step = (yMax - yMin) / yLabelCount;
+                    double step = yLabelCount > 0 ? (yMax - yMin) / yLabelCount : (yMax - yMin);
                     int decimals = step >= 1 ? 0 : (step >= 0.1 ? 1 : (step >= 0.01 ? 2 : 3));
                     string label = Math.Round(yValue, decimals).ToString("F" + decimals);
                     SizeF labelSize = g.MeasureString(label, scaledFont);
@@ -446,7 +463,7 @@ namespace PCAN_Client
 
                     // Y轴刻度线
                     g.DrawLine(_axisPen, rect.Left - 4, y, rect.Left, y);
-                    g.DrawString(label, _axisFont, _textBrush, rect.Left - labelSize.Width - 6, labelY);
+                    g.DrawString(label, scaledFont, _textBrush, rect.Left - labelSize.Width - 6, labelY);
                 }
             }
             g.Clip = prevClip;
