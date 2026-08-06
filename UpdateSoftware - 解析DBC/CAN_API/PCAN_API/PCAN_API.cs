@@ -402,6 +402,8 @@ namespace PCAN_Client.PCAN_API
 
         public class MultiMessageCANScheduler
         {
+            /// <summary>单次1ms回调最多处理的接收帧数（多通道/单通道共用；剩余帧留待下个回调，硬件FIFO缓冲）</summary>
+            private const int MAX_FRAMES_PER_TICK = 200;
             bool callbackFlag;
             TPCANTimestamp timesamp = new TPCANTimestamp();
             TPCANMsgFD msgFD = new TPCANMsgFD();
@@ -446,12 +448,16 @@ namespace PCAN_Client.PCAN_API
                     var api = Main.main.pCAN_API;
                     if (api._connectedChannels.Count > 0)
                     {
-                        // 多通道模式：轮询所有已连接句柄，按各自逻辑通道号上报
-                        while (0 != api.PCAN_ReceiveThreadAlive)
+                        // 多通道模式：轮询所有已连接句柄，按各自逻辑通道号上报。
+                        // 限帧：单次1ms回调最多处理MAX_FRAMES_PER_TICK帧，剩余留待下个回调（硬件队列缓冲，总吞吐不变），
+                        // 防止高负载时排空超时阻塞同回调线程上的其他动作（周期发送/CANoe接收/图表仿真）
+                        int framesThisTick = 0;
+                        while (0 != api.PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
                         {
                             bool anyData = false;
                             foreach (var kv in api._connectedChannels)
                             {
+                                if (framesThisTick >= MAX_FRAMES_PER_TICK) break;
                                 if (BaseParamter.GetChannelCanFdByLogic(kv.Key)) // kv.Key=逻辑通道号，按该通道模式选择读取API
                                 {
                                     result = PCANBasic.ReadFD(kv.Value, out msgFD, out TimestampBuffer);
@@ -462,6 +468,7 @@ namespace PCAN_Client.PCAN_API
                                 }
                                 if (TPCANStatus.PCAN_ERROR_OK != result) continue;
                                 anyData = true;
+                                framesThisTick++;
                                 if (BaseParamter.GetChannelCanFdByLogic(kv.Key))
                                 {
                                     time_us = (long)TimestampBuffer;
@@ -484,8 +491,9 @@ namespace PCAN_Client.PCAN_API
                     }
                     else
                     {
-                        // 单通道兼容路径
-                        while (0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive)
+                        // 单通道兼容路径（同样限帧）
+                        int framesThisTick = 0;
+                        while (0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
                         {
                             if (Main.main.pCAN_API.CanFDFlag)
                             {
@@ -497,6 +505,7 @@ namespace PCAN_Client.PCAN_API
                             }
                             if (TPCANStatus.PCAN_ERROR_OK == result)
                             {
+                                framesThisTick++;
                                 if (Main.main.pCAN_API.CanFDFlag)
                                 {
                                     time_us = (long)TimestampBuffer;
