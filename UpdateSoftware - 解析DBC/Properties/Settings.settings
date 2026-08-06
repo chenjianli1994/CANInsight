@@ -32,9 +32,6 @@
     <Setting Name="ProjectSelectIndex" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">0</Value>
     </Setting>
-    <Setting Name="CANType" Type="System.String" Scope="User">
-      <Value Profile="(Default)">CAN</Value>
-    </Setting>
     <Setting Name="Delayus" Type="System.String" Scope="User">
       <Value Profile="(Default)">50</Value>
     </Setting>
