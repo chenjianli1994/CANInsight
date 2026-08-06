@@ -2743,6 +2743,47 @@ namespace PCAN_Client
             RefreshHwConnectedStatusLocal();
         }
 
+        /// <summary>按当前配置重连单个已连接通道（保存配置自动重连用）：与 ConnectSingleChannel 的区别是
+        /// 不触发 ClearDataOnly（重连不应清掉已收数据）；PCAN走ConnectOne（内部Uninitialize+Initialize原子重开），
+        /// CANoe先Deactivate再Activate（已连接通道Activate直接返回true不重开）</summary>
+        internal void ReconnectSingleChannel(int logicIndex)
+        {
+            if (logicIndex < 0 || logicIndex >= BaseParamter.BusChannels.Count) return;
+            string t = BaseParamter.GetEffectiveHwType(logicIndex);
+            if (t == BaseParamter.HwTypePcan && pCAN_API != null)
+            {
+                if (pCAN_API.ConnectOne(logicIndex))
+                {
+                    pcanOpenFlag = true;
+                    button1.Text = "已连接";
+                }
+                else
+                {
+                    MessageBox.Show($"通道 [{BaseParamter.BusChannels[logicIndex].Name}] 重连失败（请检查硬件通道绑定与设备状态）");
+                }
+            }
+            else if (t == BaseParamter.HwTypeCanoe && canoe_API != null)
+            {
+                byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
+                canoe_API.DeactivateChannel(hw);
+                if (canoe_API.OpenedChannelMask == 0)
+                {
+                    canoeOpenFlag = false;
+                    button5.Text = "连接";
+                }
+                if (canoe_API.ActivateChannel(hw))
+                {
+                    canoeOpenFlag = true;
+                    button5.Text = "已连接";
+                }
+                else
+                {
+                    MessageBox.Show($"通道 [{BaseParamter.BusChannels[logicIndex].Name}] 重连失败（请检查硬件通道绑定与设备状态）");
+                }
+            }
+            RefreshHwConnectedStatusLocal();
+        }
+
         /// <summary>断开单个逻辑通道（不影响其他已连接通道）</summary>
         internal void DisconnectSingleChannel(int logicIndex)
         {

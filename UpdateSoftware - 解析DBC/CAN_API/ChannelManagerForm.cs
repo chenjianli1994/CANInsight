@@ -176,7 +176,7 @@ namespace PCAN_Client
             this.Controls.Add(_btnConnectAll);
 
             _btnSave = new Button { Text = "保存配置", Location = new Point(784, 516), Size = new Size(100, 36) };
-            _btnSave.Click += (s, e) => SaveConfig(true);
+            _btnSave.Click += (s, e) => SaveConfig(true, true); // 手动保存：已连接通道配置变化时按新参数自动重连
             this.Controls.Add(_btnSave);
             var btnClose = new Button { Text = "关闭", Location = new Point(892, 516), Size = new Size(106, 36), DialogResult = DialogResult.Cancel };
             this.Controls.Add(btnClose);
@@ -575,10 +575,12 @@ namespace PCAN_Client
 
         // === 保存 ===
 
-        /// <summary>校验并保存：写回全局通道列表 → 持久化JSON → 刷新聚合DBC视图；失败弹提示返回false</summary>
-        private bool SaveConfig(bool showSuccess)
+        /// <summary>校验并保存：写回全局通道列表 → 持久化JSON → 刷新聚合DBC视图；失败弹提示返回false。
+        /// autoReconnect=true（手动"保存配置"）时，配置发生变化且已连接的通道按新参数自动重连（其他通道零中断、不清空数据）</summary>
+        private bool SaveConfig(bool showSuccess, bool autoReconnect = false)
         {
             _dgv.EndEdit();
+            var oldChannels = BaseParamter.BusChannels; // 写回前捕获旧配置，供自动重连对比
             var channels = new List<CanBusChannel>();
             var hwUsed = new Dictionary<string, string>(); // 映射一一对应检测
             var channelNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -660,9 +662,28 @@ namespace PCAN_Client
             for (int i = 0; i < _dgv.Rows.Count && i < channels.Count; i++)
                 _dgv.Rows[i].Cells[ColDbcStatus].Value = DbcStatusText(channels[i].DbcFilePath, channels[i].IsConfigured);
             RefreshPreview();
+            if (autoReconnect) ReconnectChangedChannels(oldChannels);
             if (showSuccess)
                 MessageBox.Show("通道配置已保存", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return true;
+        }
+
+        /// <summary>保存后自动重连：对比新旧配置，仅重连"配置（模式/波特率/硬件绑定）发生变化且当前已连接"的通道，
+        /// 走 Main.ReconnectSingleChannel（按新配置重开硬件，不清空已收数据，不打断其他通道）</summary>
+        private void ReconnectChangedChannels(List<CanBusChannel> oldChannels)
+        {
+            if (_main == null) return;
+            for (int i = 0; i < _dgv.Rows.Count && i < oldChannels.Count && i < BaseParamter.BusChannels.Count; i++)
+            {
+                var old = oldChannels[i];
+                var cur = BaseParamter.BusChannels[i];
+                bool changed = old.CanFd != cur.CanFd
+                    || (old.Baudrate ?? "") != (cur.Baudrate ?? "")
+                    || old.HwChannel != cur.HwChannel
+                    || (old.HwType ?? "") != (cur.HwType ?? "");
+                if (!changed || !_main.GetChannelConnected(i)) continue;
+                _main.ReconnectSingleChannel(i);
+            }
         }
 
         // === 连接操作 ===
