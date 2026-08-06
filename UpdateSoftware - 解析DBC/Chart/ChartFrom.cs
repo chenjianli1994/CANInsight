@@ -1,4 +1,5 @@
 using PCAN_Client.CAN_Data;
+using PCAN_Client.DataLog;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
 using System.Collections.Generic;
@@ -154,6 +155,12 @@ namespace PCAN_Client
         // 实时数据BLF保存相关
         private static List<CanRawMessage> _realtimeRawMessages = new List<CanRawMessage>();
         private static readonly object _realtimeRawLock = new object();
+        /// <summary>实时原始报文内存上限（帧）：约 500000×64B≈32MB，超限时批量淘汰最老帧</summary>
+        private const int RealtimeRawMaxFrames = 500000;
+        /// <summary>超限时一次裁剪到 Max-Batch 的余量，避免每帧 O(n) 头部移除</summary>
+        private const int RealtimeRawTrimBatch = 10000;
+        /// <summary>曾触发过淘汰（导出时提示数据窗口不完整）</summary>
+        private static bool _realtimeRawTrimmed = false;
         private string _currentSignalGroupPath = "";        // 当前信号组文件路径（用于覆盖保存）
         private Form _loadingPopup = null;                  // 加载报文时的弹窗
 
@@ -188,7 +195,9 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 记录实时接收的原始CAN报文（用于保存BLF），channel为逻辑通道号（写入BLF mChannel）
+        /// 记录实时接收的原始CAN报文（用于ChartFrom"保存BLF"导出），channel为逻辑通道号（写入BLF mChannel）。
+        /// 调用方已保证：BLF录制开启且该通道勾选录制的帧不调用本方法（数据已落盘）；本方法仅累积需要内存副本的帧。
+        /// 内存累积有上限保护（超限淘汰最老帧，导出时提示窗口）
         /// </summary>
         internal static void RecordRealtimeRawMessage(uint canId, byte[] data, byte channel = 1)
         {
@@ -199,6 +208,13 @@ namespace PCAN_Client
             Array.Copy(data, dataCopy, data.Length);
             lock (_realtimeRawLock)
             {
+                // 上限保护：超限时批量裁剪最老帧（裁剪到 Max-Batch 留余量，均摊O(1)），并标记供导出提示
+                if (_realtimeRawMessages.Count >= RealtimeRawMaxFrames)
+                {
+                    int removeCount = _realtimeRawMessages.Count - (RealtimeRawMaxFrames - RealtimeRawTrimBatch);
+                    if (removeCount > 0) _realtimeRawMessages.RemoveRange(0, removeCount);
+                    _realtimeRawTrimmed = true;
+                }
                 _realtimeRawMessages.Add(new CanRawMessage
                 {
                     CanId = canId,
@@ -1504,6 +1520,7 @@ namespace PCAN_Client
             {
                 _realtimeRawMessages.Clear();
                 _realtimeRawMessages.TrimExcess();
+                _realtimeRawTrimmed = false;
             }
             _rawMessages = null;
             _streamingMode = false;
@@ -1720,7 +1737,6 @@ namespace PCAN_Client
                     {
                         try
                         {
-                            var parser = new CAN_Data.CanSignalParser();
                             double maxTime = 0;
                             long msgCount = 0;
                             long lastUpdateMsgCount = 0;
@@ -1751,7 +1767,7 @@ namespace PCAN_Client
 
                                     if (msgDict != null && msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage))
                                     {
-                                        var allValues = parser.ParseSignals(rawMsg.Data, dbcMessage.signals);
+                                        var allValues = CAN_Data.CanSignalParser.ParseSignals(rawMsg.Data, dbcMessage.signals);
                                         foreach (var entry in signalList)
                                         {
                                             if (allValues.TryGetValue(entry.signal.signalName, out double val))
@@ -1930,6 +1946,7 @@ namespace PCAN_Client
                 lock (_realtimeRawLock)
                 {
                     _realtimeRawMessages.Clear();
+                    _realtimeRawTrimmed = false;
                 }
 
                 // 设置模式指示器
@@ -2015,7 +2032,6 @@ namespace PCAN_Client
             _currentTime = virtualTime;
 
             // 一次性处理所有时间戳 <= virtualTime 的报文
-            var parser = new CAN_Data.CanSignalParser();
 
             bool allDone = true;
             int messagesThisTick = 0;       // 本Tick处理的消息数限制
@@ -2133,7 +2149,7 @@ namespace PCAN_Client
 
                     if (msgDict != null && msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage))
                     {
-                        var allValues = parser.ParseSignals(rawMsg.Data, dbcMessage.signals);
+                        var allValues = CAN_Data.CanSignalParser.ParseSignals(rawMsg.Data, dbcMessage.signals);
                         foreach (var entry in signalList)
                         {
                             if (allValues.TryGetValue(entry.signal.signalName, out double val))
@@ -2365,12 +2381,11 @@ namespace PCAN_Client
                 long frames = 0;
                 try
                 {
-                    var parser = new CAN_Data.CanSignalParser();
                     IEnumerable<CanRawMessage> source = memSource ?? EnumerateRawMessages();
                     foreach (var rawMsg in source)
                     {
                         if (_backfillCancel) break;
-                        ProcessBackfillFrame(rawMsg, batch, parser, busChannelsSnapshot);
+                        ProcessBackfillFrame(rawMsg, batch, busChannelsSnapshot);
                         frames++;
                         if (frames % 50000 == 0)
                         {
@@ -2444,7 +2459,7 @@ namespace PCAN_Client
 
         /// <summary>单帧补采处理(后台线程):按CAN ID+总线匹配目标通道,解码存点</summary>
         private static void ProcessBackfillFrame(CanRawMessage rawMsg, List<ChannelData> batch,
-            CAN_Data.CanSignalParser parser, CanBusChannel[] busChannels)
+            CanBusChannel[] busChannels)
         {
             // 总线索引(基于快照):无匹配通道直接跳过
             if (busChannels.Length == 0) return;
@@ -2470,7 +2485,7 @@ namespace PCAN_Client
             Dictionary<uint, CAN_Data.Message> msgDict = busChannels[busIdx].DbcHelper?.dbcFile?.messageDict;
             if (msgDict == null || !msgDict.TryGetValue(rawMsg.CanId, out var dbcMessage)) return;
 
-            var allValues = parser.ParseSignals(rawMsg.Data, dbcMessage.signals);
+            var allValues = CAN_Data.CanSignalParser.ParseSignals(rawMsg.Data, dbcMessage.signals);
             foreach (var ch in hits)
             {
                 if (allValues.TryGetValue(ch.DbcSignalName, out double val))
@@ -2526,60 +2541,79 @@ namespace PCAN_Client
             _txtStartTime.Text = startTime.ToString("F1");
             _txtEndTime.Text = endTime.ToString("F1");
 
-            // 3. 过滤时间范围内的原始报文
-            List<CanRawMessage> filteredMessages;
-            if (_streamingMode)
-            {
-                // 流式模式：从文件流读取并过滤
-                filteredMessages = new List<CanRawMessage>();
-                foreach (var msg in LogFileLoader.EnumerateCanMessages(_streamingFilePath, _selectedChannels))
-                {
-                    if (msg.TimeStampSeconds >= startTime && msg.TimeStampSeconds <= endTime)
-                    {
-                        filteredMessages.Add(new CanRawMessage
-                        {
-                            CanId = msg.CanId,
-                            Data = msg.Data,
-                            TimeStampSeconds = (float)msg.TimeStampSeconds,
-                            Channel = msg.Channel
-                        });
-                    }
-                }
-            }
-            else
-            {
-                filteredMessages = _rawMessages
-                    .Where(m => m.TimeStampSeconds >= startTime && m.TimeStampSeconds <= endTime && IsChannelMatched(m))
-                    .ToList();
-            }
+            // 3. 过滤+数据量确认+导入整体后台执行：流式模式下过滤需遍历整个文件，
+            // 在UI线程同步执行会导致大文件界面冻结（导入步骤原已在Task内）。
+            // Task前快照过滤所需字段（UI线程读，防止过滤期间用户清除/加载新文件/关闭窗口造成竞态）
+            bool snapshotStreamingMode = _streamingMode;
+            string snapshotStreamingFilePath = _streamingFilePath;
+            List<CanRawMessage> snapshotRawMessages = _rawMessages;
+            var snapshotSelectedChannels = _selectedChannels;
 
-            if (filteredMessages.Count == 0)
-            {
-                MessageBox.Show("所选时间范围内没有数据", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            // 数据量超过 100000 条时弹窗确认
-            if (filteredMessages.Count > 100000)
-            {
-                var result = MessageBox.Show(
-                    $"所选区域数据量 {filteredMessages.Count} 条，大于 20000 条，是否显示？",
-                    "数据量确认",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-                if (result != DialogResult.Yes)
-                    return;
-            }
-
-            // 5. 清空 Main.cs 并发送数据到主界面显示
-            Main.main.ClearForPlayback();
             _btnShowData.Enabled = false;
-            _statusLabel.Text = $"状态: 正在加载 {filteredMessages.Count} 条数据到主界面...";
-
+            _statusLabel.Text = "状态: 正在过滤时间范围数据...";
             Task.Run(() =>
             {
                 try
                 {
+                    // 过滤时间范围内的原始报文
+                    List<CanRawMessage> filteredMessages;
+                    if (snapshotStreamingMode)
+                    {
+                        // 流式模式：从文件流读取并过滤（快照路径，不随UI变化）
+                        filteredMessages = new List<CanRawMessage>();
+                        foreach (var msg in LogFileLoader.EnumerateCanMessages(snapshotStreamingFilePath, snapshotSelectedChannels))
+                        {
+                            if (msg.TimeStampSeconds >= startTime && msg.TimeStampSeconds <= endTime)
+                            {
+                                filteredMessages.Add(new CanRawMessage
+                                {
+                                    CanId = msg.CanId,
+                                    Data = msg.Data,
+                                    TimeStampSeconds = (float)msg.TimeStampSeconds,
+                                    Channel = msg.Channel
+                                });
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 快照列表引用：_rawMessages只整体替换从不原地修改，引用安全
+                        var src = snapshotRawMessages;
+                        filteredMessages = src == null
+                            ? new List<CanRawMessage>()
+                            : src.Where(m => m.TimeStampSeconds >= startTime && m.TimeStampSeconds <= endTime && IsChannelMatched(m))
+                                 .ToList();
+                    }
+
+                    if (filteredMessages.Count == 0)
+                    {
+                        Invoke(new Action(() => MessageBox.Show("所选时间范围内没有数据", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information)));
+                        return;
+                    }
+
+                    // 数据量超过 100000 条时弹窗确认（Invoke回UI线程等待用户决策）
+                    if (filteredMessages.Count > 100000)
+                    {
+                        bool confirmed = false;
+                        Invoke(new Action(() =>
+                        {
+                            var r = MessageBox.Show(
+                                $"所选区域数据量 {filteredMessages.Count} 条，大于 20000 条，是否显示？",
+                                "数据量确认",
+                                MessageBoxButtons.YesNo,
+                                MessageBoxIcon.Warning);
+                            confirmed = r == DialogResult.Yes;
+                        }));
+                        if (!confirmed) return;
+                    }
+
+                    // 5. 清空 Main.cs 并发送数据到主界面显示
+                    Invoke(new Action(() =>
+                    {
+                        Main.main.ClearForPlayback();
+                        _statusLabel.Text = $"状态: 正在加载 {filteredMessages.Count} 条数据到主界面...";
+                    }));
+
                     Main.main.BatchImportRawMessages(filteredMessages);
                     // 设置为暂停模式，确保显示所有帧（而非仅最后20帧）
                     Main.main._pauseUpdate = true;
@@ -2669,6 +2703,7 @@ namespace PCAN_Client
             lock (_realtimeRawLock)
             {
                 _realtimeRawMessages.Clear();
+                _realtimeRawTrimmed = false;
             }
             startTime = DateTime.Now;
             _chartControl.SetChannels(Channels);
@@ -3936,14 +3971,30 @@ namespace PCAN_Client
             else
             {
                 // 实时模式：保存实时捕获的数据
+                bool trimmed = false;
                 lock (_realtimeRawLock)
                 {
                     if (_realtimeRawMessages.Count == 0)
                     {
-                        MessageBox.Show("没有可保存的实时数据！请先开始接收实时数据。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        // 区分"未接收数据"与"数据已实时录制到文件"（录制开启时内存缓存为空属正常）
+                        if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int)
+                        {
+                            MessageBox.Show($"实时数据已录制至文件，无需内存缓存导出。\n录制文件：{Logging.NowBLFFileAddr_str}",
+                                "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else
+                        {
+                            MessageBox.Show("没有可保存的实时数据！请先开始接收实时数据。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        }
                         return;
                     }
                     messagesToSave = new List<CanRawMessage>(_realtimeRawMessages);
+                    trimmed = _realtimeRawTrimmed;
+                }
+                if (trimmed)
+                {
+                    MessageBox.Show($"实时缓存曾超过上限，仅保留最近 {RealtimeRawMaxFrames} 帧（更早的数据未在内存中，如需要完整数据请开启BLF录制）",
+                        "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
 

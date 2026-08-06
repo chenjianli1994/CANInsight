@@ -1,4 +1,4 @@
-﻿using BrightIdeasSoftware;
+using BrightIdeasSoftware;
 using CSScriptLibrary;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -1106,7 +1106,7 @@ namespace PCAN_Client
             if (msg?.sendBuf == null || msg.signals == null || msg.signals.Count == 0) return;
             try
             {
-                var results = new CanSignalParser().ParseSignals(msg.sendBuf, msg.signals);
+                var results = CanSignalParser.ParseSignals(msg.sendBuf, msg.signals);
                 foreach (var sig in msg.signals)
                 {
                     if (results.TryGetValue(sig.signalName, out double v))

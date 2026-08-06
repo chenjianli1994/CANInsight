@@ -123,8 +123,12 @@ namespace PCAN_Client.CAN_API
             byte blfCh = BaseParamter.GetBlfIdByLogicChannel(channel);
             // 录制通道过滤（LoggingSet中勾选；未勾选通道的报文不落盘，UI/解析不受影响）
             bool recordCh = LoggingSet.IsRecordChannel(channel);
-            // 记录实时CAN原始报文（用于ChartFrom保存BLF）
-            ChartFrom.RecordRealtimeRawMessage(ID, data, blfCh);
+            // 记录实时CAN原始报文（用于ChartFrom保存BLF）；
+            // 已落盘的帧（BLF录制开启且该通道勾选录制）跳过内存副本；其余帧（未录制/ASC/未勾选通道）必须入内存，否则手动导出永久缺失
+            if (!(Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int && recordCh))
+            {
+                ChartFrom.RecordRealtimeRawMessage(ID, data, blfCh);
+            }
             if (Logging.SaveFlag && 1 == LoggingSet.SaveFileType_int && recordCh)
             {
                 Log.AddCanMessageToWrite(ID, data, timestamp2, blfCh);

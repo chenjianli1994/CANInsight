@@ -128,8 +128,8 @@ namespace PCAN_Client.CAN_Data
                 if (routedDbc.messageDict.TryGetValue(ID, out Message message) &&
                     len >= Math.Min(message.messageSize, 8u))
                 {
-                    var parser = new CanSignalParser();
-                    var result = parser.ParseSignals(data, message.signals);
+                    // 静态解析：CanSignalParser无实例状态，避免每帧new实例
+                    var result = CanSignalParser.ParseSignals(data, message.signals);
 
                     message.receiveTimeMs = ((double)(us - message.receiveTimeUs) / 1000).ToString("F3") + "ms";
                     message.receiveTimeUs = us;
@@ -138,14 +138,19 @@ namespace PCAN_Client.CAN_Data
                     index2 = 0;
                     foreach (var item in result)
                     {
-                        // 根据信号位宽计算十六进制显示的位数
-                        int hexDigits = (int)((message.signals[index2].signalSize + 3) / 4);
-                        if (hexDigits < 2) hexDigits = 2;
-                        rawValue = message.signals[index2].rawValue.ToString("X" + hexDigits);
-                        rawValue = FormatSignalResult(rawValue, hexDigits + 6);
-                        if (message.signals[index2].result != item.Value || !message.signals[index2].signalDisplayStr.Contains(rawValue) || message.signals[index2].signalDisplayStr.Equals(""))
+                        // 值变化或raw变化或显示串为空时才重新格式化（稳态零字符串分配）
+                        // raw比较覆盖"物理值位级相等但raw变化"的大数信号场景（hex前缀需跟随新raw）
+                        if (message.signals[index2].result != item.Value ||
+                            message.signals[index2].rawValue != message.signals[index2].lastDisplayedRaw ||
+                            string.IsNullOrEmpty(message.signals[index2].signalDisplayStr))
                         {
+                            // 根据信号位宽计算十六进制显示的位数
+                            int hexDigits = (int)((message.signals[index2].signalSize + 3) / 4);
+                            if (hexDigits < 2) hexDigits = 2;
+                            rawValue = message.signals[index2].rawValue.ToString("X" + hexDigits);
+                            rawValue = FormatSignalResult(rawValue, hexDigits + 6);
                             message.signals[index2].result = item.Value;
+                            message.signals[index2].lastDisplayedRaw = message.signals[index2].rawValue;
                             try
                             {
                                 int enumKey = (int)item.Value;
@@ -711,6 +716,8 @@ namespace PCAN_Client.CAN_Data
         public double minimum = 0;
         public double maximum = 0;
         public long rawValue = 0;
+        /// <summary>上次格式化显示串时的raw值（门控用：物理值位级相等但raw变化时需刷新hex前缀）；Long.MinValue=尚未显示</summary>
+        public long lastDisplayedRaw = long.MinValue;
         public string[] receivers;
         public double result = 0;
         public string unitStr = "";
@@ -730,7 +737,7 @@ namespace PCAN_Client.CAN_Data
 
     public class CanSignalParser
     {
-        private ulong ExtractIntelValue(byte[] data, int startBit, int size)
+        private static ulong ExtractIntelValue(byte[] data, int startBit, int size)
         {
             ulong result = 0;
 
@@ -749,7 +756,7 @@ namespace PCAN_Client.CAN_Data
             return result;
         }
 
-        private ulong ExtractMotorolaValue(byte[] data, int startBit, int size)
+        private static ulong ExtractMotorolaValue(byte[] data, int startBit, int size)
         {
             ulong result = 0;
 
@@ -790,7 +797,7 @@ namespace PCAN_Client.CAN_Data
 
             return result;
         }
-        private ulong ExtractRawValue(byte[] data, Signal signal)
+        private static ulong ExtractRawValue(byte[] data, Signal signal)
         {
             int startBit = (int)signal.startBit;
             int size = (int)signal.signalSize;
@@ -805,7 +812,7 @@ namespace PCAN_Client.CAN_Data
             }
         }
         
-        public Dictionary<string, double> ParseSignals(byte[] canData, List<Signal> signals)
+        public static Dictionary<string, double> ParseSignals(byte[] canData, List<Signal> signals)
         {
             Dictionary<string, double> result = new Dictionary<string, double>();
             int multiplexerValue = -1;
@@ -843,7 +850,7 @@ namespace PCAN_Client.CAN_Data
             return result;
         }
 
-        private double ConvertToPhysicalValue(byte[] data, Signal signal)
+        private static double ConvertToPhysicalValue(byte[] data, Signal signal)
         {
             ulong rawValue = ExtractRawValue(data, signal);
 
@@ -866,7 +873,7 @@ namespace PCAN_Client.CAN_Data
         }
 
         // 有符号数符号扩展
-        private long SignExtend(ulong value, int bitLength)
+        private static long SignExtend(ulong value, int bitLength)
         {
             // 参数校验（确保 bitLength 有效）
             if (bitLength < 1 || bitLength > 64)

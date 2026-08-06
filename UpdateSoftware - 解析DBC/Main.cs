@@ -1077,8 +1077,7 @@ namespace PCAN_Client
                                      byte[] sigData = frame2.Data;
                                      if (sigData != null && sigData.Length > 0)
                                      {
-                                         var parser = new CanSignalParser();
-                                         var parsed = parser.ParseSignals(sigData, dbcMsg.signals);
+                                         var parsed = CanSignalParser.ParseSignals(sigData, dbcMsg.signals);
                                          // 组装显示字符串
                                          string hexRaw = sig.rawValue.ToString("X2");
                                          hexRaw = DbcHelper.FormatSignalResult(hexRaw, 8);
