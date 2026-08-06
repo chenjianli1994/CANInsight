@@ -72,7 +72,6 @@ namespace PCAN_Client
 
         // 帧率控制：避免过度重绘导致CPU占用过高
         private DateTime _lastPaintTime = DateTime.MinValue;
-        private int _targetFPS = 15; // 目标帧率（15fps平衡流畅度和CPU）
         private bool _needsRepaint = false; // 是否需要重绘标记
         private System.Windows.Forms.Timer _frameTimer; // 帧率控制定时器
 

@@ -25,12 +25,9 @@ namespace PCAN_Client.CAN_API
         static readonly long refersh = (long)(0.5 * 1000 * 1000); /* 100ms */
 
         // 添加批量处理相关的成员变量
-        private static readonly StringBuilder _uiBuffer = new StringBuilder();
         private static readonly StringBuilder _ascBuffer = new StringBuilder();
         private static readonly object _bufferLock = new object();
-        private static long _lastUIRefreshTime = 0;
         private static long _lastASCRefreshTime = 0;
-        private const long UI_REFRESH_INTERVAL_MS = 100;   // UI刷新间隔50ms
         private const long ASC_REFRESH_INTERVAL_MS = 500; // ASC文件刷新间隔500ms
         private static long CanTransmitLastTicks = 0;
         internal static uint PendingTxId = 0xFFFFFFFF; // 用于标记本端发送的CAN ID
@@ -158,20 +155,13 @@ namespace PCAN_Client.CAN_API
                     // 批量缓冲数据（ASC通道列写BLF通道号）
                     lock (_bufferLock)
                     {
-                        FormatAndAppendMessage(_uiBuffer, _ascBuffer, msg, time_us, time_us_last, blfCh, recordCh);
+                        FormatAndAppendMessage(_ascBuffer, msg, time_us, blfCh, recordCh);
                     }
 
                     time_us_last = time_us;
                     receiveCnt++;
 
                     var currentTime = sw.ElapsedTicks;
-
-                    // 批量刷新UI（降低频率）
-                    if (currentTime - _lastUIRefreshTime >= UI_REFRESH_INTERVAL_MS * 10000) // 转换为ticks
-                    {
-                        FlushUIBuffer();
-                        _lastUIRefreshTime = currentTime;
-                    }
 
                     // 批量刷新ASC文件（降低频率）
                     if (currentTime - _lastASCRefreshTime >= ASC_REFRESH_INTERVAL_MS * 10000)
@@ -192,21 +182,6 @@ namespace PCAN_Client.CAN_API
                 }
             }
             catch { }
-        }
-
-        private static void FlushUIBuffer()
-        {
-            lock (_bufferLock)
-            {
-                if (_uiBuffer.Length > 0)
-                {
-                    string uiText = _uiBuffer.ToString();
-                    _uiBuffer.Clear();
-
-                    // 使用更高效的UI更新方式
-                    Main.main.SafeReceiveBufferRefresh(uiText);
-                }
-            }
         }
 
         private static void FlushASCBuffer()
@@ -251,22 +226,19 @@ namespace PCAN_Client.CAN_API
                 Debug.WriteLine($"ASC文件写入失败: {ex.Message}");
             }
         }
-        private static void FormatAndAppendMessage(StringBuilder str, StringBuilder ascString,
-            TPCANMsg msg, ulong time_us, ulong time_us_last, byte channel = 1, bool recordCh = true)
+        /// <summary>ASC记录格式化：仅在需要落盘（recordCh且ASC文件类型）时构建字符串，其余场景零分配。
+        /// 原UI缓冲管道（_uiBuffer）为死代码已移除</summary>
+        private static void FormatAndAppendMessage(StringBuilder ascString,
+            TPCANMsg msg, ulong time_us, byte channel = 1, bool recordCh = true)
         {
-            ulong timeDiff = time_us - time_us_last;
-
-            // 构建公共部分
-            string timestamp = $"{time_us / 1000000}.{time_us % 1000000 / 1000:D3}{time_us % 1000:D3}";
-            string dataHex = string.Join(" ", msg.DATA.Take(msg.LEN).Select(b => b.ToString("X2")));
-            string period = $"{timeDiff / 1000}.{timeDiff % 1000}ms";
-
-            // 分别格式化输出（ASC通道列写真实逻辑通道号；recordCh=false的通道不落盘）
-            if(recordCh && Logging.SaveFlag && (0 == LoggingSet.SaveFileType_int))
+            // 条件提前：不记录ASC时直接返回，避免每帧无谓的字符串分配
+            if (!(recordCh && Logging.SaveFlag && (0 == LoggingSet.SaveFileType_int)))
             {
-                ascString.AppendLine($"{timestamp} {channel} {msg.ID:X2}             Rx    d {msg.LEN} {dataHex}");
+                return;
             }
-            str.AppendLine($"ID:0x{msg.ID:X2} 数据： {dataHex}  周期： {period}");
+
+            // ASC通道列写真实逻辑通道号
+            ascString.AppendLine($"{time_us / 1000000}.{time_us % 1000000 / 1000:D3}{time_us % 1000:D3} {channel} {msg.ID:X2}             Rx    d {msg.LEN} {string.Join(" ", msg.DATA.Take(msg.LEN).Select(b => b.ToString("X2")))}");
         }
     }
 }

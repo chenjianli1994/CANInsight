@@ -558,7 +558,7 @@ namespace PCAN_Client.Canoe_API
                             }
                             else
                             {
-                                /* empty */
+                                break; // 无事件（队列空）：立即退出本轮轮询，避免空闲时每ms 100次P/Invoke忙等
                             }
                     }
 

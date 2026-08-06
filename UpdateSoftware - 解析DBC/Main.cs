@@ -1865,68 +1865,6 @@ namespace PCAN_Client
             }
         }
 
-        internal void ReceiveBufferRefresh(string text)
-        {
-            return;
-            if (this.IsHandleCreated)
-            {
-                this.BeginInvoke(new EventHandler(delegate
-                {
-                    //if (1 * 1024 < textBox1.Text.Length)
-                    //{
-                    //    textBox1.Text = "";
-                    //}
-                    //else
-                    //{
-                    //    /* empty */
-                    //}
-                    //textBox1.AppendText(text);
-                    textBox1.Text = text;
-                    //textBox1.ScrollToCaret();
-                }));
-            }
-        }
-
-        internal void SafeReceiveBufferRefresh(string text)
-        {
-            ReceiveBufferRefresh(text);
-            //if (this.IsHandleCreated && !this.IsDisposed)
-            //{
-            //    if (textBox1.InvokeRequired)
-            //    {
-            //        // 使用BeginInvoke但限制频率
-            //        BeginInvoke(new Action<string>(SafeReceiveBufferRefresh), text);
-            //    }
-            //    else
-            //    {
-            //        try
-            //        {
-            //            // 限制文本框内容长度，避免内存增长
-            //            const int MAX_TEXT_LENGTH = 3000; // 限制为3K字符
-
-            //            if (textBox1.TextLength + text.Length > MAX_TEXT_LENGTH)
-            //            {
-            //                // 保留最新的内容
-            //                int removeCount = textBox1.TextLength + text.Length - MAX_TEXT_LENGTH;
-            //                textBox1.Text = textBox1.Text.Substring(removeCount);
-            //            }
-
-            //            textBox1.AppendText(text);
-
-            //            // 只有在可见时才滚动，减少不必要的操作
-            //            if (textBox1.Visible)
-            //            {
-            //                textBox1.ScrollToCaret();
-            //            }
-            //        }
-            //        catch (Exception ex)
-            //        {
-            //            Debug.WriteLine($"UI更新失败: {ex.Message}");
-            //        }
-            //    }
-            //}
-        }
-
         private void Main_Load(object sender, EventArgs e)
         {
             // 应用图标:读取exe内嵌图标(csproj ApplicationIcon)
