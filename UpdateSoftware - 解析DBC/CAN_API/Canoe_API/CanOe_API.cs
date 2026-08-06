@@ -189,21 +189,21 @@ namespace PCAN_Client.Canoe_API
 
         /// <summary>增量连接单个硬件通道：port未开时完整打开；已开时合并mask重开port
         /// （XL限制：port的channelMask在OpenPort时固定，Activate mask外通道会被拒绝，只能重开）
-        /// 通道模式/波特率按该行配置生效，Main.CanFDFlag仅作无行配置时的兜底</summary>
+        /// 通道模式/波特率按该行配置生效，无行配置时按经典CAN默认处理</summary>
         internal bool ActivateChannel(byte hw)
         {
             if (hw < 1 || hw > 64) return false;
             ulong bit = 1UL << (hw - 1);
             if (!aliveFlag)
             {
-                return CANOE_Open(bit, Main.CanFDFlag); // port未开：完整打开（OpenedChannelMask在Open内赋值）
+                return CANOE_Open(bit, false); // port未开：完整打开（OpenedChannelMask在Open内赋值）
             }
             if ((OpenedChannelMask & bit) != 0) return true; // 该通道已在连接中
             // 合并新通道到现有连接集合，重开port（Deactivate全部→Close→OpenPort(合并mask)→SetBitrate→Activate全部，
             // 由CANOE_Open完整流程完成；接收短暂中断后自动恢复）
             ulong newMask = OpenedChannelMask | bit;
             CANOE_Close();
-            return CANOE_Open(newMask, Main.CanFDFlag);
+            return CANOE_Open(newMask, false);
         }
 
         /// <summary>增量断开单个硬件通道；全部断开后关闭port（aliveFlag=false、接收回调移除）</summary>

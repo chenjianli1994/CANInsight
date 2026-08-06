@@ -166,10 +166,10 @@ namespace PCAN_Client
             return -1;
         }
 
-        /// <summary>通道行 CAN FD 模式；越界或未配置时回退全局默认（单通道兼容路径）</summary>
+        /// <summary>通道行 CAN FD 模式；越界或未配置时回退 false（经典CAN，单通道兼容路径固定经典）</summary>
         public static bool GetChannelCanFd(int index)
         {
-            if (index < 0 || index >= BusChannels.Count) return Main.CanFDFlag;
+            if (index < 0 || index >= BusChannels.Count) return false;
             return BusChannels[index].CanFd;
         }
 

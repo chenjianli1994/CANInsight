@@ -24,15 +24,12 @@ namespace PCAN_Client
         private readonly Main _main;
         private readonly bool _realTimeMode; // 打开窗口时绘图区所处模式：true=实时数据（通道号用于记录导出编号），false=报文数据（BLF通道号用于回放映射）
         private List<HwChannelInfo> _hwList = new List<HwChannelInfo>(); // 识别到的硬件（PCAN+CANoe合并）
-        private bool _suppressModeEvent; // 初始化模式单选时抑制事件
         private bool _detecting;         // 后台识别进行中（重入保护）
 
         /// <summary>通道号列标题随模式切换：实时="通道号"，报文="BLF通道号"</summary>
         private string BlfColumnTitle => _realTimeMode ? "通道号" : "BLF通道号";
 
         private Label _lblHwStatus;
-        private RadioButton _rbCan;
-        private RadioButton _rbCanFd;
         private DataGridView _dgv;
         private TextBox _txtPreview;
         private Button _btnConnectAll;
@@ -98,19 +95,6 @@ namespace PCAN_Client
                 Text = "PCAN: -   CANoe: -"
             };
             this.Controls.Add(_lblHwStatus);
-
-            var lblMode = new Label { Text = "模式:", Location = new Point(524, 20), Size = new Size(40, 20) };
-            this.Controls.Add(lblMode);
-            _rbCan = new RadioButton { Text = "CAN", Location = new Point(566, 18), Size = new Size(52, 22) };
-            _rbCanFd = new RadioButton { Text = "CAN FD", Location = new Point(622, 18), Size = new Size(72, 22) };
-            _suppressModeEvent = true;
-            _rbCanFd.Checked = Main.CanFDFlag;
-            _rbCan.Checked = !Main.CanFDFlag;
-            _suppressModeEvent = false;
-            _rbCan.CheckedChanged += ModeRadio_CheckedChanged;
-            _rbCanFd.CheckedChanged += ModeRadio_CheckedChanged;
-            this.Controls.Add(_rbCan);
-            this.Controls.Add(_rbCanFd);
 
             var btnRefresh = new Button { Text = "刷新识别", Location = new Point(912, 10), Size = new Size(94, 32) };
             btnRefresh.Click += (s, e) => RefreshHardwareAsync();
@@ -198,12 +182,6 @@ namespace PCAN_Client
                 RefreshPreview();
             };
             this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
-        }
-
-        private void ModeRadio_CheckedChanged(object sender, EventArgs e)
-        {
-            if (_suppressModeEvent || _main == null) return;
-            _main.SetCanFdMode(_rbCanFd.Checked);
         }
 
         /// <summary>后台异步刷新硬件识别（PCAN试开16槽位约1-2秒，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>
@@ -451,10 +429,10 @@ namespace PCAN_Client
             row.Cells[ColHwBind].Value = FindBindKey(row, "", 0, n - 1); // 同号预选
             row.Cells[ColDbc].Value = "";
             row.Cells[ColDbcStatus].Value = "";
-            // 新行默认继承全局模式（主界面/顶部模式单选）与默认档
-            row.Cells[ColMode].Value = Main.CanFDFlag ? "CANFD" : "CAN";
-            SetupBaudCell(row, Main.CanFDFlag);
-            row.Cells[ColBaud].Value = Main.CanFDFlag ? BaudrateConfig.DefaultFdName : BaudrateConfig.DefaultClassicName;
+            // 新行默认经典CAN+默认档（模式/波特率按行独立配置）
+            row.Cells[ColMode].Value = "CAN";
+            SetupBaudCell(row, false);
+            row.Cells[ColBaud].Value = BaudrateConfig.DefaultClassicName;
             RefreshAllConnButtons();
             RefreshPreview();
         }

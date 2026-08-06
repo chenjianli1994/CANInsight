@@ -42,7 +42,6 @@ namespace PCAN_Client
         internal static Boolean canoeOpenFlag = false;
         internal static Boolean pcanOpenFlag = false;
         internal static XLClass.xl_driver_config driverConfig = null;
-        internal static Boolean CanFDFlag = false;
 
         string[] ByteOrder = { "Intel", "Motorola" };
         string[] ValueType = { "Unsigned", "Signed", "Float", "Double" };
@@ -1617,14 +1616,13 @@ namespace PCAN_Client
         /// <summary>
         /// 创建顶部工具栏：左侧"通道管理"统一入口（硬件识别/连接/通道配置均在通道管理窗口），右侧功能按钮。
         /// 原连接区Designer控件保留在隐藏容器内作状态载体不再显示：
-        /// button1/button5文本是连接状态机、comboBox是单通道兼容路径数据源、radioButton是CAN/CANFD模式载体。
+        /// button1/button5文本是连接状态机、comboBox是单通道兼容路径数据源。
         /// </summary>
         private void CreateConnectionStrip()
         {
             // 隐藏旧的顶部区域容器（子控件保留作状态载体，不再显示）
             groupBox1.Visible = false;
             groupBox2.Visible = false;
-            groupBox3.Visible = false;
             button3.Visible = false;
             SendMsg.Visible = false;
             button6.Visible = false;
@@ -2107,21 +2105,6 @@ namespace PCAN_Client
             timer1.Interval = 200;
 
             timer1.Start();
-            if (Properties.Settings.Default.CANType.Equals("CAN"))
-            {
-                radioButtonCAN.Checked = true;
-                CanFDFlag = false;
-            }
-            else if (Properties.Settings.Default.CANType.Equals("CANFD"))
-            {
-                radioButtonCANFD.Checked = true;
-                CanFDFlag = true;
-            }
-            else
-            {
-                radioButtonCAN.Checked = true;
-                CanFDFlag = false;
-            }
             try
             {
                 Task task = new Task(() =>
@@ -2227,7 +2210,7 @@ namespace PCAN_Client
                             int.TryParse(pcanChannel[1], out channel);
 
                             pCAN_API.SetPcanChannel(channel - 1);
-                            if (true == pCAN_API.Connect(CanFDFlag))
+                            if (true == pCAN_API.Connect(false)) // 单通道兼容路径固定经典CAN（通道级配置见通道管理窗口）
                             {
                                 button1.Text = "已连接";
                                 pcanOpenFlag = true;
@@ -2379,7 +2362,7 @@ namespace PCAN_Client
             {
                 /* empty */
             }
-            driverConfig = canoe_API.FindAllChannel(10, CanFDFlag);
+            driverConfig = canoe_API.FindAllChannel(10, false); // 探测不依赖全局模式（通道级配置驱动）
 
             // 结构化识别缓存（通道管理窗口数据源）；已打开mask内的通道标记"已连接"
             _lastCanoeHwList = new List<HwChannelInfo>();
@@ -2414,7 +2397,7 @@ namespace PCAN_Client
                         {
                             if (!driverConfig.channel[i].name.Contains("Virtual Channel"))
                             {
-                                if (canoe_API.CANOE_Open((ulong)(1 << ((int)driverConfig.channel[i].channelIndex)), CanFDFlag))
+                                if (canoe_API.CANOE_Open((ulong)(1 << ((int)driverConfig.channel[i].channelIndex)), false))
                                 {
                                     comboBox_CanoeChannel.Items.Add(driverConfig.channel[i].name);
                                     if (Main.driverConfig.channel[i].name.Contains(Properties.Settings.Default.CANoe_Channel))
@@ -2518,7 +2501,7 @@ namespace PCAN_Client
                                 byte hw = BaseParamter.GetEffectiveHwChannel(i);
                                 if (hw >= 1 && hw <= 64) mask |= (1UL << (hw - 1));
                             }
-                            if (mask != 0 && canoe_API.CANOE_Open(mask, CanFDFlag))
+                            if (mask != 0 && canoe_API.CANOE_Open(mask, false)) // 多通道按行配置逐通道生效，false仅作无行配置兜底
                             {
                                 button5.Text = "已连接";
                                 canoeOpenFlag = true;
@@ -2543,7 +2526,7 @@ namespace PCAN_Client
                         {
                             if (driverConfig.channel[i].name.Contains(comboBox_CanoeChannel.Text))
                             {
-                                if (canoe_API.CANOE_Open((ulong)(1 << driverConfig.channel[i].channelIndex), CanFDFlag))
+                                if (canoe_API.CANOE_Open((ulong)(1 << driverConfig.channel[i].channelIndex), false))
                                 {
                                     button5.Text = "已连接";
                                     canoeOpenFlag = true;
@@ -2623,15 +2606,6 @@ namespace PCAN_Client
                 changed = true;
             }
             if (changed) BaseParamter.SaveBusChannelsConfig();
-        }
-
-        /// <summary>设置CAN/CANFD模式（供通道管理窗口同步，复用单选按钮的持久化逻辑）</summary>
-        internal void SetCanFdMode(bool canFd)
-        {
-            if (canFd) radioButtonCANFD.Checked = true; else radioButtonCAN.Checked = true;
-            Properties.Settings.Default.CANType = canFd ? "CANFD" : "CAN";
-            Properties.Settings.Default.Save();
-            CanFDFlag = canFd;
         }
 
         /// <summary>本地重算识别缓存中各硬件通道的"已连接"状态（不做硬件访问；空闲/已占用等其余状态保留上次识别结果）</summary>
@@ -2879,20 +2853,6 @@ namespace PCAN_Client
             }
             multiMessageCANScheduler.Stop();
             multiMessageCANScheduler.Dispose();
-        }
-
-        private void radioButtonCANFD_Click(object sender, EventArgs e)
-        {
-            Properties.Settings.Default.CANType = "CANFD";
-            Properties.Settings.Default.Save();
-            CanFDFlag = true;
-        }
-
-        private void radioButtonCAN_Click(object sender, EventArgs e)
-        {
-            Properties.Settings.Default.CANType = "CAN";
-            Properties.Settings.Default.Save();
-            CanFDFlag = false;
         }
 
         private void comboBox_CanoeChannel_SelectedIndexChanged(object sender, EventArgs e)

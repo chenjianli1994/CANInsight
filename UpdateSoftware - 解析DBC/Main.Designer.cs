@@ -38,9 +38,6 @@ namespace PCAN_Client
             this.groupBox2 = new System.Windows.Forms.GroupBox();
             this.comboBox_CanoeChannel = new System.Windows.Forms.ComboBox();
             this.button5 = new System.Windows.Forms.Button();
-            this.groupBox3 = new System.Windows.Forms.GroupBox();
-            this.radioButtonCAN = new System.Windows.Forms.RadioButton();
-            this.radioButtonCANFD = new System.Windows.Forms.RadioButton();
             this.treeView1 = new System.Windows.Forms.TreeView();
             this.listView1 = new System.Windows.Forms.ListView();
             this.timer1 = new System.Windows.Forms.Timer(this.components);
@@ -51,7 +48,6 @@ namespace PCAN_Client
             this.textBox__txtIdFilter = new System.Windows.Forms.TextBox();
             this.groupBox1.SuspendLayout();
             this.groupBox2.SuspendLayout();
-            this.groupBox3.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).BeginInit();
             this.SuspendLayout();
             // 
@@ -146,45 +142,6 @@ namespace PCAN_Client
             this.button5.Text = "连接";
             this.button5.UseVisualStyleBackColor = true;
             this.button5.Click += new System.EventHandler(this.button5_Click);
-            // 
-            // groupBox3
-            // 
-            this.groupBox3.Controls.Add(this.radioButtonCAN);
-            this.groupBox3.Controls.Add(this.radioButtonCANFD);
-            this.groupBox3.Location = new System.Drawing.Point(245, 8);
-            this.groupBox3.Margin = new System.Windows.Forms.Padding(2);
-            this.groupBox3.Name = "groupBox3";
-            this.groupBox3.Padding = new System.Windows.Forms.Padding(2);
-            this.groupBox3.Size = new System.Drawing.Size(82, 108);
-            this.groupBox3.TabIndex = 45;
-            this.groupBox3.TabStop = false;
-            this.groupBox3.Text = "CAN类型";
-            // 
-            // radioButtonCAN
-            // 
-            this.radioButtonCAN.AutoSize = true;
-            this.radioButtonCAN.Location = new System.Drawing.Point(8, 56);
-            this.radioButtonCAN.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButtonCAN.Name = "radioButtonCAN";
-            this.radioButtonCAN.Size = new System.Drawing.Size(41, 16);
-            this.radioButtonCAN.TabIndex = 1;
-            this.radioButtonCAN.TabStop = true;
-            this.radioButtonCAN.Text = "CAN";
-            this.radioButtonCAN.UseVisualStyleBackColor = true;
-            this.radioButtonCAN.Click += new System.EventHandler(this.radioButtonCAN_Click);
-            // 
-            // radioButtonCANFD
-            // 
-            this.radioButtonCANFD.AutoSize = true;
-            this.radioButtonCANFD.Location = new System.Drawing.Point(8, 26);
-            this.radioButtonCANFD.Margin = new System.Windows.Forms.Padding(2);
-            this.radioButtonCANFD.Name = "radioButtonCANFD";
-            this.radioButtonCANFD.Size = new System.Drawing.Size(53, 16);
-            this.radioButtonCANFD.TabIndex = 0;
-            this.radioButtonCANFD.TabStop = true;
-            this.radioButtonCANFD.Text = "CANFD";
-            this.radioButtonCANFD.UseVisualStyleBackColor = true;
-            this.radioButtonCANFD.Click += new System.EventHandler(this.radioButtonCANFD_Click);
             //
             // treeView1
             // 
@@ -273,7 +230,6 @@ namespace PCAN_Client
             this.Controls.Add(this.button7);
             this.Controls.Add(this.button6);
             this.Controls.Add(this.SendMsg);
-            this.Controls.Add(this.groupBox3);
             this.Controls.Add(this.groupBox2);
             this.Controls.Add(this.groupBox1);
             this.Controls.Add(this.button3);
@@ -288,8 +244,6 @@ namespace PCAN_Client
             this.Load += new System.EventHandler(this.Main_Load);
             this.groupBox1.ResumeLayout(false);
             this.groupBox2.ResumeLayout(false);
-            this.groupBox3.ResumeLayout(false);
-            this.groupBox3.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)(this.dataGridView1)).EndInit();
             this.ResumeLayout(false);
             this.PerformLayout();
@@ -306,9 +260,6 @@ namespace PCAN_Client
         private System.Windows.Forms.GroupBox groupBox2;
         private System.Windows.Forms.ComboBox comboBox_CanoeChannel;
         private System.Windows.Forms.Button button5;
-        private System.Windows.Forms.GroupBox groupBox3;
-        private System.Windows.Forms.RadioButton radioButtonCAN;
-        private System.Windows.Forms.RadioButton radioButtonCANFD;
         private System.Windows.Forms.TreeView treeView1;
         private System.Windows.Forms.ListView listView1;
         private System.Windows.Forms.Timer timer1;
