@@ -1388,9 +1388,15 @@ namespace PCAN_Client
         {
             if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
             if (e.ColumnIndex != _dgvMessages.Columns["colFilter"].Index) return;
-            if (e.RowIndex >= _flatRows.Count) return;
 
-            var flat = _flatRows[e.RowIndex];
+            ToggleMessageExpansion(e.RowIndex);
+        }
+
+        private void ToggleMessageExpansion(int rowIndex)
+        {
+            if (rowIndex >= _flatRows.Count) return;
+
+            var flat = _flatRows[rowIndex];
             if (flat.Type != FlatRowType.Message) return;
 
             // 获取 MsgId 与通道
@@ -1465,9 +1471,9 @@ namespace PCAN_Client
                 {
                     // 展开：仅在当前点击的帧后插入信号行
                     _dgvMessages.SuspendLayout();
-                    int insertPos = e.RowIndex + 1;
+                    int insertPos = rowIndex + 1;
                     // 找到当前帧行在_flatRows中的位置
-                    if (e.RowIndex < _flatRows.Count && _flatRows[e.RowIndex].ScrollFrameIndex == flat.ScrollFrameIndex)
+                    if (rowIndex < _flatRows.Count && _flatRows[rowIndex].ScrollFrameIndex == flat.ScrollFrameIndex)
                     {
                         for (int s = 0; s < dbcChk.signals.Count; s++)
                         {
@@ -1498,6 +1504,15 @@ namespace PCAN_Client
                 RefreshMessageDisplay();
                 _pauseUpdate = savedPause;
             }
+        }
+
+        private void DgvMessages_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            // 加号列由CellClick处理，避免双击时重复切换；其他列支持双击整行展开/收起。
+            if (e.ColumnIndex == _dgvMessages.Columns["colFilter"].Index) return;
+
+            ToggleMessageExpansion(e.RowIndex);
         }
 
         /// <summary>CAN通道列头点击排序</summary>
@@ -1976,6 +1991,7 @@ namespace PCAN_Client
              _dgvMessages.CellFormatting += DgvMessages_CellFormatting;
              _dgvMessages.CellPainting += DgvMessages_CellPainting;
              _dgvMessages.CellClick += DgvMessages_CellClick;
+             _dgvMessages.CellDoubleClick += DgvMessages_CellDoubleClick;
              _dgvMessages.ColumnHeaderMouseDoubleClick += DgvMessages_ColumnHeaderMouseDoubleClick;
              _dgvMessages.Scroll += (ss, ee) =>
              {
@@ -2682,7 +2698,7 @@ namespace PCAN_Client
         {
             string t = BaseParamter.GetEffectiveHwType(logicIndex);
             if (t == BaseParamter.HwTypePcan)
-                return pcanOpenFlag && pCAN_API != null && pCAN_API.IsLogicChannelConnected((byte)(logicIndex + 1));
+                return pcanOpenFlag && pCAN_API != null && pCAN_API.IsLogicChannelConnected(BaseParamter.GetLogicChannel(logicIndex));
             if (t == BaseParamter.HwTypeCanoe)
             {
                 byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
