@@ -31,6 +31,11 @@ namespace PCAN_Client
         /// </summary>
         public string HwType { get; set; } = "";
 
+        /// <summary>该通道的 CAN 模式：true=CAN FD，false=经典 CAN（默认，兼容旧配置）</summary>
+        public bool CanFd { get; set; } = false;
+        /// <summary>该通道的波特率档位名（BaudrateConfig 档位名；空=按模式默认档，兼容旧配置）</summary>
+        public string Baudrate { get; set; } = "";
+
         /// <summary>
         /// 该通道使用的DBC文件路径
         /// </summary>

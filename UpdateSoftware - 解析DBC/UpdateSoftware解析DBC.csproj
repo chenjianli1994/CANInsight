@@ -297,6 +297,7 @@
   <ItemGroup>
     <Compile Include="AutoSizeFormClass.cs" />
     <Compile Include="BaseParamter.cs" />
+    <Compile Include="BaudrateConfig.cs" />
     <Compile Include="CanSend.cs">
       <SubType>Form</SubType>
     </Compile>

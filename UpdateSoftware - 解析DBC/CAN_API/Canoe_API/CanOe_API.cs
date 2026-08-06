@@ -94,10 +94,11 @@ namespace PCAN_Client.Canoe_API
                 //MessageBox.Show(e.ToString());
             }
         }
+        /// <summary>打开CANoe port并激活mask内通道。CanFDFlag为mask内无通道配置行的兜底模式：
+        /// 有行配置的通道按各自 CAN/CANFD 模式与波特率档位逐通道设置位定时（混合模式支持）</summary>
         public Boolean CANOE_Open(ulong channelIndex, Boolean CanFDFlag)
         {
             ulong permissionMask = 0;
-            uint baud = 500000;
 
             this.CanFDFlag = CanFDFlag;
             XLDefine.XL_Status status;
@@ -121,43 +122,45 @@ namespace PCAN_Client.Canoe_API
             appChannelMask = channelIndex;
             permissionMask = channelIndex;
 
-            // Open the port
-            if (CanFDFlag)
-            {
-                status = xlDriver.XL_OpenPort(ref portHandle, "CANExample", appChannelMask, ref permissionMask, 4096, XLDefine.XL_InterfaceVersion.XL_INTERFACE_VERSION_V4, XLDefine.XL_BusTypes.XL_BUS_TYPE_CAN);
-            }
-            else
-            {
-                status = xlDriver.XL_OpenPort(ref portHandle, "CANExample", appChannelMask, ref permissionMask, 4096, XLDefine.XL_InterfaceVersion.XL_INTERFACE_VERSION_V3, XLDefine.XL_BusTypes.XL_BUS_TYPE_CAN);
-            }
+            // Open the port（统一V4接口：支持CAN FD，同时完全兼容经典CAN收发）
+            status = xlDriver.XL_OpenPort(ref portHandle, "CANExample", appChannelMask, ref permissionMask, 4096, XLDefine.XL_InterfaceVersion.XL_INTERFACE_VERSION_V4, XLDefine.XL_BusTypes.XL_BUS_TYPE_CAN);
             if (status != XLDefine.XL_Status.XL_SUCCESS)
             {
                 Console.WriteLine("Failed to open port: " + status);
                 return false;
             }
 
-            // Set the CAN bitrate
-            if (CanFDFlag)
+            // 逐通道配置位定时：有行配置用行配置（模式+波特率档），无行配置用入参兜底模式+默认档
+            for (int b = 0; b < 64; b++)
             {
-                XLClass.XLcanFdConf CanFDConf = new XLClass.XLcanFdConf();
-                CanFDConf.arbitrationBitRate = 500000; /* 500k波特率 */
-                CanFDConf.tseg1Abr = 25;
-                CanFDConf.tseg2Abr = 6;
-                CanFDConf.sjwAbr = 1;
-                CanFDConf.dataBitRate = 2000000; // 2M波特率
-                CanFDConf.tseg1Dbr = 31;
-                CanFDConf.tseg2Dbr = 8;
-                CanFDConf.sjwDbr = 1;
-                status = xlDriver.XL_CanFdSetConfiguration(portHandle, appChannelMask, CanFDConf);
-            }
-            else
-            {
-                status = xlDriver.XL_CanSetChannelBitrate(portHandle, appChannelMask, baud);
-            }
-            if (status != XLDefine.XL_Status.XL_SUCCESS)
-            {
-                Console.WriteLine("Failed to set CAN bitrate: " + status);
-                return false;
+                ulong bit = 1UL << b;
+                if ((channelIndex & bit) == 0) continue;
+                byte hw = (byte)(b + 1);
+                int idx = BaseParamter.GetChannelIndexByHw(BaseParamter.HwTypeCanoe, hw);
+                if (idx >= 0 ? BaseParamter.GetChannelCanFd(idx) : CanFDFlag)
+                {
+                    var fd = idx >= 0 ? BaseParamter.GetChannelFdPreset(idx) : BaudrateConfig.GetFdPreset("");
+                    XLClass.XLcanFdConf CanFDConf = new XLClass.XLcanFdConf();
+                    CanFDConf.arbitrationBitRate = fd.ArbBaud; /* 仲裁段波特率 */
+                    CanFDConf.tseg1Abr = 25;
+                    CanFDConf.tseg2Abr = 6;
+                    CanFDConf.sjwAbr = 1;
+                    CanFDConf.dataBitRate = fd.DataBaud; /* 数据段波特率 */
+                    CanFDConf.tseg1Dbr = 31;
+                    CanFDConf.tseg2Dbr = 8;
+                    CanFDConf.sjwDbr = 1;
+                    status = xlDriver.XL_CanFdSetConfiguration(portHandle, bit, CanFDConf);
+                }
+                else
+                {
+                    var c = idx >= 0 ? BaseParamter.GetChannelClassicPreset(idx) : BaudrateConfig.GetClassicPreset("");
+                    status = xlDriver.XL_CanSetChannelBitrate(portHandle, bit, c.CanoeBaud);
+                }
+                if (status != XLDefine.XL_Status.XL_SUCCESS)
+                {
+                    Console.WriteLine("Failed to set CAN bitrate: " + status);
+                    return false;
+                }
             }
 
             // Activate the channel
@@ -185,21 +188,22 @@ namespace PCAN_Client.Canoe_API
         }
 
         /// <summary>增量连接单个硬件通道：port未开时完整打开；已开时合并mask重开port
-        /// （XL限制：port的channelMask在OpenPort时固定，Activate mask外通道会被拒绝，只能重开）</summary>
-        internal bool ActivateChannel(byte hw, bool canFDFlag)
+        /// （XL限制：port的channelMask在OpenPort时固定，Activate mask外通道会被拒绝，只能重开）
+        /// 通道模式/波特率按该行配置生效，Main.CanFDFlag仅作无行配置时的兜底</summary>
+        internal bool ActivateChannel(byte hw)
         {
             if (hw < 1 || hw > 64) return false;
             ulong bit = 1UL << (hw - 1);
             if (!aliveFlag)
             {
-                return CANOE_Open(bit, canFDFlag); // port未开：完整打开（OpenedChannelMask在Open内赋值）
+                return CANOE_Open(bit, Main.CanFDFlag); // port未开：完整打开（OpenedChannelMask在Open内赋值）
             }
             if ((OpenedChannelMask & bit) != 0) return true; // 该通道已在连接中
             // 合并新通道到现有连接集合，重开port（Deactivate全部→Close→OpenPort(合并mask)→SetBitrate→Activate全部，
             // 由CANOE_Open完整流程完成；接收短暂中断后自动恢复）
             ulong newMask = OpenedChannelMask | bit;
             CANOE_Close();
-            return CANOE_Open(newMask, canFDFlag);
+            return CANOE_Open(newMask, Main.CanFDFlag);
         }
 
         /// <summary>增量断开单个硬件通道；全部断开后关闭port（aliveFlag=false、接收回调移除）</summary>
@@ -294,64 +298,28 @@ namespace PCAN_Client.Canoe_API
                 hw = BaseParamter.GetEffectiveHwChannel(chIdx);
             ulong txMask = (hw >= 1 && hw <= 64) ? (1UL << (hw - 1)) : appChannelMask;
 
-            if (CanFDFlag)
+            // 按通道模式决定帧格式：自动降级——≤8字节按经典CAN格式发送（不带EDL/BRS，兼容纯经典CAN节点）；>8字节FD通道必须FD格式
+            bool fd = BaseParamter.GetChannelCanFdByLogic(channel);
+            int txFlags = (ID > 0x7FF ? 0x0001 : 0); /* 0x0001=扩展帧 */
+            if (fd && len > 8)
             {
-                // 自动降级：≤8字节按经典CAN格式发送（不带EDL/BRS，兼容纯经典CAN节点）；>8字节必须FD格式
-                int txFlags = (ID > 0x7FF ? 0x0001 : 0); /* 0x0001=扩展帧 */
-                if (len > 8)
+                txFlags |= (int)(XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_EDL | XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_BRS);
+            }
+            uint msgCnt = 1;
+            XLClass.XLcanTxEvent xLcanTxEvent = new XLClass.XLcanTxEvent
+            {
+                tag = XLDefine.XL_CANFD_TX_EventTags.XL_CAN_EV_TAG_TX_MSG,
+                channelIndex = (byte)(hw - 1),
+                tagData = new XLClass.XL_CAN_TX_MSG
                 {
-                    txFlags |= (int)(XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_EDL | XLDefine.XL_CANFD_TX_MessageFlags.XL_CAN_TXMSG_FLAG_BRS);
+                    canId = ID,
+                    msgFlags = (XLDefine.XL_CANFD_TX_MessageFlags)txFlags,
+                    dlc = GetSendDataDlc(len),
+                    data = new byte[len],
                 }
-                uint msgCnt = 1;
-                XLClass.XLcanTxEvent xLcanTxEvent = new XLClass.XLcanTxEvent
-                {
-                    tag = XLDefine.XL_CANFD_TX_EventTags.XL_CAN_EV_TAG_TX_MSG,
-                    channelIndex = (byte)(hw - 1),
-                    tagData = new XLClass.XL_CAN_TX_MSG
-                    {
-                        canId = ID,
-                        msgFlags = (XLDefine.XL_CANFD_TX_MessageFlags)txFlags,
-                        dlc = GetSendDataDlc(len),
-                        data = new byte[len],
-                    }
-                };
-                Array.Copy(data, 0, xLcanTxEvent.tagData.data, 0, len);
-                status = xlDriver.XL_CanTransmitEx(portHandle, txMask, ref msgCnt, xLcanTxEvent);
-            }
-            else
-            {
-                XLClass.xl_event txEvent = new XLClass.xl_event
-                {
-                    tag = XLDefine.XL_EventTags.XL_TRANSMIT_MSG,
-                    tagData = new XLClass.xl_tag_data
-                    {
-                        can_Msg = new XLClass.xl_can_msg
-                        {
-                            id = ID,
-                            flags = (XLDefine.XL_MessageFlags)((ID > 0x7FF) ? 0x04 : 0), // XL_CAN_MSG_FLAG_EXT
-                            dlc = len,
-                            data = new byte[len]
-                        }
-                    }
-                };
-                Array.Copy(data, 0, txEvent.tagData.can_Msg.data, 0, len);
-                status = xlDriver.XL_CanTransmit(portHandle, txMask, txEvent);
-            }
-            //XLClass.xl_event txEvent = new XLClass.xl_event
-            //{
-            //    tag = XLDefine.XL_EventTags.XL_TRANSMIT_MSG,
-            //    tagData = new XLClass.xl_tag_data
-            //    {
-            //        can_Msg = new XLClass.xl_can_msg
-            //        {
-            //            id = ID,
-            //            dlc = len,
-            //            data = new byte[len]
-            //        }
-            //    }
-            //};
-            //Array.Copy(data, 0, txEvent.tagData.can_Msg.data, 0, len);
-            //status = xlDriver.XL_CanTransmit(portHandle, appChannelMask, txEvent);
+            };
+            Array.Copy(data, 0, xLcanTxEvent.tagData.data, 0, len);
+            status = xlDriver.XL_CanTransmitEx(portHandle, txMask, ref msgCnt, xLcanTxEvent);
             if (status == XLDefine.XL_Status.XL_SUCCESS)
             {
                 _consecutiveTxFailures = 0;
@@ -551,9 +519,7 @@ namespace PCAN_Client.Canoe_API
                         //    }
                         //    return;
                         //}
-                        if (Main.main.canoe_API.CanFDFlag)
-                        {
-                            status = Main.main.canoe_API.xlDriver.XL_CanReceive(Main.main.canoe_API.portHandle, ref xLcanRxEvent);
+                        status = Main.main.canoe_API.xlDriver.XL_CanReceive(Main.main.canoe_API.portHandle, ref xLcanRxEvent);
                             if (status == XLDefine.XL_Status.XL_SUCCESS)
                             {
                                 if (0x1F != xLcanRxEvent.tagData.canRxOkMsg.canId)
@@ -594,47 +560,6 @@ namespace PCAN_Client.Canoe_API
                             {
                                 /* empty */
                             }
-                        }
-                        else
-                        {
-                            status = Main.main.canoe_API.xlDriver.XL_Receive(Main.main.canoe_API.portHandle, ref Main.main.canoe_API.xlEvent);
-                            if (status == XLDefine.XL_Status.XL_SUCCESS)
-                            {
-                                if (0x1F != Main.main.canoe_API.xlEvent.tagData.can_Msg.id)
-                                {
-                                    if ((Main.main.canoe_API.xlEvent.tag == XLDefine.XL_EventTags.XL_RECEIVE_MSG) && (0 != Main.main.canoe_API.xlEvent.tagData.can_Msg.data.Length) && (0 != Main.main.canoe_API.xlEvent.tagData.can_Msg.id))
-                                    {
-                                        conoeData datas = new conoeData();
-                                        datas.data = Main.main.canoe_API.xlEvent.tagData.can_Msg.data;
-                                        datas.ID = Main.main.canoe_API.xlEvent.tagData.can_Msg.id;
-                                        datas.len = (uint)Main.main.canoe_API.xlEvent.tagData.can_Msg.data.Length;
-                                        datas.time = Main.main.canoe_API.xlEvent.timeStamp / 1000;
-                                        // Vector XL API: 扩展帧的 IDE 位编码在 id 的 bit 31
-                                        TPCANMessageType msgType = ((datas.ID & 0x80000000) != 0 || datas.ID > 0x7FF)
-                                            ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
-                                            : TPCANMessageType.PCAN_MESSAGE_STANDARD;
-                                        // XL事件chanIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号（混合硬件时限定CANoe类型反查消除同号歧义）
-                                        byte logicCh = BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypeCanoe, (byte)(Main.main.canoe_API.xlEvent.chanIndex + 1));
-                                        lock (CAN_API.CAN_API._receiveCanDataLock)
-                                        {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        /* empty */
-                                    }
-                                }
-                                else
-                                {
-                                    /* empty */
-                                }
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
                     }
 
                     callbackFlag = false;

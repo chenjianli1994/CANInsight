@@ -46,6 +46,8 @@ namespace PCAN_Client
         private const int ColBrowse = 4;
         private const int ColDbcStatus = 5;
         private const int ColConn = 6;
+        private const int ColMode = 7; // CAN/CANFD 模式下拉
+        private const int ColBaud = 8; // 波特率档位下拉
 
         /// <summary>绑定硬件下拉项（携带硬件类型+通道号，选中即固化二元组；Hw=0表示不连接）</summary>
         private class HwBindItem
@@ -81,7 +83,7 @@ namespace PCAN_Client
         private void BuildUi()
         {
             this.Text = "通道管理";
-            this.ClientSize = new Size(878, 564);
+            this.ClientSize = new Size(1030, 564);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -110,7 +112,7 @@ namespace PCAN_Client
             this.Controls.Add(_rbCan);
             this.Controls.Add(_rbCanFd);
 
-            var btnRefresh = new Button { Text = "刷新识别", Location = new Point(772, 10), Size = new Size(94, 32) };
+            var btnRefresh = new Button { Text = "刷新识别", Location = new Point(912, 10), Size = new Size(94, 32) };
             btnRefresh.Click += (s, e) => RefreshHardwareAsync();
             this.Controls.Add(btnRefresh);
 
@@ -118,7 +120,7 @@ namespace PCAN_Client
             _dgv = new DataGridView
             {
                 Location = new Point(12, 52),
-                Size = new Size(854, 236),
+                Size = new Size(996, 236),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 RowHeadersVisible = false,
@@ -128,11 +130,13 @@ namespace PCAN_Client
             };
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "name", HeaderText = "通道名称", FillWeight = 11 });
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "blf", HeaderText = BlfColumnTitle, FillWeight = 8 });
-            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 32, FlatStyle = FlatStyle.Flat });
-            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 27 });
+            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "hwBind", HeaderText = "绑定硬件通道", DisplayMember = "Display", ValueMember = "Key", FillWeight = 30, FlatStyle = FlatStyle.Flat });
+            _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbc", HeaderText = "DBC文件路径", ReadOnly = true, FillWeight = 22 });
             _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "browse", HeaderText = "浏览", Text = "...", UseColumnTextForButtonValue = true, FillWeight = 6 });
             _dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "dbcStatus", HeaderText = "DBC状态", ReadOnly = true, FillWeight = 8 });
             _dgv.Columns.Add(new DataGridViewButtonColumn { Name = "conn", HeaderText = "操作", FillWeight = 8 });
+            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "mode", HeaderText = "模式", Items = { "CAN", "CANFD" }, FillWeight = 9, FlatStyle = FlatStyle.Flat });
+            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "baud", HeaderText = "波特率", FillWeight = 16, FlatStyle = FlatStyle.Flat });
             _dgv.CurrentCellDirtyStateChanged += Dgv_CurrentCellDirtyStateChanged;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CellContentClick += Dgv_CellContentClick;
@@ -157,7 +161,7 @@ namespace PCAN_Client
             _txtPreview = new TextBox
             {
                 Location = new Point(12, 352),
-                Size = new Size(854, 150),
+                Size = new Size(996, 150),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
@@ -171,10 +175,10 @@ namespace PCAN_Client
             _btnConnectAll.Click += BtnConnectAll_Click;
             this.Controls.Add(_btnConnectAll);
 
-            _btnSave = new Button { Text = "保存配置", Location = new Point(652, 516), Size = new Size(100, 36) };
+            _btnSave = new Button { Text = "保存配置", Location = new Point(784, 516), Size = new Size(100, 36) };
             _btnSave.Click += (s, e) => SaveConfig(true);
             this.Controls.Add(_btnSave);
-            var btnClose = new Button { Text = "关闭", Location = new Point(760, 516), Size = new Size(106, 36), DialogResult = DialogResult.Cancel };
+            var btnClose = new Button { Text = "关闭", Location = new Point(892, 516), Size = new Size(106, 36), DialogResult = DialogResult.Cancel };
             this.Controls.Add(btnClose);
             this.CancelButton = btnClose;
 
@@ -306,6 +310,17 @@ namespace PCAN_Client
             cell.Value = (keep ?? NotConnectItem).Key;
         }
 
+        /// <summary>按行模式重建该行波特率下拉数据源并回退默认档（模式切换时调用）</summary>
+        private void SetupBaudCell(DataGridViewRow row, bool fd)
+        {
+            var cell = (DataGridViewComboBoxCell)row.Cells[ColBaud];
+            cell.DataSource = fd
+                ? BaudrateConfig.FdPresets.Select(p => p.Name).ToList()
+                : BaudrateConfig.ClassicPresets.Select(p => p.Name).ToList();
+            if (cell.Value == null || !cell.Items.Contains(cell.Value))
+                cell.Value = fd ? BaudrateConfig.DefaultFdName : BaudrateConfig.DefaultClassicName;
+        }
+
         /// <summary>按通道当前绑定找下拉项键值：已保存绑定 > 同号预选 > 不连接（绑定硬件不在位时回退"不连接"）</summary>
         private string FindBindKey(DataGridViewRow row, string hwType, byte hwChannel, int logicIndex)
         {
@@ -338,6 +353,11 @@ namespace PCAN_Client
                 row.Cells[ColHwBind].Value = FindBindKey(row, ch.HwType, ch.HwChannel, i);
                 row.Cells[ColDbc].Value = ch.DbcFilePath ?? "";
                 row.Cells[ColDbcStatus].Value = DbcStatusText(ch.DbcFilePath, ch.IsConfigured);
+                row.Cells[ColMode].Value = ch.CanFd ? "CANFD" : "CAN";
+                SetupBaudCell(row, ch.CanFd);
+                row.Cells[ColBaud].Value = string.IsNullOrEmpty(ch.Baudrate)
+                    ? (ch.CanFd ? BaudrateConfig.DefaultFdName : BaudrateConfig.DefaultClassicName)
+                    : ch.Baudrate;
             }
         }
 
@@ -361,6 +381,12 @@ namespace PCAN_Client
             if (e.RowIndex < 0) return;
             // 绑定列变化后行操作按钮状态可能变化（无绑定↔有绑定）
             if (e.ColumnIndex == ColHwBind) RefreshAllConnButtons();
+            if (e.ColumnIndex == ColMode)
+            {
+                var row = _dgv.Rows[e.RowIndex];
+                bool fd = (row.Cells[ColMode].Value?.ToString() == "CANFD");
+                SetupBaudCell(row, fd); // 重建波特率下拉并回退默认档
+            }
             RefreshPreview();
         }
 
@@ -425,6 +451,10 @@ namespace PCAN_Client
             row.Cells[ColHwBind].Value = FindBindKey(row, "", 0, n - 1); // 同号预选
             row.Cells[ColDbc].Value = "";
             row.Cells[ColDbcStatus].Value = "";
+            // 新行默认继承全局模式（主界面/顶部模式单选）与默认档
+            row.Cells[ColMode].Value = Main.CanFDFlag ? "CANFD" : "CAN";
+            SetupBaudCell(row, Main.CanFDFlag);
+            row.Cells[ColBaud].Value = Main.CanFDFlag ? BaudrateConfig.DefaultFdName : BaudrateConfig.DefaultClassicName;
             RefreshAllConnButtons();
             RefreshPreview();
         }
@@ -589,6 +619,8 @@ namespace PCAN_Client
                 }
 
                 var channel = new CanBusChannel(name, blfChannelId, dbcPath);
+                channel.CanFd = (row.Cells[ColMode].Value?.ToString() == "CANFD");
+                channel.Baudrate = row.Cells[ColBaud].Value?.ToString() ?? "";
                 if (bind.Hw == 0)
                 {
                     channel.HwChannel = BaseParamter.HwNotConnect; // 不连接哨兵

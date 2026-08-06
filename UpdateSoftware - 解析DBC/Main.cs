@@ -2198,7 +2198,7 @@ namespace PCAN_Client
                         // 不做硬件识别（识别只在通道管理窗口首开/手动刷新时进行），连接结果由ConnectMulti逐通道尝试得出
                         if (BaseParamter.BusChannels.Count > 0)
                         {
-                            int connected = pCAN_API.ConnectMulti(CanFDFlag);
+                            int connected = pCAN_API.ConnectMulti();
                             if (connected > 0)
                             {
                                 button1.Text = "已连接";
@@ -2716,7 +2716,7 @@ namespace PCAN_Client
             if (t == BaseParamter.HwTypePcan && pCAN_API != null)
             {
                 if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
-                if (pCAN_API.ConnectOne(logicIndex, CanFDFlag))
+                if (pCAN_API.ConnectOne(logicIndex))
                 {
                     pcanOpenFlag = true;
                     button1.Text = "已连接";
@@ -2730,7 +2730,7 @@ namespace PCAN_Client
             {
                 if (!pcanOpenFlag && !canoeOpenFlag) ClearDataOnly();
                 byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
-                if (canoe_API.ActivateChannel(hw, CanFDFlag))
+                if (canoe_API.ActivateChannel(hw))
                 {
                     canoeOpenFlag = true;
                     button5.Text = "已连接";

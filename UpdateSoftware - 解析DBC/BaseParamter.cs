@@ -154,6 +154,43 @@ namespace PCAN_Client
             return BusChannels[index].HwType ?? "";
         }
 
+        /// <summary>按硬件类型+硬件通道号反查通道行索引；未匹配返回 -1（CANoe mask→行配置用）</summary>
+        public static int GetChannelIndexByHw(string hwType, byte hwChannel)
+        {
+            for (int i = 0; i < BusChannels.Count; i++)
+            {
+                string t = GetEffectiveHwType(i);
+                if (t != "" && t != hwType) continue; // 已指定类型且不匹配的跳过；未指定的视为匹配（旧配置兼容）
+                if (GetEffectiveHwChannel(i) == hwChannel) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>通道行 CAN FD 模式；越界或未配置时回退全局默认（单通道兼容路径）</summary>
+        public static bool GetChannelCanFd(int index)
+        {
+            if (index < 0 || index >= BusChannels.Count) return Main.CanFDFlag;
+            return BusChannels[index].CanFd;
+        }
+
+        /// <summary>按逻辑通道号取 CAN FD 模式（发送/接收按通道路由用；未匹配回退全局默认）</summary>
+        public static bool GetChannelCanFdByLogic(byte logicChannel) => GetChannelCanFd(GetChannelIndex(logicChannel));
+
+        /// <summary>通道行波特率档位名（BaudrateConfig档位名）；越界或为空时返回""（查档函数自动解释为模式默认档）</summary>
+        public static string GetChannelBaudName(int index)
+        {
+            if (index < 0 || index >= BusChannels.Count) return "";
+            return string.IsNullOrEmpty(BusChannels[index].Baudrate) ? "" : BusChannels[index].Baudrate;
+        }
+
+        /// <summary>通道行经典CAN档位（按行波特率名查表，空名→默认500K）</summary>
+        public static BaudrateConfig.ClassicPreset GetChannelClassicPreset(int index)
+            => BaudrateConfig.GetClassicPreset(GetChannelBaudName(index));
+
+        /// <summary>通道行CAN FD档位（按行波特率名查表，空名→默认500K+2M）</summary>
+        public static BaudrateConfig.FdPreset GetChannelFdPreset(int index)
+            => BaudrateConfig.GetFdPreset(GetChannelBaudName(index));
+
         /// <summary>按逻辑通道号取该通道的DBC解析实例；越界或未配置时返回 null（调用方回退聚合视图）</summary>
         public static DbcHelper GetDbcHelperByChannel(byte logicChannel)
         {
@@ -231,7 +268,7 @@ namespace PCAN_Client
             {
                 var list = BusChannels
                     .Select(ch => new BusChannelConfig(ch.Name, ch.BlfChannelId, ch.DbcFilePath ?? "")
-                    { HwChannel = ch.HwChannel, HwType = ch.HwType ?? "" })
+                    { HwChannel = ch.HwChannel, HwType = ch.HwType ?? "", CanFd = ch.CanFd, Baudrate = ch.Baudrate ?? "" })
                     .ToList();
                 string json = Newtonsoft.Json.JsonConvert.SerializeObject(list, Newtonsoft.Json.Formatting.Indented);
                 File.WriteAllText(BusChannelsConfigPath, json);
@@ -260,6 +297,8 @@ namespace PCAN_Client
                     var ch = new CanBusChannel(cfg.Name, cfg.BlfChannelId, cfg.DbcFilePath ?? "");
                     ch.HwChannel = cfg.HwChannel; // 旧配置无此字段时为0，EffectiveHwChannel自动跟随逻辑通道号
                     ch.HwType = cfg.HwType ?? ""; // 旧配置无此字段时为空，连接时按设备类型认领
+                    ch.CanFd = cfg.CanFd;             // 旧配置无此字段时为false=经典CAN
+                    ch.Baudrate = cfg.Baudrate ?? ""; // 旧配置无此字段时为空，按模式默认档解释
                     if (!string.IsNullOrWhiteSpace(ch.DbcFilePath) && File.Exists(ch.DbcFilePath))
                     {
                         try

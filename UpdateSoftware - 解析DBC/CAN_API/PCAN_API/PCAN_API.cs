@@ -1,4 +1,4 @@
-﻿using PCAN_Client.CAN_API;
+using PCAN_Client.CAN_API;
 using PCAN_Client.UTIL;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
@@ -84,11 +84,10 @@ namespace PCAN_Client.PCAN_API
 
         /// <summary>
         /// 多通道批量连接：按通道配置（BusChannels）中各通道绑定的硬件通道批量Initialize，
-        /// 任一成功即启动接收；返回成功连接的通道数
+        /// 每路按各自 CAN/CANFD 模式与波特率档位初始化；任一成功即启动接收；返回成功连接的通道数
         /// </summary>
-        public int ConnectMulti(bool canFDFlag)
+        public int ConnectMulti()
         {
-            this.CanFDFlag = canFDFlag;
             _connectedChannels.Clear();
             PCAN_ReceiveThreadAlive = 0;
 
@@ -102,9 +101,10 @@ namespace PCAN_Client.PCAN_API
                 ushort handle = PCAN_DeviceChannelBuf[hw - 1];
 
                 PCANBasic.Uninitialize(handle);
-                TPCANStatus result = canFDFlag
-                    ? PCANBasic.InitializeFD(handle, bitrateFD)
-                    : PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
+                TPCANStatus result = BaseParamter.GetChannelCanFd(i)
+                    ? PCANBasic.InitializeFD(handle, BaudrateConfig.BuildPcanFdBitrateString(
+                        BaseParamter.GetChannelFdPreset(i).ArbBaud, BaseParamter.GetChannelFdPreset(i).DataBaud))
+                    : PCANBasic.Initialize(handle, BaseParamter.GetChannelClassicPreset(i).PcanBaud, (TPCANType)0, 0, 0);
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
                     _connectedChannels[BaseParamter.GetLogicChannel(i)] = handle; // key=配置通道号（接收轮询按此上报）
@@ -140,19 +140,19 @@ namespace PCAN_Client.PCAN_API
             return _connectedChannels.ContainsValue(PCAN_DeviceChannelBuf[hw - 1]);
         }
 
-        /// <summary>增量连接单个逻辑通道（多通道模式）：Initialize该行绑定的硬件句柄并加入已连接字典；首个通道连接时启动接收调度</summary>
-        internal bool ConnectOne(int logicIndex, bool canFDFlag)
+        /// <summary>增量连接单个逻辑通道（多通道模式）：按该行 CAN/CANFD 模式与波特率档位Initialize绑定的硬件句柄并加入已连接字典；首个通道连接时启动接收调度</summary>
+        internal bool ConnectOne(int logicIndex)
         {
             if (logicIndex < 0 || logicIndex >= BaseParamter.BusChannels.Count) return false;
-            this.CanFDFlag = canFDFlag;
             byte hw = BaseParamter.GetEffectiveHwChannel(logicIndex);
             if (hw < 1 || hw > 16) return false;
             ushort handle = PCAN_DeviceChannelBuf[hw - 1];
 
             PCANBasic.Uninitialize(handle);
-            TPCANStatus result = canFDFlag
-                ? PCANBasic.InitializeFD(handle, bitrateFD)
-                : PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
+            TPCANStatus result = BaseParamter.GetChannelCanFd(logicIndex)
+                ? PCANBasic.InitializeFD(handle, BaudrateConfig.BuildPcanFdBitrateString(
+                    BaseParamter.GetChannelFdPreset(logicIndex).ArbBaud, BaseParamter.GetChannelFdPreset(logicIndex).DataBaud))
+                : PCANBasic.Initialize(handle, BaseParamter.GetChannelClassicPreset(logicIndex).PcanBaud, (TPCANType)0, 0, 0);
             if (TPCANStatus.PCAN_ERROR_OK != result)
             {
                 System.Diagnostics.Debug.WriteLine($"[PCAN] 通道{BaseParamter.BusChannels[logicIndex].Name}(USB_{hw})连接失败: {result}");
@@ -331,11 +331,12 @@ namespace PCAN_Client.PCAN_API
             // 数据长度超过64字节，默认使用最大DLC值
             return 15;
         }
-        /// <summary>发送数据。channel为逻辑通道号：多通道连接时路由到对应句柄，未连接该通道时回退当前单连接句柄</summary>
+        /// <summary>发送数据。channel为逻辑通道号：多通道连接时路由到对应句柄，未连接该通道时回退当前单连接句柄；
+        /// FD 格式按该通道配置判定（单通道兼容场景回退全局默认模式）</summary>
         internal TPCANStatus PCAN_SendData(TPCANMsg tPCANMsg, byte channel = 1)
         {
             ushort handle = GetHandleForChannel(channel);
-            if (CanFDFlag)
+            if (BaseParamter.GetChannelCanFdByLogic(channel))
             {
                 TPCANMsgFD tPCANMsgFD = new TPCANMsgFD();
                 tPCANMsgFD.DATA = new byte[64];
@@ -451,7 +452,7 @@ namespace PCAN_Client.PCAN_API
                             bool anyData = false;
                             foreach (var kv in api._connectedChannels)
                             {
-                                if (api.CanFDFlag)
+                                if (BaseParamter.GetChannelCanFdByLogic(kv.Key)) // kv.Key=逻辑通道号，按该通道模式选择读取API
                                 {
                                     result = PCANBasic.ReadFD(kv.Value, out msgFD, out TimestampBuffer);
                                 }
@@ -461,7 +462,7 @@ namespace PCAN_Client.PCAN_API
                                 }
                                 if (TPCANStatus.PCAN_ERROR_OK != result) continue;
                                 anyData = true;
-                                if (api.CanFDFlag)
+                                if (BaseParamter.GetChannelCanFdByLogic(kv.Key))
                                 {
                                     time_us = (long)TimestampBuffer;
                                     lock (CAN_API.CAN_API._receiveCanDataLock)

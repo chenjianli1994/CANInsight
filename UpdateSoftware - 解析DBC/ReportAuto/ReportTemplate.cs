@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -38,6 +38,8 @@ namespace PCAN_Client.ReportAuto
         public byte BlfChannelId;     // 通道号（记录文件通道字段：实时=导出编号，报文=回放映射键；可编辑）
         public byte HwChannel;        // 绑定的物理硬件通道号（0=跟随逻辑通道号，兼容旧配置）
         public string HwType;         // 绑定的硬件类型（"PCAN"/"CANoe"，空=未指定，兼容旧配置）
+        public bool CanFd;            // 通道 CAN 模式：true=CAN FD（旧配置反序列化缺字段 → false，兼容）
+        public string Baudrate;       // 波特率档位名（旧配置缺字段 → null，按默认档解释）
         public string DbcFilePath;    // DBC文件路径
 
         public BusChannelConfig() { }
