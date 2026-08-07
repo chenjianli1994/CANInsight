@@ -30,24 +30,36 @@ namespace PCAN_Client.LIN_API
         // ==================== 枚举 ====================
 
         /// <summary>
-        /// 枚举系统内全部 PEAK LIN 通道，返回 "{硬件名}:LIN{通道号}" 列表
+        /// 枚举系统内全部 PEAK LIN 通道，返回 "{硬件名}:LIN{通道号}" 列表与错误说明（空=成功）
+        /// 错误码 1002（errManagerNotLoaded）说明 PEAK 驱动未安装 PLIN Manager 组件
         /// </summary>
-        public static List<string> EnumerateChannels()
+        public static Tuple<List<string>, string> EnumerateChannels()
         {
             var result = new List<string>();
-            ushort count = 0;
-            LinPlError err = LinPlApi.GetAvailableHardware(null, 0, out count);
-            if (err != LinPlError.errOK || count == 0) return result;
-            var handles = new ushort[count];
-            err = LinPlApi.GetAvailableHardware(handles, (ushort)(count * 2), out count);
-            if (err != LinPlError.errOK) return result;
-            for (int i = 0; i < count; i++)
+            try
             {
-                string name = GetHwName(handles[i]);
-                int ch = GetHwChannelNumber(handles[i]);
-                result.Add($"{name}:LIN{ch}");
+                ushort count = 0;
+                LinPlError err = LinPlApi.GetAvailableHardware(null, 0, out count);
+                if (err != LinPlError.errOK)
+                    return Tuple.Create(result, LinPlErrorCodes.ToChinese(err));
+                if (count == 0)
+                    return Tuple.Create(result, "未找到 PEAK LIN 硬件（确认硬件为带 LIN 通道的型号且已连接）");
+                var handles = new ushort[count];
+                err = LinPlApi.GetAvailableHardware(handles, (ushort)(count * 2), out count);
+                if (err != LinPlError.errOK)
+                    return Tuple.Create(result, LinPlErrorCodes.ToChinese(err));
+                for (int i = 0; i < count; i++)
+                {
+                    string name = GetHwName(handles[i]);
+                    int ch = GetHwChannelNumber(handles[i]);
+                    result.Add($"{name}:LIN{ch}");
+                }
             }
-            return result;
+            catch (Exception ex)
+            {
+                return Tuple.Create(result, "PLinApi 枚举异常: " + ex.Message);
+            }
+            return Tuple.Create(result, "");
         }
 
         private static string GetHwName(ushort hw)

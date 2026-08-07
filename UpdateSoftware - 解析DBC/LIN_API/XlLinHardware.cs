@@ -34,14 +34,15 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 枚举 ====================
 
-        /// <summary>枚举系统内全部 Vector LIN 通道，返回 "ch {index}" 列表</summary>
-        public static List<string> EnumerateChannels()
+        /// <summary>枚举系统内全部 Vector LIN 通道，返回 "ch {index}" 列表与错误说明（空=成功）</summary>
+        public static Tuple<List<string>, string> EnumerateChannels()
         {
             var result = new List<string>();
             try
             {
                 var driver = new XLDriver();
-                if (driver.XL_OpenDriver() != XLDefine.XL_Status.XL_SUCCESS) return result;
+                if (driver.XL_OpenDriver() != XLDefine.XL_Status.XL_SUCCESS)
+                    return Tuple.Create(result, "打开 Vector XL 驱动失败（驱动未安装或无 Vector 硬件）");
                 try
                 {
                     var cfg = new XLClass.xl_driver_config();
@@ -61,8 +62,13 @@ namespace PCAN_Client.LIN_API
                     driver.XL_CloseDriver();
                 }
             }
-            catch { }
-            return result;
+            catch (Exception ex)
+            {
+                return Tuple.Create(result, "XL 枚举异常: " + ex.Message);
+            }
+            if (result.Count == 0)
+                return Tuple.Create(result, "未找到 Vector LIN 通道（无 Vector 硬件或通道未配置为 LIN）");
+            return Tuple.Create(result, "");
         }
 
         // ==================== 连接/断开 ====================

@@ -16,9 +16,14 @@ namespace PCAN_Client.LIN_UI
     internal class LinChannelManagerForm : Form
     {
         private DataGridView _dgv;
-        private readonly List<string> _pcanChannels = new List<string>();
-        private readonly List<string> _xlChannels = new List<string>();
-        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave, _btnClose;
+        // 硬件枚举结果缓存（静态：同一进程内多次打开对话框不重复枚举；60 秒有效期）
+        private static List<string> _pcanChannels = new List<string>();
+        private static List<string> _xlChannels = new List<string>();
+        private static string _pcanError = "";
+        private static string _xlError = "";
+        private static DateTime _enumStamp = DateTime.MinValue;
+        private static readonly object _enumLock = new object();
+        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave, _btnClose, _btnRefresh;
 
         public LinChannelManagerForm()
         {
@@ -31,9 +36,8 @@ namespace PCAN_Client.LIN_UI
             MinimizeBox = false;
             UiTheme.StyleForm(this);
 
-            // 打开时枚举硬件（失败留空，行内下拉无选项）
-            try { _pcanChannels.AddRange(PcanLinHardware.EnumerateChannels()); } catch { }
-            try { _xlChannels.AddRange(XlLinHardware.EnumerateChannels()); } catch { }
+            // 后台异步枚举硬件（不阻塞 UI；完成回调填充下拉并显示错误原因）
+            EnsureEnumerated();
 
             // 说明行
             var lbl = new Label
@@ -100,12 +104,15 @@ namespace PCAN_Client.LIN_UI
             _btnConnectAll.Click += (s, e) => ConnectAll();
             _btnDisconnectAll = MakeButton("全部断开", new Point(800, 375));
             _btnDisconnectAll.Click += (s, e) => DisconnectAll();
+            _btnRefresh = MakeButton("刷新硬件", new Point(596, 375));
+            _btnRefresh.Click += (s, e) => { lock (_enumLock) _enumStamp = DateTime.MinValue; EnsureEnumerated(); };
             _btnSave = MakeButton("保存", new Point(900, 375));
             _btnSave.Click += (s, e) => SaveConfig();
             _btnClose = MakeButton("关闭", new Point(972, 375));
             _btnClose.Click += (s, e) => { SaveConfig(); DialogResult = DialogResult.OK; Close(); };
             Controls.Add(_btnAdd); Controls.Add(_btnDelete); Controls.Add(_btnConnectAll);
-            Controls.Add(_btnDisconnectAll); Controls.Add(_btnSave); Controls.Add(_btnClose);
+            Controls.Add(_btnDisconnectAll); Controls.Add(_btnRefresh);
+            Controls.Add(_btnSave); Controls.Add(_btnClose);
 
             LoadRows();
         }
@@ -119,6 +126,44 @@ namespace PCAN_Client.LIN_UI
         }
 
         // ==================== 行数据 ====================
+
+        /// <summary>
+        /// 确保硬件枚举结果就绪：缓存未过期直接用；否则后台线程枚举，完成回调 UI 填充。
+        /// 枚举失败时在对应硬件通道下拉显示具体原因（如 PLIN 管理器未运行）。
+        /// </summary>
+        private void EnsureEnumerated()
+        {
+            lock (_enumLock)
+            {
+                if ((DateTime.Now - _enumStamp).TotalSeconds < 60 && (_pcanChannels.Count > 0 || _xlChannels.Count > 0 || _pcanError.Length > 0 || _xlError.Length > 0))
+                    return;
+                _enumStamp = DateTime.Now; // 占位：防并发重复枚举（失败也缓存 60s，可点刷新重试）
+                _pcanChannels = new List<string>();
+                _xlChannels = new List<string>();
+                _pcanError = "";
+                _xlError = "";
+            }
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var pcan = PcanLinHardware.EnumerateChannels();
+                var xl = XlLinHardware.EnumerateChannels();
+                lock (_enumLock)
+                {
+                    _pcanChannels = pcan.Item1;
+                    _pcanError = pcan.Item2;
+                    _xlChannels = xl.Item1;
+                    _xlError = xl.Item2;
+                }
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        foreach (DataGridViewRow row in _dgv.Rows) RefreshHwCombo(row);
+                    }));
+                }
+                catch { }
+            });
+        }
 
         private void LoadRows()
         {
@@ -167,8 +212,15 @@ namespace PCAN_Client.LIN_UI
             var cell = (DataGridViewComboBoxCell)row.Cells["colHw"];
             cell.Items.Clear();
             bool pcan = RowChannel(row).HwType == LinConfig.HwTypePcan;
-            foreach (var c in pcan ? _pcanChannels : _xlChannels) cell.Items.Add(c);
-            if (cell.Items.Count == 0) cell.Items.Add("(未检测到硬件)");
+            var list = pcan ? _pcanChannels : _xlChannels;
+            var err = pcan ? _pcanError : _xlError;
+            foreach (var c in list) cell.Items.Add(c);
+            if (cell.Items.Count == 0)
+            {
+                // 无通道：显示具体原因（PLIN 管理器未运行等），便于用户诊断
+                cell.Items.Add(err.Length > 0 ? "(枚举失败: " + err + ")" : "(未检测到硬件)");
+                cell.ToolTipText = err;
+            }
         }
 
         private void AddChannelRow()
