@@ -193,11 +193,11 @@ namespace PCAN_Client
                 RefreshAllConnButtons();
                 RefreshPreview();
             };
-            // === LIN 页签：通道管理面板（自包含枚举/保存/连接，含与 CAN 冲突检测）===
-            _linPanel = new PCAN_Client.LIN_UI.LinChannelPanel();
-            _linPanel.Location = new Point(0, 0);
-            _linPanel.Size = new Size(1020, 520);
-            _tabLin.Controls.Add(_linPanel);
+            // === LIN 页签：通道管理面板懒创建（首次切到 LIN 页签才创建/枚举，避免打开对话框即触发 LIN 硬件枚举拖慢 CAN 识别）===
+            _tabMain.Selecting += (s, e) =>
+            {
+                if (e.TabPageIndex == 1) EnsureLinPanel();
+            };
 
             this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
         }
@@ -205,7 +205,18 @@ namespace PCAN_Client
         /// <summary>切换到 LIN 页签（LIN 监控窗口的通道管理入口用）</summary>
         public void SelectLinTab()
         {
+            EnsureLinPanel();
             _tabMain.SelectedIndex = 1;
+        }
+
+        /// <summary>首次切到 LIN 页签时创建面板（自包含枚举/保存/连接，含与 CAN 冲突检测）</summary>
+        private void EnsureLinPanel()
+        {
+            if (_linPanel != null) return;
+            _linPanel = new PCAN_Client.LIN_UI.LinChannelPanel();
+            _linPanel.Location = new Point(0, 0);
+            _linPanel.Size = new Size(1020, 520);
+            _tabLin.Controls.Add(_linPanel);
         }
 
         /// <summary>后台异步刷新硬件识别（PCAN试开16槽位约1-2秒，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>

@@ -85,6 +85,9 @@ namespace PCAN_Client.LIN_UI
             _dgv.Columns.Add(colOp);
 
             _dgv.CellFormatting += Dgv_CellFormatting;
+            // 防 DataGridView 默认错误弹窗：异步枚举完成前行的 HwHandle 可能不在下拉 Items 中，
+            // DataError 静默处理（RefreshHwCombo 已保证保存值会被追加回 Items）
+            _dgv.DataError += (s, e) => { e.ThrowException = false; };
             _dgv.CellClick += Dgv_CellClick;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CurrentCellDirtyStateChanged += (s, e) =>
@@ -214,6 +217,10 @@ namespace PCAN_Client.LIN_UI
             var list = pcan ? _pcanChannels : _xlChannels;
             var err = pcan ? _pcanError : _xlError;
             foreach (var c in list) cell.Items.Add(c);
+            // 已保存的 HwHandle 不在枚举结果（异步未完成/硬件未插）时也保留在列表，避免 ComboBox 值无效
+            string current = RowChannel(row).HwHandle;
+            if (current.Length > 0 && !cell.Items.Contains(current))
+                cell.Items.Add(current + (cell.Items.Count == 0 ? " (未检测到)" : " (未在线)"));
             if (cell.Items.Count == 0)
             {
                 // 无通道：显示具体原因（PLIN 管理器未运行等），便于用户诊断
@@ -419,8 +426,12 @@ namespace PCAN_Client.LIN_UI
                     UpdateConflict(row);
                     break;
                 case "colHw":
-                    ch.HwHandle = (v ?? "").ToString();
-                    UpdateConflict(row);
+                    string hwSel = (v ?? "").ToString();
+                    if (!hwSel.StartsWith("(", StringComparison.Ordinal)) // 占位提示项不写回
+                    {
+                        ch.HwHandle = hwSel;
+                        UpdateConflict(row);
+                    }
                     break;
                 case "colMode":
                     ch.Mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
