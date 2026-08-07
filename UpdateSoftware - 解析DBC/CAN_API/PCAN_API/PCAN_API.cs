@@ -36,6 +36,12 @@ namespace PCAN_Client.PCAN_API
         //[DllImport("winmm")]
         //static extern void timeEndPeriod(int t);
 
+        /// <summary>空槽位缓存：最近识别为 ILLHW（无硬件）的槽位 30 秒内跳过重试。
+        /// 真实设备 Initialize 耗时 0.2~10 秒（USB 枚举），驱动缓存约 30 秒过期后重复变慢；
+        /// 跳过已知空槽可把识别从 10~26 秒降到 1 秒内。设备插拔后 30 秒自动恢复探测。</summary>
+        private static readonly Dictionary<ushort, DateTime> _illHwCache = new Dictionary<ushort, DateTime>();
+        private static readonly object _illHwLock = new object();
+
         ushort[] PCAN_DeviceChannelBuf = new ushort[16]
         {
             PCANBasic.PCAN_USBBUS1,
@@ -203,6 +209,12 @@ namespace PCAN_Client.PCAN_API
                     PCAN_Channel.Add("USB_" + (i + 1) + "(已连接)");
                     continue;
                 }
+                // 空槽缓存命中（30 秒内识别为无硬件）→ 直接跳过，不做耗时的驱动探测
+                lock (_illHwLock)
+                {
+                    if (_illHwCache.TryGetValue(handle, out DateTime t) && (DateTime.Now - t).TotalSeconds < 30)
+                        continue;
+                }
                 System.Diagnostics.Stopwatch swSlot = System.Diagnostics.Stopwatch.StartNew();
                 TPCANStatus result = PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
                 swSlot.Stop();
@@ -211,17 +223,20 @@ namespace PCAN_Client.PCAN_API
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
                     // 初始化成功：通道存在且空闲（还原释放）
+                    lock (_illHwLock) _illHwCache.Remove(handle); // 设备在位，清空槽缓存
                     PCAN_Channel.Add("USB_" + (i + 1) + "(空闲)");
                     PCANBasic.Uninitialize(handle);
                 }
                 else if (TPCANStatus.PCAN_ERROR_HWINUSE == result)
                 {
                     // 通道存在但被其他程序占用
+                    lock (_illHwLock) _illHwCache.Remove(handle);
                     PCAN_Channel.Add("USB_" + (i + 1) + "(已占用)");
                 }
                 else
                 {
-                    // ILLHW/INITIALIZE等：该槽位无硬件，跳过继续探测后续序号
+                    // ILLHW/INITIALIZE等：该槽位无硬件，记入 30 秒空槽缓存，跳过继续探测后续序号
+                    lock (_illHwLock) _illHwCache[handle] = DateTime.Now;
                 }
             }
             Delay.stop();
