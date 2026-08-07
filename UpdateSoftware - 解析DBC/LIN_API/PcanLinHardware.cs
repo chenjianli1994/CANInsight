@@ -122,9 +122,21 @@ namespace PCAN_Client.LIN_API
                 if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
 
                 // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
+                // 按官方示例：仅当硬件未初始化（modNone）或波特率不同时才调用，
+                // 避免重初始化其他客户端正在使用的连接
                 LinPlHardwareMode mode = _cfg.Mode == LinNodeMode.Master ? LinPlHardwareMode.modMaster : LinPlHardwareMode.modSlave;
-                err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
-                if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                int hwMode = -1, hwBaud = -1;
+                LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpMode, out hwMode, 4);
+                LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpBaudrate, out hwBaud, 4);
+                if ((LinPlHardwareMode)hwMode == LinPlHardwareMode.modNone || hwBaud != (int)_cfg.Baudrate)
+                {
+                    err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
+                    if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                }
+
+                // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧）
+                err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
+                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
 
                 // 接收全部帧 ID（0-63）
                 err = LinPlApi.RegisterFrameId(_client, _hw, 0, LinPlApi.LIN_MAX_FRAME_ID);
