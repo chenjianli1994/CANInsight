@@ -1652,10 +1652,13 @@ namespace PCAN_Client
             var itemSend = new ToolStripButton("发送报文", ToolbarIcons.Get("swap"));
             itemSend.Alignment = ToolStripItemAlignment.Right;
             itemSend.Click += SendMsg_Click;
+            var itemLin = new ToolStripButton("LIN 监控", ToolbarIcons.Get("wrench"));
+            itemLin.Alignment = ToolStripItemAlignment.Right;
+            itemLin.Click += (s, e) => new PCAN_Client.LIN_UI.LinMonitorForm().Show();
             _btnRecordStart = new ToolStripButton("录制报文", ToolbarIcons.Get("save"));
             _btnRecordStart.Alignment = ToolStripItemAlignment.Right;
             _btnRecordStart.Click += button3_Click;
-            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, _btnRecordStart });
+            _connectionStrip.Items.AddRange(new ToolStripItem[] { itemConvert, itemChart, itemSend, itemLin, _btnRecordStart });
 
             this.Controls.Add(_connectionStrip);
             _connectionStrip.BringToFront();
@@ -2064,6 +2067,8 @@ namespace PCAN_Client
 
             // 启动恢复通道配置（DBC唯一数据源），并刷新聚合视图供报文列表/发送使用
             BaseParamter.LoadBusChannelsConfig();
+            // 启动恢复 LIN 通道配置（独立于 CAN，LinChannels.json）
+            LIN_API.LinConfig.LoadLinConfig();
 
             // 恢复上次关闭前的绘图信号列表（含未点"保存工况"的改动）；
             // 必须在LoadBusChannelsConfig之后——BusChannels整体替换会新建DBC对象，提前恢复的标志位会被冲掉

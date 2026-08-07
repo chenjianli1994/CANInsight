@@ -322,6 +322,19 @@
     <Compile Include="CAN_Data\DbcHelper.cs" />
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
     <Compile Include="CAN_Data\FileLoader.cs" />
+    <Compile Include="LIN_API\LinChecksum.cs" />
+    <Compile Include="LIN_API\LinFrameRecord.cs" />
+    <Compile Include="LIN_API\LinChannel.cs" />
+    <Compile Include="LIN_API\LinConfig.cs" />
+    <Compile Include="LIN_API\LinLdfHelper.cs" />
+    <Compile Include="LIN_API\PLinApi.cs" />
+    <Compile Include="LIN_API\PLinErrorCodes.cs" />
+    <Compile Include="LIN_API\PcanLinHardware.cs" />
+    <Compile Include="LIN_API\XlLinHardware.cs" />
+    <Compile Include="LIN_API\Lin_API.cs" />
+    <Compile Include="LIN_API\LinScheduler.cs" />
+    <Compile Include="LIN_UI\LinChannelManagerForm.cs" />
+    <Compile Include="LIN_UI\LinMonitorForm.cs" />
     <Compile Include="Chart\ChannelData.cs" />
     <Compile Include="Chart\ChartControl.cs">
       <SubType>Component</SubType>
@@ -465,6 +478,7 @@
     <EmbeddedResource Include="Lib\PCANBasic.NET.dll" />
     <Content Include="icon.ico" />
     <EmbeddedResource Include="costura-win-x64\binlog.dll" />
+    <EmbeddedResource Include="costura-win-x64\PLinApi.dll" />
     <EmbeddedResource Include="Lib\CSScriptLibrary.dll" />
     <Content Include="ReportAuto\templates\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

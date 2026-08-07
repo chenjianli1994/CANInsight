@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -88,31 +88,43 @@ namespace PCAN_Client
             try
             {
                 Assembly assembly = Assembly.GetExecutingAssembly();
-                string resourceName = null;
-                foreach (string name in assembly.GetManifestResourceNames())
+                // (资源名后缀, 目标文件名)：新增原生库在此追加
+                string[][] nativeLibs =
                 {
-                    if (name.EndsWith("costura_win_x64.binlog.dll", StringComparison.OrdinalIgnoreCase))
-                    {
-                        resourceName = name;
-                        break;
-                    }
-                }
-                if (resourceName == null) return;
-
+                    new[] { "costura_win_x64.binlog.dll", "binlog.dll" },
+                    new[] { "costura_win_x64.plinapi.dll", "PLinApi.dll" },
+                };
                 string nativeDir = Path.Combine(Path.GetTempPath(), "CANInsight", "native");
-                Directory.CreateDirectory(nativeDir);
-                string nativePath = Path.Combine(nativeDir, "binlog.dll");
-                using (Stream source = assembly.GetManifestResourceStream(resourceName))
+                bool anyExtracted = false;
+                foreach (string[] lib in nativeLibs)
                 {
-                    if (source == null) return;
-                    if (!File.Exists(nativePath) || new FileInfo(nativePath).Length != source.Length)
+                    string resourceName = null;
+                    foreach (string name in assembly.GetManifestResourceNames())
                     {
-                        using (var target = new FileStream(nativePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                        if (name.EndsWith(lib[0], StringComparison.OrdinalIgnoreCase))
                         {
-                            source.CopyTo(target);
+                            resourceName = name;
+                            break;
                         }
                     }
+                    if (resourceName == null) continue;
+
+                    Directory.CreateDirectory(nativeDir);
+                    string nativePath = Path.Combine(nativeDir, lib[1]);
+                    using (Stream source = assembly.GetManifestResourceStream(resourceName))
+                    {
+                        if (source == null) continue;
+                        if (!File.Exists(nativePath) || new FileInfo(nativePath).Length != source.Length)
+                        {
+                            using (var target = new FileStream(nativePath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                            {
+                                source.CopyTo(target);
+                            }
+                        }
+                    }
+                    anyExtracted = true;
                 }
+                if (!anyExtracted) return;
 
                 string path = Environment.GetEnvironmentVariable("PATH") ?? "";
                 bool alreadyPresent = false;
@@ -131,7 +143,7 @@ namespace PCAN_Client
             }
             catch (Exception ex)
             {
-                Debug.WriteLine("[EmbeddedNative] 解压 binlog.dll 失败: " + ex.Message);
+                Debug.WriteLine("[EmbeddedNative] 解压原生库失败: " + ex.Message);
             }
         }
 
