@@ -109,7 +109,7 @@ namespace PCAN_Client
             _tabCan.Controls.Add(_lblHwStatus);
 
             var btnRefresh = new Button { Text = "刷新识别", Location = new Point(912, 10), Size = new Size(94, 32) };
-            btnRefresh.Click += (s, e) => RefreshHardwareAsync();
+            btnRefresh.Click += (s, e) => RefreshHardwareAsync(force: true); // 手动刷新绕过60秒结果缓存显式重查
             _tabCan.Controls.Add(btnRefresh);
 
             // === 中部：逻辑通道配置表格 ===
@@ -219,15 +219,15 @@ namespace PCAN_Client
             _tabLin.Controls.Add(_linPanel);
         }
 
-        /// <summary>后台异步刷新硬件识别（PCAN试开16槽位约1-2秒，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>
-        private void RefreshHardwareAsync()
+        /// <summary>后台异步刷新硬件识别（快路径毫秒级：在位查询+60秒结果缓存，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>
+        private void RefreshHardwareAsync(bool force = false)
         {
             if (_main == null || _detecting) return;
             _detecting = true;
             _lblHwStatus.Text = "正在识别硬件...";
             Task.Run(() =>
             {
-                try { _main.RefreshHardwareDetection(); } catch { /* 单个设备枚举失败不影响另一个 */ }
+                try { _main.RefreshHardwareDetection(force); } catch { /* 单个设备枚举失败不影响另一个 */ }
                 try
                 {
                     if (this.IsHandleCreated && !this.IsDisposed)

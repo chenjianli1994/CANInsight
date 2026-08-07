@@ -2227,7 +2227,7 @@ namespace PCAN_Client
             }
         }
 
-        private string GetPCAN_ComRefresh()
+        private string GetPCAN_ComRefresh(bool force = false)
         {
             Boolean flag = false;
             int channel = 0;
@@ -2239,7 +2239,7 @@ namespace PCAN_Client
             {
                 /* empty */
             }
-            List<string> PCAN_Channel = Main.main.pCAN_API.GetPCAN_ChannelRefresh();
+            List<string> PCAN_Channel = Main.main.pCAN_API.GetPCAN_ChannelRefresh(force);
             _lastPcanHwList = ParsePcanHwList(PCAN_Channel); // 结构化识别缓存（通道管理窗口数据源）
             if(comboBox1.Items.Count == PCAN_Channel.Count)
             {
@@ -2502,11 +2502,11 @@ namespace PCAN_Client
         /// <summary>当前识别到的CANoe硬件通道（结构化副本，供通道管理窗口使用）</summary>
         internal List<HwChannelInfo> CanoeHwChannels => new List<HwChannelInfo>(_lastCanoeHwList);
 
-        /// <summary>主动刷新两类硬件识别（供通道管理窗口"刷新识别"按钮）</summary>
-        internal void RefreshHardwareDetection()
+        /// <summary>主动刷新两类硬件识别（供通道管理窗口"刷新识别"按钮；force=true 时绕过60秒结果缓存显式重查）</summary>
+        internal void RefreshHardwareDetection(bool force = false)
         {
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-            GetPCAN_ComRefresh();
+            GetPCAN_ComRefresh(force);
             long pc = sw.ElapsedMilliseconds;
             GetCanoe_ComRefresh();
             sw.Stop();
