@@ -2505,8 +2505,19 @@ namespace PCAN_Client
         /// <summary>主动刷新两类硬件识别（供通道管理窗口"刷新识别"按钮）</summary>
         internal void RefreshHardwareDetection()
         {
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             GetPCAN_ComRefresh();
+            long pc = sw.ElapsedMilliseconds;
             GetCanoe_ComRefresh();
+            sw.Stop();
+            try
+            {
+                string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CANInsight");
+                System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "detect_timing.log"),
+                    DateTime.Now.ToString("HH:mm:ss.fff") + " RefreshHardwareDetection PCAN=" + pc + "ms CANoe=" + (sw.ElapsedMilliseconds - pc) + "ms 合计=" + sw.ElapsedMilliseconds + "ms" + Environment.NewLine);
+            }
+            catch { }
         }
 
         /// <summary>打开统一通道管理窗口（硬件识别/通道配置/DBC/映射/连接一窗统管）</summary>

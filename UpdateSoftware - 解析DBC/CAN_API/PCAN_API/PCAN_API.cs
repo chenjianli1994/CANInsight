@@ -190,6 +190,8 @@ namespace PCAN_Client.PCAN_API
         {
             List<string> PCAN_Channel = new List<string>();
 
+            System.Diagnostics.Stopwatch swTotal = System.Diagnostics.Stopwatch.StartNew();
+            System.Text.StringBuilder slotLog = new System.Text.StringBuilder();
             Delay.start();
             // 直接探测全部16个USBBUS槽位：不依赖WMI计数（Description不一定含PCAN、驱动残留节点会虚报），
             // 且USBBUS序号可能不连续（设备按插入顺序占用编号），空槽位跳过继续探测
@@ -201,7 +203,11 @@ namespace PCAN_Client.PCAN_API
                     PCAN_Channel.Add("USB_" + (i + 1) + "(已连接)");
                     continue;
                 }
+                System.Diagnostics.Stopwatch swSlot = System.Diagnostics.Stopwatch.StartNew();
                 TPCANStatus result = PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
+                swSlot.Stop();
+                if (swSlot.ElapsedMilliseconds > 200)
+                    slotLog.Append("slot" + (i + 1) + "=" + swSlot.ElapsedMilliseconds + "ms(" + result + ") ");
                 if (TPCANStatus.PCAN_ERROR_OK == result)
                 {
                     // 初始化成功：通道存在且空闲（还原释放）
@@ -219,6 +225,15 @@ namespace PCAN_Client.PCAN_API
                 }
             }
             Delay.stop();
+            swTotal.Stop();
+            try
+            {
+                string logLine = DateTime.Now.ToString("HH:mm:ss.fff") + " PCAN16槽=" + swTotal.ElapsedMilliseconds + "ms 结果[" + string.Join(",", PCAN_Channel.ToArray()) + "] 慢槽[" + slotLog.ToString() + "]";
+                string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CANInsight");
+                System.IO.Directory.CreateDirectory(dir);
+                System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "detect_timing.log"), logLine + Environment.NewLine);
+            }
+            catch { }
             return PCAN_Channel;
         }
 
