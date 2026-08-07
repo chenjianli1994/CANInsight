@@ -105,8 +105,10 @@ namespace PCAN_Client.LIN_UI
             var btnChMgr = new ToolStripButton("通道管理", ToolbarIcons.Get("gear"));
             btnChMgr.Click += (s, e) =>
             {
-                using (var dlg = new LinChannelManagerForm())
+                // 统一通道管理入口：打开 Main 的通道管理对话框并切到 LIN 页签（与 CAN 同窗，冲突可见）
+                using (var dlg = new ChannelManagerForm(PCAN_Client.Main.main))
                 {
+                    dlg.SelectLinTab();
                     dlg.ShowDialog(this);
                 }
                 RefreshChannelCombo();

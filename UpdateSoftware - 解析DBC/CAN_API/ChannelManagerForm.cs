@@ -29,6 +29,10 @@ namespace PCAN_Client
         /// <summary>通道号列标题随模式切换：实时="通道号"，报文="BLF通道号"</summary>
         private string BlfColumnTitle => _realTimeMode ? "通道号" : "BLF通道号";
 
+        private TabControl _tabMain;
+        private TabPage _tabCan;
+        private TabPage _tabLin;
+        private PCAN_Client.LIN_UI.LinChannelPanel _linPanel;
         private Label _lblHwStatus;
         private DataGridView _dgv;
         private TextBox _txtPreview;
@@ -80,7 +84,15 @@ namespace PCAN_Client
         private void BuildUi()
         {
             this.Text = "通道管理";
-            this.ClientSize = new Size(1030, 564);
+            this.ClientSize = new Size(1030, 600);
+
+            // === 统一页签：CAN 通道（原内容）+ LIN 通道（嵌入 LinChannelPanel）===
+            _tabMain = new TabControl { Dock = DockStyle.Fill };
+            _tabCan = new TabPage("CAN 通道");
+            _tabLin = new TabPage("LIN 通道");
+            _tabMain.TabPages.Add(_tabCan);
+            _tabMain.TabPages.Add(_tabLin);
+            this.Controls.Add(_tabMain);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -94,11 +106,11 @@ namespace PCAN_Client
                 Size = new Size(500, 34),
                 Text = "PCAN: -   CANoe: -"
             };
-            this.Controls.Add(_lblHwStatus);
+            _tabCan.Controls.Add(_lblHwStatus);
 
             var btnRefresh = new Button { Text = "刷新识别", Location = new Point(912, 10), Size = new Size(94, 32) };
             btnRefresh.Click += (s, e) => RefreshHardwareAsync();
-            this.Controls.Add(btnRefresh);
+            _tabCan.Controls.Add(btnRefresh);
 
             // === 中部：逻辑通道配置表格 ===
             _dgv = new DataGridView
@@ -125,14 +137,14 @@ namespace PCAN_Client
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CellContentClick += Dgv_CellContentClick;
             _dgv.DataError += (s, e) => { e.ThrowException = false; }; // 重建数据源瞬间旧键值暂不在新列表时静默（随后立即重设）
-            this.Controls.Add(_dgv);
+            _tabCan.Controls.Add(_dgv);
 
             var btnAdd = new Button { Text = "添加通道", Location = new Point(12, 296), Size = new Size(96, 28) };
             btnAdd.Click += BtnAdd_Click;
-            this.Controls.Add(btnAdd);
+            _tabCan.Controls.Add(btnAdd);
             var btnRemove = new Button { Text = "删除通道", Location = new Point(116, 296), Size = new Size(96, 28) };
             btnRemove.Click += BtnRemove_Click;
-            this.Controls.Add(btnRemove);
+            _tabCan.Controls.Add(btnRemove);
 
             // === 映射预览（硬件视角，只读） ===
             var lblPreview = new Label
@@ -141,7 +153,7 @@ namespace PCAN_Client
                 Location = new Point(12, 332),
                 Size = new Size(400, 18)
             };
-            this.Controls.Add(lblPreview);
+            _tabCan.Controls.Add(lblPreview);
             _txtPreview = new TextBox
             {
                 Location = new Point(12, 352),
@@ -152,18 +164,18 @@ namespace PCAN_Client
                 Font = new Font("Consolas", 9F),
                 BackColor = SystemColors.Window
             };
-            this.Controls.Add(_txtPreview);
+            _tabCan.Controls.Add(_txtPreview);
 
             // === 底部：一键连接/断开所有通道 + 保存/关闭 ===
             _btnConnectAll = new Button { Text = "一键连接所有通道", Location = new Point(12, 516), Size = new Size(170, 36) };
             _btnConnectAll.Click += BtnConnectAll_Click;
-            this.Controls.Add(_btnConnectAll);
+            _tabCan.Controls.Add(_btnConnectAll);
 
             _btnSave = new Button { Text = "保存配置", Location = new Point(784, 516), Size = new Size(100, 36) };
             _btnSave.Click += (s, e) => SaveConfig(true, true); // 手动保存：已连接通道配置变化时按新参数自动重连
-            this.Controls.Add(_btnSave);
+            _tabCan.Controls.Add(_btnSave);
             var btnClose = new Button { Text = "关闭", Location = new Point(892, 516), Size = new Size(106, 36), DialogResult = DialogResult.Cancel };
-            this.Controls.Add(btnClose);
+            _tabCan.Controls.Add(btnClose);
             this.CancelButton = btnClose;
 
             // 连接动作异步执行（Main内BeginInvoke），用一次性Timer延迟刷新窗口状态（本地重算，不做硬件识别）
@@ -181,7 +193,19 @@ namespace PCAN_Client
                 RefreshAllConnButtons();
                 RefreshPreview();
             };
+            // === LIN 页签：通道管理面板（自包含枚举/保存/连接，含与 CAN 冲突检测）===
+            _linPanel = new PCAN_Client.LIN_UI.LinChannelPanel();
+            _linPanel.Location = new Point(0, 0);
+            _linPanel.Size = new Size(1020, 520);
+            _tabLin.Controls.Add(_linPanel);
+
             this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
+        }
+
+        /// <summary>切换到 LIN 页签（LIN 监控窗口的通道管理入口用）</summary>
+        public void SelectLinTab()
+        {
+            _tabMain.SelectedIndex = 1;
         }
 
         /// <summary>后台异步刷新硬件识别（PCAN试开16槽位约1-2秒，不阻塞UI），完成后重建绑定下拉选项（尽量保持各行原选择，不在位回退"不连接"）</summary>

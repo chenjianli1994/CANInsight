@@ -9,11 +9,12 @@ using PCAN_Client.util;
 namespace PCAN_Client.LIN_UI
 {
     /// <summary>
-    /// LIN 通道管理对话框：逻辑 LIN 通道与硬件绑定（独立于 CAN 通道配置）
+    /// LIN 通道管理面板（嵌入统一通道管理对话框的 LIN 页签）：
+    /// 逻辑 LIN 通道与硬件绑定（独立于 CAN 通道配置），配置持久化 LinChannels.json。
     /// 硬件枚举：PEAK 经 PLinApi（PCAN 硬件内置 LIN 通道，如 "PCAN-USB Pro FD:LIN0"）；
-    /// Vector 经 XL 驱动（"ch {index}"）。配置持久化 LinChannels.json。
+    /// Vector 经 XL 驱动（"ch {index}"）。与 CAN 的物理通道冲突检测：Vector 同 index 即冲突。
     /// </summary>
-    internal class LinChannelManagerForm : Form
+    internal class LinChannelPanel : UserControl
     {
         private DataGridView _dgv;
         // 硬件枚举结果缓存（静态：同一进程内多次打开对话框不重复枚举；60 秒有效期）
@@ -23,18 +24,12 @@ namespace PCAN_Client.LIN_UI
         private static string _xlError = "";
         private static DateTime _enumStamp = DateTime.MinValue;
         private static readonly object _enumLock = new object();
-        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave, _btnClose, _btnRefresh;
+        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave, _btnRefresh;
 
-        public LinChannelManagerForm()
+        public LinChannelPanel()
         {
-            Text = "LIN 通道管理";
-            Width = 1080;
-            Height = 480;
-            StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            UiTheme.StyleForm(this);
+            Dock = DockStyle.Fill;
+            Size = new Size(1000, 470);
 
             // 后台异步枚举硬件（不阻塞 UI；完成回调填充下拉并显示错误原因）
             EnsureEnumerated();
@@ -80,6 +75,9 @@ namespace PCAN_Client.LIN_UI
             _dgv.Columns.Add("colLdf", "LDF 文件");
             _dgv.Columns["colLdf"].Width = 300;
             _dgv.Columns["colLdf"].ReadOnly = true; // 路径只经浏览按钮选择（点击单元格触发）
+            _dgv.Columns.Add("colConflict", "与 CAN 冲突");
+            _dgv.Columns["colConflict"].Width = 170;
+            _dgv.Columns["colConflict"].ReadOnly = true;
             _dgv.Columns.Add("colStatus", "状态");
             _dgv.Columns["colStatus"].Width = 110;
             _dgv.Columns["colStatus"].ReadOnly = true;
@@ -108,11 +106,9 @@ namespace PCAN_Client.LIN_UI
             _btnRefresh.Click += (s, e) => { lock (_enumLock) _enumStamp = DateTime.MinValue; EnsureEnumerated(); };
             _btnSave = MakeButton("保存", new Point(900, 375));
             _btnSave.Click += (s, e) => SaveConfig();
-            _btnClose = MakeButton("关闭", new Point(972, 375));
-            _btnClose.Click += (s, e) => { SaveConfig(); DialogResult = DialogResult.OK; Close(); };
             Controls.Add(_btnAdd); Controls.Add(_btnDelete); Controls.Add(_btnConnectAll);
             Controls.Add(_btnDisconnectAll); Controls.Add(_btnRefresh);
-            Controls.Add(_btnSave); Controls.Add(_btnClose);
+            Controls.Add(_btnSave);
 
             LoadRows();
         }
@@ -145,8 +141,9 @@ namespace PCAN_Client.LIN_UI
             }
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
-                var pcan = PcanLinHardware.EnumerateChannels();
-                var xl = XlLinHardware.EnumerateChannels();
+                Tuple<List<string>, string> pcan = null, xl = null;
+                try { pcan = PcanLinHardware.EnumerateChannels(); } catch (Exception ex) { pcan = Tuple.Create(new List<string>(), "PLinApi 枚举异常: " + ex.Message); }
+                try { xl = XlLinHardware.EnumerateChannels(); } catch (Exception ex) { xl = Tuple.Create(new List<string>(), "XL 枚举异常: " + ex.Message); }
                 lock (_enumLock)
                 {
                     _pcanChannels = pcan.Item1;
@@ -185,11 +182,13 @@ namespace PCAN_Client.LIN_UI
                 ch.Mode == LinNodeMode.Master ? "主节点" : "从节点",
                 ch.Baudrate.ToString(),
                 ch.LdfPath,
+                "",
                 StatusText(ch),
                 "连接");
             _dgv.Rows.Add(row);
             RefreshHwCombo(row);
             UpdateRowStatus(row);
+            UpdateConflict(row);
         }
 
         private LinChannel RowChannel(DataGridViewRow row) => (LinChannel)row.Tag;
@@ -294,8 +293,56 @@ namespace PCAN_Client.LIN_UI
                 UpdateRowStatus(row);
                 return;
             }
+            // Vector 侧物理通道冲突拦截（同一 channelIndex 已被 CAN 占用时不可同时激活）
+            string conflict = GetConflictText(ch);
+            if (conflict != null)
+            {
+                MessageBox.Show(this, conflict + "\n请更换 LIN 通道或先断开对应 CAN 通道", "LIN 通道管理", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             string err = Lin_API.LinConnect(logicChannel);
             UpdateRowStatus(row);
+        }
+
+        /// <summary>
+        /// 与 CAN 配置的物理通道冲突检测：
+        /// Vector（XL 驱动）同一 channelIndex 被 CAN 与 LIN 同时激活即冲突（硬件单通道单总线）；
+        /// PEAK（PLinApi）LIN 通道与 CAN 通道物理独立（如 Pro FD 的 LIN0/1 与 CAN1/2），无冲突返回 null。
+        /// 返回 null = 无冲突；返回字符串 = 冲突描述（红色显示/连接拦截）。
+        /// </summary>
+        private static string GetConflictText(LinChannel ch)
+        {
+            if (ch == null || ch.HwType != LinConfig.HwTypeCanoe) return null;
+            int chIdx = -1;
+            if (ch.HwHandle.StartsWith("ch ", StringComparison.OrdinalIgnoreCase))
+                int.TryParse(ch.HwHandle.Substring(3).Trim(), out chIdx);
+            if (chIdx < 0) return null;
+            foreach (var can in BaseParamter.BusChannels)
+            {
+                if (can.HwType == BaseParamter.HwTypeCanoe && can.HwChannel == chIdx + 1 && can.HwChannel != 255)
+                {
+                    return $"⚠ 与 CAN 通道[{can.Name}] 冲突：同一物理通道 ch {chIdx} 已被 CAN 绑定";
+                }
+            }
+            return null;
+        }
+
+        /// <summary>刷新行的冲突列显示（红字警告 / 灰字"-"）</summary>
+        private void UpdateConflict(DataGridViewRow row)
+        {
+            var ch = RowChannel(row);
+            string conflict = GetConflictText(ch);
+            var cell = row.Cells["colConflict"];
+            if (conflict != null)
+            {
+                cell.Value = conflict;
+                cell.Style.ForeColor = Color.FromArgb(196, 43, 28);
+            }
+            else
+            {
+                cell.Value = "";
+                cell.Style.ForeColor = Color.Gray;
+            }
         }
 
         private void UpdateRowStatus(DataGridViewRow row)
@@ -369,9 +416,11 @@ namespace PCAN_Client.LIN_UI
                     ch.HwHandle = "";
                     row.Cells["colHw"].Value = "";
                     RefreshHwCombo(row);
+                    UpdateConflict(row);
                     break;
                 case "colHw":
                     ch.HwHandle = (v ?? "").ToString();
+                    UpdateConflict(row);
                     break;
                 case "colMode":
                     ch.Mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
