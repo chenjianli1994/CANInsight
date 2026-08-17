@@ -66,11 +66,11 @@ namespace PCAN_Client.LIN_UI
             btnRefresh.Click += (s, e) => EnsureEnumerated(force: true); // 手动刷新绕过60秒缓存显式重查（对齐CAN页签"刷新识别"）
             Controls.Add(btnRefresh);
 
-            // 通道表格
+            // 通道表格（对齐 CAN 页签：状态标签/刷新按钮下方；宽高不越界不重叠）
             _dgv = new DataGridView
             {
-                Location = new Point(12, 40),
-                Size = new Size(1040, 320),
+                Location = new Point(12, 52),
+                Size = new Size(996, 310),
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
@@ -208,8 +208,8 @@ namespace PCAN_Client.LIN_UI
             int pcanConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypePcan && c.IsConnected);
             int xlConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypeCanoe && c.IsConnected);
             _lblHwStatus.Text =
-                $"PLinApi: {(_pcanChannels.Count > 0 ? $"已识别{_pcanChannels.Count}路" : "未识别到设备")}（{pcanConn}路已连接）\r\n" +
-                $"XL: {(_xlChannels.Count > 0 ? $"已识别{_xlChannels.Count}路" : "未识别到设备")}（{xlConn}路已连接）";
+                $"PCAN: {(_pcanChannels.Count > 0 ? $"已识别{_pcanChannels.Count}路" : "未识别到设备")}（{pcanConn}路已连接）\r\n" +
+                $"CANoe: {(_xlChannels.Count > 0 ? $"已识别{_xlChannels.Count}路" : "未识别到设备")}（{xlConn}路已连接）";
             _toolTip.SetToolTip(_lblHwStatus, BuildHwStatusToolTip());
         }
 
@@ -217,9 +217,9 @@ namespace PCAN_Client.LIN_UI
         private string BuildHwStatusToolTip()
         {
             if (_pcanError.Length == 0 && _xlError.Length == 0) return "";
-            return (_pcanError.Length > 0 ? "PLinApi: " + _pcanError : "")
+            return (_pcanError.Length > 0 ? "PCAN: " + _pcanError : "")
                  + (_pcanError.Length > 0 && _xlError.Length > 0 ? "\r\n" : "")
-                 + (_xlError.Length > 0 ? "XL: " + _xlError : "");
+                 + (_xlError.Length > 0 ? "CANoe: " + _xlError : "");
         }
 
         /// <summary>识别中占位文案（不叠加刷新完成后的计数）</summary>
@@ -272,7 +272,7 @@ namespace PCAN_Client.LIN_UI
             foreach (var c in _pcanChannels)
                 items.Add(new LinHwBindItem { HwType = LinConfig.HwTypePcan, HwHandle = c, Display = "PCAN " + c });
             foreach (var c in _xlChannels)
-                items.Add(new LinHwBindItem { HwType = LinConfig.HwTypeCanoe, HwHandle = c, Display = "XL " + c });
+                items.Add(new LinHwBindItem { HwType = LinConfig.HwTypeCanoe, HwHandle = c, Display = "CANoe " + c });
             return items;
         }
 
