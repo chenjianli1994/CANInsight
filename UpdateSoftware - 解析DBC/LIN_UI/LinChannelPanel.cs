@@ -26,7 +26,21 @@ namespace PCAN_Client.LIN_UI
         private static string _xlError = "";
         private static DateTime _enumStamp = DateTime.MinValue;
         private static readonly object _enumLock = new object();
-        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave, _btnRefresh;
+        private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave;
+
+        /// <summary>绑定硬件下拉项（携带硬件类型+通道标识，选中即固化二元组；HwType=""表示不连接）</summary>
+        private class LinHwBindItem
+        {
+            // 注意：DisplayMember/ValueMember 数据绑定只认属性，必须是属性不能是字段
+            public string HwType { get; set; } = "";
+            public string HwHandle { get; set; } = "";
+            public string Display { get; set; } = "";
+            /// <summary>下拉ValueMember唯一键（"类型|通道标识"；HwHandle 可能含冒号故用"|"分隔）。cell.Value存此键字符串</summary>
+            public string Key => HwType + "|" + HwHandle;
+            public override string ToString() { return Display; }
+        }
+
+        private static readonly LinHwBindItem NotConnectItem = new LinHwBindItem { HwType = "", HwHandle = "", Display = "不连接" };
 
         public LinChannelPanel()
         {
@@ -47,6 +61,10 @@ namespace PCAN_Client.LIN_UI
             Controls.Add(_lblHwStatus);
             RefreshHwStatus();
 
+            var btnRefresh = new Button { Text = "刷新识别", Location = new Point(912, 10), Size = new Size(94, 32) };
+            btnRefresh.Click += (s, e) => EnsureEnumerated(force: true); // 手动刷新绕过60秒缓存显式重查（对齐CAN页签"刷新识别"）
+            Controls.Add(btnRefresh);
+
             // 通道表格
             _dgv = new DataGridView
             {
@@ -65,10 +83,17 @@ namespace PCAN_Client.LIN_UI
             // 列定义
             _dgv.Columns.Add("colName", "通道名");
             _dgv.Columns["colName"].Width = 90;
-            var colHwType = new DataGridViewComboBoxColumn { Name = "colHwType", HeaderText = "硬件类型", Width = 140 };
-            colHwType.Items.AddRange(new object[] { "PCAN (PLinApi)", "Vector XL (vxlapi)" });
-            _dgv.Columns.Add(colHwType);
-            _dgv.Columns.Add(new DataGridViewComboBoxColumn { Name = "colHw", HeaderText = "硬件通道", Width = 200 });
+            // 绑定硬件通道：不连接 + 已识别硬件单下拉（带类型前缀），选中即固化 HwType+HwHandle（对齐 CAN 页签）
+            var colHwBind = new DataGridViewComboBoxColumn
+            {
+                Name = "colHwBind",
+                HeaderText = "绑定硬件通道",
+                Width = 240,
+                DisplayMember = "Display",
+                ValueMember = "Key",
+                FlatStyle = FlatStyle.Flat
+            };
+            _dgv.Columns.Add(colHwBind);
             var colMode = new DataGridViewComboBoxColumn { Name = "colMode", HeaderText = "节点模式", Width = 90 };
             colMode.Items.AddRange(new object[] { "主节点", "从节点" });
             _dgv.Columns.Add(colMode);
@@ -78,18 +103,16 @@ namespace PCAN_Client.LIN_UI
             _dgv.Columns.Add("colLdf", "LDF 文件");
             _dgv.Columns["colLdf"].Width = 300;
             _dgv.Columns["colLdf"].ReadOnly = true; // 路径只经浏览按钮选择（点击单元格触发）
-            _dgv.Columns.Add("colConflict", "与 CAN 冲突");
-            _dgv.Columns["colConflict"].Width = 170;
-            _dgv.Columns["colConflict"].ReadOnly = true;
             _dgv.Columns.Add("colStatus", "状态");
             _dgv.Columns["colStatus"].Width = 110;
             _dgv.Columns["colStatus"].ReadOnly = true;
-            var colOp = new DataGridViewButtonColumn { Name = "colOp", HeaderText = "操作", Width = 80, ReadOnly = true, Text = "连接", UseColumnTextForButtonValue = true };
+            var colOp = new DataGridViewButtonColumn { Name = "colOp", HeaderText = "操作", Width = 80, ReadOnly = true, Text = "连接" };
+            // 注意：不能用 UseColumnTextForButtonValue=true（会忽略单元格 Value，导致"连接/断开/-"切换不显示）
             _dgv.Columns.Add(colOp);
 
             _dgv.CellFormatting += Dgv_CellFormatting;
-            // 防 DataGridView 默认错误弹窗：异步枚举完成前行的 HwHandle 可能不在下拉 Items 中，
-            // DataError 静默处理（RefreshHwCombo 已保证保存值会被追加回 Items）
+            // 防 DataGridView 默认错误弹窗：异步枚举完成前行绑定 Key 可能不在下拉 DataSource 中，
+            // DataError 静默处理（RebuildHwBindCellDataSource 已保证保存值会被回退/重建）
             _dgv.DataError += (s, e) => { e.ThrowException = false; };
             _dgv.CellClick += Dgv_CellClick;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
@@ -108,13 +131,10 @@ namespace PCAN_Client.LIN_UI
             _btnConnectAll.Click += (s, e) => ConnectAll();
             _btnDisconnectAll = MakeButton("全部断开", new Point(800, 375));
             _btnDisconnectAll.Click += (s, e) => DisconnectAll();
-            _btnRefresh = MakeButton("刷新识别", new Point(596, 375));
-            _btnRefresh.Click += (s, e) => EnsureEnumerated(force: true); // 手动刷新绕过60秒缓存显式重查（对齐CAN页签"刷新识别"）
             _btnSave = MakeButton("保存", new Point(900, 375));
             _btnSave.Click += (s, e) => SaveConfig();
             Controls.Add(_btnAdd); Controls.Add(_btnDelete); Controls.Add(_btnConnectAll);
-            Controls.Add(_btnDisconnectAll); Controls.Add(_btnRefresh);
-            Controls.Add(_btnSave);
+            Controls.Add(_btnDisconnectAll); Controls.Add(_btnSave);
 
             LoadRows();
         }
@@ -166,7 +186,12 @@ namespace PCAN_Client.LIN_UI
                     BeginInvoke(new Action(() =>
                     {
                         if (IsDisposed) return;
-                        foreach (DataGridViewRow row in _dgv.Rows) RefreshHwCombo(row);
+                        foreach (DataGridViewRow row in _dgv.Rows)
+                        {
+                            RebuildHwBindCellDataSource(row); // 尽量保持原选择，硬件不在位回退"不连接"
+                            UpdateRowStatus(row);
+                            UpdateConflict(row);
+                        }
                         RefreshHwStatus();
                     }));
                 }
@@ -211,27 +236,20 @@ namespace PCAN_Client.LIN_UI
             var row = new DataGridViewRow { Tag = ch };
             row.CreateCells(_dgv,
                 ch.Name,
-                HwTypeDisplay(ch.HwType),
-                ch.HwHandle,
+                "", // 绑定硬件通道：由 FindHwBindKey 赋值
                 ch.Mode == LinNodeMode.Master ? "主节点" : "从节点",
                 ch.Baudrate.ToString(),
                 ch.LdfPath,
-                "",
                 StatusText(ch),
                 "连接");
             _dgv.Rows.Add(row);
-            RefreshHwCombo(row);
+            RebuildHwBindCellDataSource(row);
+            row.Cells["colHwBind"].Value = FindHwBindKey(row, ch);
             UpdateRowStatus(row);
             UpdateConflict(row);
         }
 
         private LinChannel RowChannel(DataGridViewRow row) => (LinChannel)row.Tag;
-
-        private static string HwTypeDisplay(string hwType)
-        {
-            return hwType == LinConfig.HwTypePcan ? "PCAN (PLinApi)" :
-                   hwType == LinConfig.HwTypeCanoe ? "Vector XL (vxlapi)" : "";
-        }
 
         private static string StatusText(LinChannel ch)
         {
@@ -239,25 +257,47 @@ namespace PCAN_Client.LIN_UI
             return ch.ConnectError.Length > 0 ? "错误: " + ch.ConnectError : "未连接";
         }
 
-        /// <summary>按行硬件类型刷新硬件通道下拉数据源</summary>
-        private void RefreshHwCombo(DataGridViewRow row)
+        /// <summary>构建绑定下拉选项：不连接 + 已识别到的全部硬件通道（带类型前缀；冲突不限制选择，由标红提示+连接时拦截）</summary>
+        private List<LinHwBindItem> BuildHwBindItems()
         {
-            var cell = (DataGridViewComboBoxCell)row.Cells["colHw"];
-            cell.Items.Clear();
-            bool pcan = RowChannel(row).HwType == LinConfig.HwTypePcan;
-            var list = pcan ? _pcanChannels : _xlChannels;
-            var err = pcan ? _pcanError : _xlError;
-            foreach (var c in list) cell.Items.Add(c);
-            // 已保存的 HwHandle 不在枚举结果（异步未完成/硬件未插）时也保留在列表，避免 ComboBox 值无效
-            string current = RowChannel(row).HwHandle;
-            if (current.Length > 0 && !cell.Items.Contains(current))
-                cell.Items.Add(current + (cell.Items.Count == 0 ? " (未检测到)" : " (未在线)"));
-            if (cell.Items.Count == 0)
-            {
-                // 无通道：显示具体原因（PLIN 管理器未运行等），便于用户诊断
-                cell.Items.Add(err.Length > 0 ? "(枚举失败: " + err + ")" : "(未检测到硬件)");
-                cell.ToolTipText = err;
-            }
+            var items = new List<LinHwBindItem> { NotConnectItem };
+            foreach (var c in _pcanChannels)
+                items.Add(new LinHwBindItem { HwType = LinConfig.HwTypePcan, HwHandle = c, Display = "PCAN " + c });
+            foreach (var c in _xlChannels)
+                items.Add(new LinHwBindItem { HwType = LinConfig.HwTypeCanoe, HwHandle = c, Display = "XL " + c });
+            return items;
+        }
+
+        /// <summary>读取某行当前绑定项（cell.Value为Key字符串，从该行数据源按键反查；无匹配视为不连接）</summary>
+        private LinHwBindItem GetRowHwBind(DataGridViewRow row)
+        {
+            var cell = (DataGridViewComboBoxCell)row.Cells["colHwBind"];
+            string key = cell.Value?.ToString();
+            var items = cell.DataSource as List<LinHwBindItem>;
+            if (string.IsNullOrEmpty(key) || items == null) return NotConnectItem;
+            return items.FirstOrDefault(x => x.Key == key) ?? NotConnectItem;
+        }
+
+        /// <summary>重建某行绑定下拉的数据源（枚举结果变化后），尽量保持原选择；原绑定硬件不在位时回退"不连接"</summary>
+        private void RebuildHwBindCellDataSource(DataGridViewRow row)
+        {
+            var cell = (DataGridViewComboBoxCell)row.Cells["colHwBind"];
+            var cur = GetRowHwBind(row);
+            var items = BuildHwBindItems();
+            cell.DataSource = items;
+            if (cur.HwType.Length == 0) { cell.Value = NotConnectItem.Key; return; }
+            // 原绑定硬件当前不在位：直接回退"不连接"（重新插入并刷新后需重新选择）
+            var keep = items.FirstOrDefault(x => x.HwType == cur.HwType && x.HwHandle == cur.HwHandle);
+            cell.Value = (keep ?? NotConnectItem).Key;
+        }
+
+        /// <summary>按通道已保存绑定反查下拉键；硬件不在位时回退"不连接"</summary>
+        private string FindHwBindKey(DataGridViewRow row, LinChannel ch)
+        {
+            if (ch.HwType.Length == 0 || ch.HwHandle.Length == 0) return NotConnectItem.Key;
+            var items = (List<LinHwBindItem>)((DataGridViewComboBoxCell)row.Cells["colHwBind"]).DataSource;
+            var m = items.FirstOrDefault(x => x.HwType == ch.HwType && x.HwHandle == ch.HwHandle);
+            return (m ?? NotConnectItem).Key;
         }
 
         private void AddChannelRow()
@@ -303,6 +343,8 @@ namespace PCAN_Client.LIN_UI
             SaveConfig(); // 行集合写回 LinConfig，保证逻辑号与行号一致（未保存即连接时防错连/越界）
             for (int i = 0; i < _dgv.Rows.Count; i++)
             {
+                var ch = RowChannel(_dgv.Rows[i]);
+                if (ch.HwType.Length == 0 || ch.HwHandle.Length == 0) continue; // 未绑定硬件行跳过（对齐 CAN 一键连接）
                 ConnectRow(_dgv.Rows[i], (byte)(i + 1));
             }
         }
@@ -327,7 +369,7 @@ namespace PCAN_Client.LIN_UI
             var ch = RowChannel(row);
             if (ch.HwType.Length == 0 || ch.HwHandle.Length == 0)
             {
-                ch.ConnectError = "请先选择硬件类型与硬件通道";
+                ch.ConnectError = "请先选择绑定的硬件通道";
                 UpdateRowStatus(row);
                 return;
             }
@@ -365,21 +407,21 @@ namespace PCAN_Client.LIN_UI
             return null;
         }
 
-        /// <summary>刷新行的冲突列显示（红字警告 / 灰字"-"）</summary>
+        /// <summary>刷新行的冲突提示：绑定硬件通道单元格红字+ToolTip（对齐 CAN 页签冲突标红方式；连接时仍拦截）</summary>
         private void UpdateConflict(DataGridViewRow row)
         {
             var ch = RowChannel(row);
             string conflict = GetConflictText(ch);
-            var cell = row.Cells["colConflict"];
+            var cell = row.Cells["colHwBind"];
             if (conflict != null)
             {
-                cell.Value = conflict;
                 cell.Style.ForeColor = Color.FromArgb(196, 43, 28);
+                cell.ToolTipText = conflict;
             }
             else
             {
-                cell.Value = "";
-                cell.Style.ForeColor = Color.Gray;
+                cell.Style.ForeColor = row.DefaultCellStyle.ForeColor;
+                cell.ToolTipText = "";
             }
         }
 
@@ -389,7 +431,9 @@ namespace PCAN_Client.LIN_UI
             row.Cells["colStatus"].Value = StatusText(ch);
             row.Cells["colStatus"].Style.ForeColor = ch.IsConnected ? Color.FromArgb(0, 128, 0) :
                 ch.ConnectError.Length > 0 ? Color.FromArgb(196, 43, 28) : Color.Gray;
-            row.Cells["colOp"].Value = ch.IsConnected ? "断开" : "连接";
+            // 操作列：未绑定硬件时显示"-"（对齐 CAN 页签），点击忽略
+            row.Cells["colOp"].Value = (ch.HwType.Length == 0 || ch.HwHandle.Length == 0) ? "-" :
+                (ch.IsConnected ? "断开" : "连接");
             RefreshHwStatus(); // 顶部状态标签的"已连接N路"随连接/断开变化
         }
 
@@ -415,6 +459,7 @@ namespace PCAN_Client.LIN_UI
             {
                 var row = _dgv.Rows[e.RowIndex];
                 var ch = RowChannel(row);
+                if (ch.HwType.Length == 0 || ch.HwHandle.Length == 0) return; // 未绑定硬件，操作列"-"，忽略
                 byte logic = (byte)(e.RowIndex + 1);
                 if (ch.IsConnected) { Lin_API.LinDisconnect(logic); UpdateRowStatus(row); }
                 else ConnectRow(row, logic);
@@ -449,21 +494,13 @@ namespace PCAN_Client.LIN_UI
                     ch.Name = (v ?? "").ToString().Trim();
                     if (ch.Name.Length == 0) ch.Name = "LIN" + (e.RowIndex + 1);
                     break;
-                case "colHwType":
-                    string t = (v ?? "").ToString();
-                    ch.HwType = t.Contains("PCAN") ? LinConfig.HwTypePcan : LinConfig.HwTypeCanoe;
-                    ch.HwHandle = "";
-                    row.Cells["colHw"].Value = "";
-                    RefreshHwCombo(row);
-                    UpdateConflict(row);
-                    break;
-                case "colHw":
-                    string hwSel = (v ?? "").ToString();
-                    if (!hwSel.StartsWith("(", StringComparison.Ordinal)) // 占位提示项不写回
-                    {
-                        ch.HwHandle = hwSel;
-                        UpdateConflict(row);
-                    }
+                case "colHwBind":
+                    // 绑定硬件通道单下拉（对齐 CAN）：选中即固化 HwType+HwHandle；"不连接"清空
+                    var bind = GetRowHwBind(row);
+                    ch.HwType = bind.HwType;
+                    ch.HwHandle = bind.HwHandle;
+                    UpdateRowStatus(row); // 操作列 "-/连接/断开" 联动
+                    UpdateConflict(row);   // 冲突标红即时刷新
                     break;
                 case "colMode":
                     ch.Mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
