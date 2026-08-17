@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 using PCAN_Client;
 using PCAN_Client.LIN_API;
@@ -17,6 +18,7 @@ namespace PCAN_Client.LIN_UI
     internal class LinChannelPanel : UserControl
     {
         private DataGridView _dgv;
+        private Label _lblHwStatus; // 顶部硬件识别状态（对齐 CAN 页签：已识别N路 + 已连接N路 + 错误原因）
         // 硬件枚举结果缓存（静态：同一进程内多次打开对话框不重复枚举；60 秒有效期）
         private static List<string> _pcanChannels = new List<string>();
         private static List<string> _xlChannels = new List<string>();
@@ -34,15 +36,16 @@ namespace PCAN_Client.LIN_UI
             // 后台异步枚举硬件（不阻塞 UI；完成回调填充下拉并显示错误原因）
             EnsureEnumerated();
 
-            // 说明行
-            var lbl = new Label
+            // 顶部硬件识别状态（对齐 CAN 页签交互：先刷新识别看到硬件，再从已识别硬件中选择绑定连接）
+            _lblHwStatus = new Label
             {
-                Text = "逻辑 LIN 通道与硬件绑定（独立于 CAN 通道配置，保存到 LinChannels.json）",
-                AutoSize = true,
+                Text = "PLinApi: -  XL: -",
                 Location = new Point(12, 12),
+                Size = new Size(560, 34),
                 Font = UiTheme.UiFont,
             };
-            Controls.Add(lbl);
+            Controls.Add(_lblHwStatus);
+            RefreshHwStatus();
 
             // 通道表格
             _dgv = new DataGridView
@@ -105,8 +108,8 @@ namespace PCAN_Client.LIN_UI
             _btnConnectAll.Click += (s, e) => ConnectAll();
             _btnDisconnectAll = MakeButton("全部断开", new Point(800, 375));
             _btnDisconnectAll.Click += (s, e) => DisconnectAll();
-            _btnRefresh = MakeButton("刷新硬件", new Point(596, 375));
-            _btnRefresh.Click += (s, e) => { lock (_enumLock) _enumStamp = DateTime.MinValue; EnsureEnumerated(); };
+            _btnRefresh = MakeButton("刷新识别", new Point(596, 375));
+            _btnRefresh.Click += (s, e) => EnsureEnumerated(force: true); // 手动刷新绕过60秒缓存显式重查（对齐CAN页签"刷新识别"）
             _btnSave = MakeButton("保存", new Point(900, 375));
             _btnSave.Click += (s, e) => SaveConfig();
             Controls.Add(_btnAdd); Controls.Add(_btnDelete); Controls.Add(_btnConnectAll);
@@ -127,14 +130,17 @@ namespace PCAN_Client.LIN_UI
         // ==================== 行数据 ====================
 
         /// <summary>
-        /// 确保硬件枚举结果就绪：缓存未过期直接用；否则后台线程枚举，完成回调 UI 填充。
-        /// 枚举失败时在对应硬件通道下拉显示具体原因（如 PLIN 管理器未运行）。
+        /// 确保硬件枚举结果就绪：缓存未过期且非 force 时直接用；否则后台线程枚举，完成回调 UI 填充。
+        /// force=true 供"刷新识别"按钮显式重查（绕过 60 秒缓存）。
+        /// 枚举失败时在状态标签与对应硬件通道下拉显示具体原因（如 PLIN 管理器未运行）。
         /// </summary>
-        private void EnsureEnumerated()
+        private void EnsureEnumerated(bool force = false)
         {
             lock (_enumLock)
             {
-                if ((DateTime.Now - _enumStamp).TotalSeconds < 60 && (_pcanChannels.Count > 0 || _xlChannels.Count > 0 || _pcanError.Length > 0 || _xlError.Length > 0))
+                bool fresh = (DateTime.Now - _enumStamp).TotalSeconds < 60
+                    && (_pcanChannels.Count > 0 || _xlChannels.Count > 0 || _pcanError.Length > 0 || _xlError.Length > 0);
+                if (!force && fresh)
                     return;
                 _enumStamp = DateTime.Now; // 占位：防并发重复枚举（失败也缓存 60s，可点刷新重试）
                 _pcanChannels = new List<string>();
@@ -142,6 +148,7 @@ namespace PCAN_Client.LIN_UI
                 _pcanError = "";
                 _xlError = "";
             }
+            SetHwStatusText("正在识别硬件...");
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 Tuple<List<string>, string> pcan = null, xl = null;
@@ -158,11 +165,35 @@ namespace PCAN_Client.LIN_UI
                 {
                     BeginInvoke(new Action(() =>
                     {
+                        if (IsDisposed) return;
                         foreach (DataGridViewRow row in _dgv.Rows) RefreshHwCombo(row);
+                        RefreshHwStatus();
                     }));
                 }
                 catch { }
             });
+        }
+
+        /// <summary>顶部硬件识别状态标签：两行（PLinApi / XL）显示已识别路数与已连接路数；枚举失败显示原因</summary>
+        private void RefreshHwStatus()
+        {
+            if (_lblHwStatus == null || _lblHwStatus.IsDisposed) return;
+            string pcan = _pcanError.Length > 0 ? "枚举失败: " + _pcanError
+                : _pcanChannels.Count > 0 ? $"已识别{_pcanChannels.Count}路" : "未识别到设备";
+            string xl = _xlError.Length > 0 ? "枚举失败: " + _xlError
+                : _xlChannels.Count > 0 ? $"已识别{_xlChannels.Count}路" : "未识别到设备";
+            int pcanConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypePcan && c.IsConnected);
+            int xlConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypeCanoe && c.IsConnected);
+            _lblHwStatus.Text =
+                $"PLinApi: {pcan}（已连接{pcanConn}路）\r\n" +
+                $"XL: {xl}（已连接{xlConn}路）";
+        }
+
+        /// <summary>识别中占位文案（不叠加刷新完成后的计数）</summary>
+        private void SetHwStatusText(string text)
+        {
+            if (_lblHwStatus == null || _lblHwStatus.IsDisposed) return;
+            _lblHwStatus.Text = text;
         }
 
         private void LoadRows()
@@ -359,6 +390,7 @@ namespace PCAN_Client.LIN_UI
             row.Cells["colStatus"].Style.ForeColor = ch.IsConnected ? Color.FromArgb(0, 128, 0) :
                 ch.ConnectError.Length > 0 ? Color.FromArgb(196, 43, 28) : Color.Gray;
             row.Cells["colOp"].Value = ch.IsConnected ? "断开" : "连接";
+            RefreshHwStatus(); // 顶部状态标签的"已连接N路"随连接/断开变化
         }
 
         // ==================== 事件 ====================
