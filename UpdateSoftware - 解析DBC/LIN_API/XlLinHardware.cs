@@ -52,7 +52,9 @@ namespace PCAN_Client.LIN_API
                         {
                             if ((cfg.channel[i].channelBusCapabilities & XLDefine.XL_BusCapabilities.XL_BUS_ACTIVE_CAP_LIN) != 0)
                             {
-                                result.Add("ch " + cfg.channel[i].channelIndex);
+                                // 显示 1-based 通道号（对齐 CAN 侧 Hw=channelIndex+1 约定，与设备丝印一致）；
+                                // 连接时解析回 channelIndex = N-1
+                                result.Add("ch " + (cfg.channel[i].channelIndex + 1));
                             }
                         }
                     }
@@ -83,7 +85,10 @@ namespace PCAN_Client.LIN_API
                 int channelIndex = -1;
                 if (_cfg.HwHandle.StartsWith("ch ", StringComparison.OrdinalIgnoreCase))
                 {
-                    int.TryParse(_cfg.HwHandle.Substring(3).Trim(), out channelIndex);
+                    // HwHandle 为 1-based 显示号（枚举输出 "ch {channelIndex+1}"），转回 0-based channelIndex
+                    int parsed;
+                    if (int.TryParse(_cfg.HwHandle.Substring(3).Trim(), out parsed))
+                        channelIndex = parsed - 1;
                 }
                 if (channelIndex < 0) return $"LIN 通道标识非法: {_cfg.HwHandle}";
 
@@ -110,8 +115,10 @@ namespace PCAN_Client.LIN_API
 
                 _channelMask = 1UL << channelIndex;
                 ulong permissionMask = _channelMask;
+                // VN1600 系列（VN1640A 等）LIN 通道仅支持 V3 接口：V4 下 XL_BUS_TYPE_LIN 返回
+                // XL_ERR_NOT_IMPLEMENTED（已实测：V3+LIN 打开/激活成功，V4+LIN/CAN 均失败）
                 status = _xlDriver.XL_OpenPort(ref _portHandle, AppName, _channelMask, ref permissionMask, 4096,
-                    XLDefine.XL_InterfaceVersion.XL_INTERFACE_VERSION_V4, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN);
+                    XLDefine.XL_InterfaceVersion.XL_INTERFACE_VERSION_V3, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "打开 Vector LIN 端口失败: " + status;
                 portOpened = true;
 
@@ -133,7 +140,7 @@ namespace PCAN_Client.LIN_API
                 status = _xlDriver.XL_LinSetChecksum(_portHandle, _channelMask, BuildChecksumArray());
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 校验和模型失败: " + status;
 
-                status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_RESET_CLOCK);
+                status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_NONE);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
 
                 // 从节点模式：按 LDF 配置硬件自动应答

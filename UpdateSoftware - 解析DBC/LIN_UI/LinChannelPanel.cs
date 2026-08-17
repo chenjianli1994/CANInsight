@@ -403,7 +403,12 @@ namespace PCAN_Client.LIN_UI
             if (ch == null || ch.HwType != LinConfig.HwTypeCanoe) return null;
             int chIdx = -1;
             if (ch.HwHandle.StartsWith("ch ", StringComparison.OrdinalIgnoreCase))
-                int.TryParse(ch.HwHandle.Substring(3).Trim(), out chIdx);
+            {
+                // HwHandle 为 1-based 显示号，转回 0-based channelIndex 用于与 CAN 的 HwChannel(1-based) 比较
+                int parsed;
+                if (int.TryParse(ch.HwHandle.Substring(3).Trim(), out parsed))
+                    chIdx = parsed - 1;
+            }
             if (chIdx < 0) return null;
             foreach (var can in BaseParamter.BusChannels)
             {
