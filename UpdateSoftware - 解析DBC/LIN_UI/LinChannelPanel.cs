@@ -27,6 +27,7 @@ namespace PCAN_Client.LIN_UI
         private static DateTime _enumStamp = DateTime.MinValue;
         private static readonly object _enumLock = new object();
         private readonly Button _btnAdd, _btnDelete, _btnConnectAll, _btnDisconnectAll, _btnSave;
+        private readonly ToolTip _toolTip = new ToolTip(); // 状态标签悬停显示枚举错误详情（不占版面）
 
         /// <summary>绑定硬件下拉项（携带硬件类型+通道标识，选中即固化二元组；HwType=""表示不连接）</summary>
         private class LinHwBindItem
@@ -199,19 +200,26 @@ namespace PCAN_Client.LIN_UI
             });
         }
 
-        /// <summary>顶部硬件识别状态标签：两行（PLinApi / XL）显示已识别路数与已连接路数；枚举失败显示原因</summary>
+        /// <summary>顶部硬件识别状态标签：简短两行（对齐 CAN 页签风格：已识别N路（N路已连接）/未识别到设备）。
+        /// 枚举失败原因不占版面，鼠标悬停状态标签时在 ToolTip 显示。</summary>
         private void RefreshHwStatus()
         {
             if (_lblHwStatus == null || _lblHwStatus.IsDisposed) return;
-            string pcan = _pcanError.Length > 0 ? "枚举失败: " + _pcanError
-                : _pcanChannels.Count > 0 ? $"已识别{_pcanChannels.Count}路" : "未识别到设备";
-            string xl = _xlError.Length > 0 ? "枚举失败: " + _xlError
-                : _xlChannels.Count > 0 ? $"已识别{_xlChannels.Count}路" : "未识别到设备";
             int pcanConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypePcan && c.IsConnected);
             int xlConn = LinConfig.Channels.Count(c => c.HwType == LinConfig.HwTypeCanoe && c.IsConnected);
             _lblHwStatus.Text =
-                $"PLinApi: {pcan}（已连接{pcanConn}路）\r\n" +
-                $"XL: {xl}（已连接{xlConn}路）";
+                $"PLinApi: {(_pcanChannels.Count > 0 ? $"已识别{_pcanChannels.Count}路" : "未识别到设备")}（{pcanConn}路已连接）\r\n" +
+                $"XL: {(_xlChannels.Count > 0 ? $"已识别{_xlChannels.Count}路" : "未识别到设备")}（{xlConn}路已连接）";
+            _toolTip.SetToolTip(_lblHwStatus, BuildHwStatusToolTip());
+        }
+
+        /// <summary>枚举失败原因详情（悬停提示用；与 CAN 页签一致的简短状态行不承载长错误文案）</summary>
+        private string BuildHwStatusToolTip()
+        {
+            if (_pcanError.Length == 0 && _xlError.Length == 0) return "";
+            return (_pcanError.Length > 0 ? "PLinApi: " + _pcanError : "")
+                 + (_pcanError.Length > 0 && _xlError.Length > 0 ? "\r\n" : "")
+                 + (_xlError.Length > 0 ? "XL: " + _xlError : "");
         }
 
         /// <summary>识别中占位文案（不叠加刷新完成后的计数）</summary>
