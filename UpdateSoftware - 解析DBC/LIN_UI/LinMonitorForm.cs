@@ -173,6 +173,15 @@ namespace PCAN_Client.LIN_UI
             _dgvFrames.DefaultCellStyle.Font = new Font("Consolas", 9f);
             _dgvFrames.CellValueNeeded += DgvFrames_CellValueNeeded;
             _dgvFrames.CellFormatting += DgvFrames_CellFormatting;
+            // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）
+            _dgvFrames.Paint += (s, e) =>
+            {
+                if (_dgvFrames.RowCount > 0) return;
+                TextRenderer.DrawText(e.Graphics,
+                    "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）",
+                    UiTheme.UiFont, _dgvFrames.ClientRectangle, Color.Gray,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            };
 
             _dgvFrames.Columns.Add("colTime", "时间(ms)");
             _dgvFrames.Columns["colTime"].Width = 90;
@@ -218,8 +227,6 @@ namespace PCAN_Client.LIN_UI
             _slotToolbar.Items.Add(new ToolStripButton("上移", ToolbarIcons.Get("scroll")) { Tag = "up", ToolTipText = "选中帧上移（调度顺序提前）" });
             _slotToolbar.Items.Add(new ToolStripButton("下移", ToolbarIcons.Get("scroll")) { Tag = "down", ToolTipText = "选中帧下移（调度顺序延后）" });
             _slotToolbar.ItemClicked += SlotToolbar_ItemClicked;
-            slotPanel.Controls.Add(_slotToolbar);
-            _slotToolbar.Dock = DockStyle.Top;
 
             _dgvSlots = new DataGridView
             {
@@ -259,6 +266,10 @@ namespace PCAN_Client.LIN_UI
                 Font = UiTheme.UiFont,
             };
             slotPanel.Controls.Add(slotHint);
+            // 注意：Add 顺序决定 Dock 布局（逆 z-order 处理）——toolbar 必须最后 Add，
+            // 否则 Dock=Top 布局在 Fill 之后处理会被压成 0 高（表头被挤到页面顶部）
+            slotPanel.Controls.Add(_slotToolbar);
+            _slotToolbar.Dock = DockStyle.Top;
             _tabLin.TabPages[0].Controls.Add(slotPanel);
 
             // ---- 从节点/发布页签 ----
@@ -285,6 +296,10 @@ namespace PCAN_Client.LIN_UI
             _dgvResp.Columns["colRspData"].Width = 250;
             _dgvResp.Columns.Add("colRspCs", "校验和");
             _dgvResp.Columns["colRspCs"].Width = 110;
+            var colRspEdit = new DataGridViewButtonColumn { Name = "colRspEdit", HeaderText = "信号编辑", Width = 80, ReadOnly = true, Text = "编辑信号" };
+            // 注意：不用 UseColumnTextForButtonValue=true（会忽略单元格 Value）
+            _dgvResp.Columns.Add(colRspEdit);
+            _dgvResp.CellContentClick += DgvResp_CellContentClick;
             _dgvResp.CellValueChanged += DgvResp_CellValueChanged;
             _dgvResp.CellFormatting += DgvResp_CellFormatting;
             _dgvResp.CurrentCellDirtyStateChanged += (s, e) =>
@@ -297,7 +312,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。加载 LDF 后已自动填充，勾选=启用，编辑数据即时生效",
+                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。加载 LDF 后已自动填充，「编辑信号」按 LDF 解析成信号改物理值，勾选=启用",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -398,18 +413,20 @@ namespace PCAN_Client.LIN_UI
         private void LayoutControls()
         {
             _toolStripLin.Dock = DockStyle.Top;
-            // 表格与页签上下分栏：上表格 62%，下页签 38%
+            // 表格与页签上下分栏：上表格（报文显示）约 46%，下页签约 54%
             var split = new SplitContainer
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Horizontal,
-                SplitterDistance = 380,
+                SplitterDistance = 320,
             };
             split.Panel1.Controls.Add(_dgvFrames);
             split.Panel2.Controls.Add(_tabLin);
             Controls.Add(split);
             _dgvFrames.Dock = DockStyle.Fill;
             _statusStrip.Dock = DockStyle.Bottom;
+            // SplitterDistance 须在窗体尺寸确定后设置（构造时 ClientSize 未知会按比例失真）
+            this.Shown += (s, e) => { try { split.SplitterDistance = 320; } catch { } };
         }
 
         // ==================== 通道选择/连接 ====================
@@ -924,6 +941,36 @@ namespace PCAN_Client.LIN_UI
             var row = _dgvResp.Rows[e.RowIndex];
             if (row.Cells["colRspEn"].Value is bool && !(bool)row.Cells["colRspEn"].Value)
                 e.CellStyle.ForeColor = Color.Gray;
+        }
+
+        private void DgvResp_CellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            if (e.ColumnIndex != _dgvResp.Columns["colRspEdit"].Index) return;
+            var row = _dgvResp.Rows[e.RowIndex];
+            if (!(row.Tag is byte)) return;
+            byte pid = (byte)row.Tag;
+            var ldf = GetLdf();
+            // 无 LDF 或该帧无信号定义：提示引导
+            if (ldf == null || !ldf.FrameSignals.ContainsKey(pid))
+            {
+                MessageBox.Show(this, "该帧在 LDF 中没有信号定义，无法按信号编辑\n请直接编辑「数据 (Hex)」列，或先加载包含该帧信号的 LDF", "编辑信号", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var data = ParseHexData((row.Cells["colRspData"].Value ?? "").ToString());
+            if (data == null || data.Length == 0)
+            {
+                byte dlc = ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
+                data = new byte[dlc];
+            }
+            using (var dlg = new LinSignalEditForm(ldf, pid, data))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                var newData = dlg.Data;
+                // 写回数据列（Hex 空格分隔）并同步硬件
+                row.Cells["colRspData"].Value = BitConverter.ToString(newData).Replace("-", " ");
+                Lin_API.UpdateSlaveData(_channel, pid, newData, (byte)newData.Length);
+            }
         }
 
         // ==================== 信号页签 ====================

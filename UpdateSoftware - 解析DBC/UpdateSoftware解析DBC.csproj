@@ -339,6 +339,9 @@
     <Compile Include="LIN_UI\LinMonitorForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="LIN_UI\LinSignalEditForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Chart\ChannelData.cs" />
     <Compile Include="Chart\ChartControl.cs">
       <SubType>Component</SubType>

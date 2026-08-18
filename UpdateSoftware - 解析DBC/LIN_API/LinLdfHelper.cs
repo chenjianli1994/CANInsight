@@ -24,6 +24,11 @@ namespace PCAN_Client.LIN_API
         public ushort Width;
         public double InitValue;
         public string Publisher = "";
+        /// <summary>物理量程与换算（LDF Signals 块：min, max, scale, offset）；物理值 = raw*scale + offset</summary>
+        public double MinValue;
+        public double MaxValue;
+        public double Scale = 1;
+        public double Offset;
     }
 
     /// <summary>帧内信号映射（SignalName 在帧数据中的起始位 offset）</summary>
@@ -300,6 +305,20 @@ namespace PCAN_Client.LIN_API
                 if (def.FrameType != LinFrameType.EventTriggered &&
                     def.Publisher.Length > 0 && def.Publisher != file.MasterName)
                     file.SlaveRespIds.Add(def.Pid);
+                // LIN 1.3 旧格式帧定义无 DLC 字段（如 "Frm:0x30,CEM {"）：按信号位布局推导
+                if (def.Dlc == 0 && file.FrameSignals.ContainsKey(kv.Key))
+                {
+                    int maxBit = 0;
+                    foreach (var fs in file.FrameSignals[kv.Key])
+                    {
+                        LinSignalDef sig = null;
+                        foreach (var s in file.Signals) { if (s.Name == fs.SignalName) { sig = s; break; } }
+                        if (sig == null) continue;
+                        int end = fs.Offset + sig.Width;
+                        if (end > maxBit) maxBit = end;
+                    }
+                    if (maxBit > 0) def.Dlc = (byte)((maxBit + 7) / 8);
+                }
             }
             file.SlaveRespIds.Sort();
             return file;
@@ -352,6 +371,8 @@ namespace PCAN_Client.LIN_API
                 if (!byte.TryParse(parts[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out dlc) || dlc > 8)
                     throw new LinLdfException(lineNo, $"帧 DLC 非法(须 0-8): {parts[2].Trim()}");
             }
+            // 诊断帧固定 8 字节（LIN 规范）；LDF 定义里无 DLC 字段，解析为 0 会让信号编辑/应答数据长度错误
+            if (isDiagnostic && dlc == 0) dlc = 8;
             file.Frames[pid] = new LinFrameDef
             {
                 Pid = pid,
@@ -416,12 +437,23 @@ namespace PCAN_Client.LIN_API
             }
             double init;
             if (!double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out init)) init = 0;
+            // LIN 1.3/2.x 完整格式: name, size, init, min, max, scale, offset, publisher, ...
+            // 诊断信号仅 WIDTH, INIT（无其余字段）；容错解析缺失字段用默认值
+            double min = 0, max = 0, scale = 1, offset = 0;
+            if (parts.Length >= 4) double.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out min);
+            if (parts.Length >= 5) double.TryParse(parts[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out max);
+            if (parts.Length >= 6) { if (!double.TryParse(parts[5].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out scale)) scale = 1; }
+            if (parts.Length >= 7) double.TryParse(parts[6].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out offset);
             file.Signals.Add(new LinSignalDef
             {
                 Name = sigName,
                 Width = width,
                 InitValue = init,
                 Publisher = parts.Length >= 3 ? parts[2].Trim() : "",
+                MinValue = min,
+                MaxValue = max,
+                Scale = scale,
+                Offset = offset,
             });
         }
 
@@ -527,6 +559,62 @@ namespace PCAN_Client.LIN_API
             LinFrameDef def;
             if (ldf != null && ldf.Frames.TryGetValue(pid, out def)) return def.Name;
             return "0x" + pid.ToString("X2");
+        }
+
+        // ==================== 信号编解码（物理值 ↔ 原始位） ====================
+
+        /// <summary>LDF 信号定义查找（按帧 PID + 信号名；无定义返回 null）</summary>
+        public static LinSignalDef FindSignal(LinLdfFile ldf, byte pid, string signalName)
+        {
+            if (ldf == null) return null;
+            foreach (var s in ldf.Signals)
+                if (s.Name == signalName) return s;
+            return null;
+        }
+
+        /// <summary>物理值 → raw 整数（raw = (phys - offset) / scale，四舍五入）</summary>
+        public static ulong PhysToRaw(double phys, LinSignalDef sig)
+        {
+            double scale = sig != null && sig.Scale != 0 ? sig.Scale : 1;
+            double offset = sig != null ? sig.Offset : 0;
+            double raw = (phys - offset) / scale;
+            if (raw < 0) return 0;
+            return (ulong)Math.Round(raw);
+        }
+
+        /// <summary>raw 整数 → 物理值（phys = raw*scale + offset）</summary>
+        public static double RawToPhys(ulong raw, LinSignalDef sig)
+        {
+            double scale = sig != null && sig.Scale != 0 ? sig.Scale : 1;
+            double offset = sig != null ? sig.Offset : 0;
+            return raw * scale + offset;
+        }
+
+        /// <summary>读帧数据中指定起始位/长度的 raw 值（LDF 小端序位填充：低位在前）</summary>
+        public static ulong ReadSignalBits(byte[] data, int bitOffset, int width)
+        {
+            ulong v = 0;
+            for (int b = 0; b < width; b++)
+            {
+                int byteIdx = (bitOffset + b) / 8;
+                if (byteIdx < 0 || byteIdx >= (data == null ? 0 : data.Length)) break;
+                if (((data[byteIdx] >> ((bitOffset + b) % 8)) & 1) != 0) v |= 1UL << b;
+            }
+            return v;
+        }
+
+        /// <summary>把 raw 值按起始位/长度写入帧数据（低位在前）</summary>
+        public static void WriteSignalBits(byte[] data, int bitOffset, int width, ulong raw)
+        {
+            for (int b = 0; b < width; b++)
+            {
+                int bit = bitOffset + b;
+                int byteIdx = bit / 8;
+                if (byteIdx < 0 || byteIdx >= data.Length) break;
+                bool one = ((raw >> b) & 1) != 0;
+                if (one) data[byteIdx] |= (byte)(1 << (bit % 8));
+                else data[byteIdx] &= (byte)~(1 << (bit % 8));
+            }
         }
 
         /// <summary>从 LDF 帧表取 DLC，未定义返回 0（调用方按 8 保守处理）</summary>
