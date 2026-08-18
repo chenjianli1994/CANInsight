@@ -592,9 +592,9 @@ namespace PCAN_Client.LIN_UI
             LinScheduler sc;
             if (!_schedulers.TryGetValue(_channel, out sc))
             {
-                bool useHw = _channel >= 1 && _channel <= LinConfig.Channels.Count &&
-                             LinConfig.Channels[_channel - 1].HwType == LinConfig.HwTypePcan;
-                sc = new LinScheduler(_channel, useHw);
+                // PEAK 硬件调度表（SetSchedule/StartSchedule）在当前 PLIN Manager/Pro FD 环境全部
+                // errUnknown（官方签名实测），统一走软件调度（定时器 + LIN_Write），Vector 本就软件
+                sc = new LinScheduler(_channel, false);
                 sc.SlotChanged += i => { try { BeginInvoke(new Action(() => UpdateSlotRow(i))); } catch { } };
                 sc.RunningChanged += r => { try { BeginInvoke(new Action(() => RefreshStatusBar())); } catch { } };
                 _schedulers[_channel] = sc;

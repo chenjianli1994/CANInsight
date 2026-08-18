@@ -124,15 +124,35 @@ namespace PCAN_Client.LIN_API
             return false;
         }
 
-        /// <summary>调度表发 Header（Vector 软件调度用；PEAK 硬件调度不走此路）</summary>
+        /// <summary>调度表发 Header（软件调度；Vector 用 XL_SendRequest，PEAK 用 Write dirSubscriber）</summary>
         public static bool LinSendHeader(byte logicChannel, byte pid)
         {
+            PcanLinHardware pcan;
             XlLinHardware xl;
             lock (_hwLock)
             {
+                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.SendHeader(pid, GetFrameDlc(logicChannel, pid));
                 if (_xl.TryGetValue(logicChannel, out xl)) return xl.SendRequest(pid);
             }
             return false;
+        }
+
+        /// <summary>调度表发一帧（软件调度）：PEAK 有数据发完整帧，无数据发 Header；Vector 返回 false 回退 Header</summary>
+        public static bool LinSendScheduleFrame(byte logicChannel, byte pid)
+        {
+            PcanLinHardware pcan;
+            lock (_hwLock)
+            {
+                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
+            }
+            return false;
+        }
+
+        private static byte GetFrameDlc(byte logicChannel, byte pid)
+        {
+            var ldf = GetLdf(logicChannel);
+            if (ldf != null && ldf.Frames.ContainsKey(pid)) return ldf.Frames[pid].Dlc;
+            return 0;
         }
 
         /// <summary>更新发布/从节点响应数据</summary>

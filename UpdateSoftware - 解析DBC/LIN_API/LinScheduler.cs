@@ -210,8 +210,10 @@ namespace PCAN_Client.LIN_API
             _cursor = (idx + 1) % snapshot.Count;
             _nextDueMs = now + slot.SlotMs; // 累计式：基于实际时刻，防漂移
 
-            // 发出 Header（数据由发布配置在硬件侧自动补响应）
-            Lin_API.LinSendHeader(_logicChannel, slot.Pid);
+            // 发出 Header（Vector：数据由发布配置在硬件侧自动补响应；
+            // PEAK：有缓存数据发完整帧，否则发 Header-only 等从节点应答）
+            if (!Lin_API.LinSendScheduleFrame(_logicChannel, slot.Pid))
+                Lin_API.LinSendHeader(_logicChannel, slot.Pid);
             slot.Counter++;
             SlotChanged?.Invoke(idx);
         }

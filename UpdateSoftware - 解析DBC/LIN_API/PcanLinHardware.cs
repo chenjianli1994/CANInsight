@@ -18,6 +18,8 @@ namespace PCAN_Client.LIN_API
         private volatile bool _running;
         private Thread _recvThread;
         private int _consecutiveErrors;
+        /// <summary>软件调度帧数据缓存（pid → 数据，UpdateSlaveData 时更新，SendScheduleFrame 读取）</summary>
+        private readonly Dictionary<byte, byte[]> _frameData = new Dictionary<byte, byte[]>();
 
         public PcanLinHardware(byte logicChannel, LinChannel cfg)
         {
@@ -122,13 +124,13 @@ namespace PCAN_Client.LIN_API
                 if (err != LinPlError.errOK) { CleanupClient(); return "连接 LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
-                // 按官方示例：仅当硬件未初始化（modNone）或波特率不同时才调用，
-                // 避免重初始化其他客户端正在使用的连接
+                // 条件：未初始化（modNone）或波特率不同或模式不符——模式残留（如上次 Slave）
+                // 会让调度函数（需 Master）全部返回 errUnknown，必须重新初始化
                 LinPlHardwareMode mode = _cfg.Mode == LinNodeMode.Master ? LinPlHardwareMode.modMaster : LinPlHardwareMode.modSlave;
                 int hwMode = -1, hwBaud = -1;
                 LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpMode, out hwMode, 4);
                 LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpBaudrate, out hwBaud, 4);
-                if ((LinPlHardwareMode)hwMode == LinPlHardwareMode.modNone || hwBaud != (int)_cfg.Baudrate)
+                if ((LinPlHardwareMode)hwMode != mode || hwBaud != (int)_cfg.Baudrate || (LinPlHardwareMode)hwMode == LinPlHardwareMode.modNone)
                 {
                     err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
                     if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
@@ -229,6 +231,14 @@ namespace PCAN_Client.LIN_API
         // ==================== 发送 ====================
 
         /// <summary>发送一帧（Master 模式发 Header+数据；从节点模式发布响应数据）</summary>
+        /// <summary>LIN PID 补奇偶校验位（FrameId 字段须带奇偶；裸 ID 会导致 Write 失败）</summary>
+        private static byte ToPid(byte pid)
+        {
+            byte p = pid;
+            LinPlApi.GetPID(ref p);
+            return p;
+        }
+
         public bool Transmit(byte pid, byte[] data, LinChecksumKind ck)
         {
             if (!IsConnected) return false;
@@ -236,7 +246,7 @@ namespace PCAN_Client.LIN_API
             if (len > 8) return false;
             var msg = new LinPlMsg
             {
-                FrameId = pid,
+                FrameId = ToPid(pid),
                 Length = len,
                 Direction = LinPlDirection.dirPublisher,
                 ChecksumType = ck == LinChecksumKind.Classic ? LinPlChecksumType.cstClassic : LinPlChecksumType.cstEnhanced,
@@ -247,10 +257,40 @@ namespace PCAN_Client.LIN_API
             return LinPlApi.Write(_client, _hw, ref msg) == LinPlError.errOK;
         }
 
+        /// <summary>发 Header（dirSubscriber：硬件发 Header 后等待从节点应答；Length 为期望响应长度）</summary>
+        public bool SendHeader(byte pid, byte dlc)
+        {
+            if (!IsConnected) return false;
+            byte len = dlc == 0 ? (byte)8 : dlc;
+            var msg = new LinPlMsg
+            {
+                FrameId = ToPid(pid),
+                Length = len,
+                Direction = LinPlDirection.dirSubscriber,
+                ChecksumType = LinPlChecksumType.cstEnhanced,
+                Data = new byte[8],
+                Checksum = 0,
+            };
+            return LinPlApi.Write(_client, _hw, ref msg) == LinPlError.errOK;
+        }
+
+        /// <summary>软件调度发一帧：有缓存数据发完整帧（dirPublisher），无数据发 Header-only</summary>
+        public bool SendScheduleFrame(byte pid, byte dlc)
+        {
+            byte[] data;
+            lock (_frameData)
+            {
+                if (!_frameData.TryGetValue(pid, out data) || data == null || data.Length == 0)
+                    return SendHeader(pid, dlc);
+            }
+            return Transmit(pid, data, LinChecksumKind.Enhanced);
+        }
+
         /// <summary>更新从节点发布帧数据（硬件自动应答内容）；帧条目缺失或被禁用时先重建 RESPONSE_ENABLE 条目</summary>
         public bool UpdateSlaveData(byte pid, byte[] data)
         {
             if (!IsConnected || data == null || data.Length > 8) return false;
+            lock (_frameData) { _frameData[pid] = (byte[])data.Clone(); }
             // 确保帧条目为 Publisher + RESPONSE_ENABLE（被 DisableResponse 置 dirDisabled 后需恢复）
             var entry = new LinPlFrameEntry
             {
