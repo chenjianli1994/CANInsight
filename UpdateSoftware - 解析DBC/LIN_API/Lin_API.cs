@@ -15,6 +15,12 @@ namespace PCAN_Client.LIN_API
         private static readonly Stopwatch _sw = Stopwatch.StartNew();
         private static ulong _epochUs;
 
+        // ==================== 响应超时监控（调度运行期） ====================
+        // 通道+PID → 最近一次总线活动（收到该帧任何记录）的会话毫秒。
+        // 调度器按槽位检测：窗口内无活动 = 期待响应未发生（外部无帧头/无应答），注入 NoResponse 错误帧。
+        private static readonly Dictionary<long, long> _pidActivityMs = new Dictionary<long, long>();
+        private static readonly object _pidLock = new object();
+
         // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
         private static readonly Dictionary<byte, PcanLinHardware> _pcan = new Dictionary<byte, PcanLinHardware>();
         private static readonly Dictionary<byte, XlLinHardware> _xl = new Dictionary<byte, XlLinHardware>();
@@ -224,6 +230,9 @@ namespace PCAN_Client.LIN_API
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
 
+                // 总线活动记录（响应超时判定）：任何该帧记录都算活动（含硬件错误帧——说明 Header 已到）
+                lock (_pidLock) { _pidActivityMs[((long)logicChannel << 8) | frame.Pid] = SessionMs; }
+
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
                 var ldf = GetLdf(logicChannel);
                 LinFrameDef def = null;
@@ -401,6 +410,46 @@ namespace PCAN_Client.LIN_API
         public static void OnBusEvent(byte logicChannel, string kind)
         {
             BusEvent?.Invoke(logicChannel, kind);
+        }
+
+        // ==================== 响应超时监控 API ====================
+
+        /// <summary>会话毫秒（首次连接归零）</summary>
+        internal static long SessionMs => (long)_sw.ElapsedMilliseconds - (long)(_epochUs / 1000);
+
+        /// <summary>某通道某帧在 timeoutMs 窗口内是否有总线活动（无记录 = 从未活动 = 超时）</summary>
+        internal static bool HasPidActivity(byte logicChannel, byte pid, long timeoutMs)
+        {
+            lock (_pidLock)
+            {
+                long t;
+                if (!_pidActivityMs.TryGetValue(((long)logicChannel << 8) | pid, out t)) return false;
+                return SessionMs - t < timeoutMs;
+            }
+        }
+
+        /// <summary>
+        /// 注入无应答错误帧（调度期待响应但窗口内无总线活动：外部无帧头/无应答）。
+        /// 软件生成原因：硬件只在"收到 Header 但应答失败"时上报错误；根本没收到帧头时
+        /// 不产生任何记录，从节点模式无外部主节点驱动时列表将无任何提示。
+        /// 注入帧走 LinReceive 会刷新活动时间，配合调度器侧冷却实现稳定节流（每超时窗口一条）。
+        /// </summary>
+        internal static void InjectNoResponse(byte logicChannel, byte pid)
+        {
+            var ldf = GetLdf(logicChannel);
+            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
+            var frame = new LinFrameRecord
+            {
+                LogicChannel = logicChannel,
+                Pid = pid,
+                Direction = LinFrameDir.Rx,
+                Dlc = dlc,
+                Data = new byte[0],
+                ChecksumType = LinChecksumKind.Enhanced,
+                ErrorKind = LinErrorKind.NoResponse,
+                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
+            };
+            LinReceive(logicChannel, frame);
         }
     }
 }

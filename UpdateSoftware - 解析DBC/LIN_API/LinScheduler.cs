@@ -67,6 +67,8 @@ namespace PCAN_Client.LIN_API
         private long _nextDueMs;
         private long _tickCount;
         private string _lastError = "";
+        /// <summary>响应超时错误注入节流：pid → 上次注入会话毫秒（防每槽周期刷屏，窗口内一条）</summary>
+        private readonly Dictionary<byte, long> _respErrStamp = new Dictionary<byte, long>();
 
         /// <summary>当前槽变化（UI 高亮刷新）</summary>
         public event Action<int> SlotChanged;
@@ -214,8 +216,26 @@ namespace PCAN_Client.LIN_API
             // PEAK：有缓存数据发完整帧，否则发 Header-only 等从节点应答）
             if (!Lin_API.LinSendScheduleFrame(_logicChannel, slot.Pid))
                 Lin_API.LinSendHeader(_logicChannel, slot.Pid);
+            CheckResponseTimeout(slot); // 发送后：窗口内无该帧活动 → 注入无应答错误（主/从节点模式均适用）
             slot.Counter++;
             SlotChanged?.Invoke(idx);
+        }
+
+        /// <summary>
+        /// 响应超时检测：期望该帧在窗口内出现总线活动（从节点 = 外部主节点发 Header 触发应答；
+        /// 主节点 = 硬件回报应答/错误帧）。窗口内无活动（无帧头/无应答且硬件未报错）→ 注入
+        /// NoResponse 错误帧 → 报文列表 err 列亮红灯。节流：同 PID 每超时窗口最多注入一条。
+        /// 硬件已报错误帧（有活动）时不再注入，避免重复。
+        /// </summary>
+        private void CheckResponseTimeout(LinScheduleSlot slot)
+        {
+            long timeoutMs = Math.Max(500, (long)slot.SlotMs * 2);
+            if (Lin_API.HasPidActivity(_logicChannel, slot.Pid, timeoutMs)) return; // 窗口内有活动（含硬件错误帧）
+            long now = Lin_API.SessionMs;
+            long last;
+            if (_respErrStamp.TryGetValue(slot.Pid, out last) && now - last < timeoutMs) return; // 冷却中
+            _respErrStamp[slot.Pid] = now;
+            Lin_API.InjectNoResponse(_logicChannel, slot.Pid);
         }
     }
 }
