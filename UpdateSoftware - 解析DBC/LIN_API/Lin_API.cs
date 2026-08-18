@@ -279,6 +279,46 @@ namespace PCAN_Client.LIN_API
         // ==================== 调度表 ====================
 
         /// <summary>
+        /// 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）到硬件帧条目/软件缓存。
+        /// 仅主节点模式：从节点模式下预置会让本机对主节点发布帧配置 RESPONSE_ENABLE 自动应答，
+        /// 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
+        /// 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
+        /// 软件调度（Vector/PEAK 均为 LinScheduler 驱动）与硬件调度启动前都必须调用——
+        /// 否则主节点发布帧无缓存数据，发送时退化为 Header-only（协议违规：主节点发布帧必须有数据槽），
+        /// 从节点把该帧判为错误帧（实测日志：master 模式全部 SendScheduleFrame 无缓存数据 → Header-only）。
+        /// </summary>
+        public static void PrepareMasterFrames(byte logicChannel)
+        {
+            bool master = logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
+                          LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master;
+            if (!master) return;
+            var ldf = GetLdf(logicChannel);
+            if (ldf == null) return;
+            int n = 0;
+            foreach (var kv in ldf.Frames)
+            {
+                if (kv.Value.Publisher != ldf.MasterName) continue;
+                // 已有用户配置数据（发送页/发布数据页签先于调度写入）时不覆盖，仅补未配置帧的全零初始数据
+                if (HasFrameData(logicChannel, kv.Key)) continue;
+                UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
+                n++;
+            }
+            LinDebugLog.Write("[SCH] PrepareMasterFrames ch=" + logicChannel + " 补预置主节点发布帧 " + n + " 条（全零初始数据）");
+        }
+
+        /// <summary>该帧是否已有缓存数据（PEAK 软件调度缓存；Vector 无独立缓存，返回 false 即始终走全零预置）</summary>
+        private static bool HasFrameData(byte logicChannel, byte pid)
+        {
+            PcanLinHardware pcan;
+            lock (_hwLock)
+            {
+                if (_pcan.TryGetValue(logicChannel, out pcan))
+                    return pcan.GetFrameData(pid) != null;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// 启动调度：先预置主节点发布帧的初始数据（Vector 需 XL_LinSetSlave 配置响应，否则发 Header 后无应答；
         /// PEAK 需帧条目数据，否则发全零帧），再启动硬件调度（PEAK）或软件调度（Vector 由 LinScheduler 驱动）。
         /// </summary>
@@ -289,24 +329,7 @@ namespace PCAN_Client.LIN_API
             var sb = new System.Text.StringBuilder();
             foreach (var s in slots) { if (s.Enabled) { if (sb.Length > 0) sb.Append(','); sb.Append("0x").Append(s.Pid.ToString("X2")).Append('@').Append(s.SlotMs).Append("ms"); } }
             LinDebugLog.Write("[SCH] StartSchedule ch=" + logicChannel + " master=" + master + " slots=" + sb);
-            // M2: 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）。
-            // 仅主节点模式：从节点模式下预置会让本机对主节点发布帧配置 RESPONSE_ENABLE 自动应答，
-            // 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
-            // 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
-            if (master)
-            {
-                var ldf = GetLdf(logicChannel);
-                if (ldf != null)
-                {
-                    foreach (var kv in ldf.Frames)
-                    {
-                        if (kv.Value.Publisher == ldf.MasterName)
-                        {
-                            UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
-                        }
-                    }
-                }
-            }
+            PrepareMasterFrames(logicChannel);
             PcanLinHardware pcan;
             lock (_hwLock)
             {

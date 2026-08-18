@@ -137,6 +137,10 @@ namespace PCAN_Client.LIN_API
             }
             else
             {
+                // 软件调度（PEAK 本环境硬件调度表 errUnknown，Vector 本就软件）：主节点模式必须先
+                // 预置主节点发布帧数据，否则 LinSendScheduleFrame 无缓存退化为 Header-only——
+                // 主节点发布帧缺数据槽违反 LIN 协议，从节点判定错误帧，总线无有效应答（实测日志）。
+                Lin_API.PrepareMasterFrames(_logicChannel);
                 _cursor = 0;
                 _nextDueMs = NowMs();
                 if (!_timer.Start(1, OnTick)) { _lastError = "定时器启动失败"; return false; }
@@ -247,6 +251,20 @@ namespace PCAN_Client.LIN_API
             if (!Lin_API.IsConnected(_logicChannel))
             {
                 LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 未连接，跳过注入");
+                return;
+            }
+            // 从节点模式不注入：本机未发送任何 Header（sent=False），无应答不是本机帧的错误——
+            // 注入会在地总线空闲（无外部主节点驱动）时对每个 PID 每 500ms 刷一条假错误帧，
+            // 用户看到"从节点模式全是错误帧"（实测：无总线流量时 1223 条注入帧、硬件 0 错误帧）。
+            // 外部主节点真实驱动时，硬件会回报 SlaveNOtResponding/校验错误帧，UI 仍能看到真实错误。
+            if (_logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count
+                && LinConfig.Channels[_logicChannel - 1].Mode == LinNodeMode.Slave)
+            {
+                long snow = Lin_API.SessionMs;
+                long slast;
+                if (_respErrStamp.TryGetValue(slot.Pid, out slast) && snow - slast < 5000) return; // 每 PID 每 5s 记一条说明
+                _respErrStamp[slot.Pid] = snow;
+                LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 从节点模式，不注入（本机未发 Header）");
                 return;
             }
             if (Lin_API.IsMasterPublisherFrame(_logicChannel, slot.Pid))

@@ -338,20 +338,39 @@ namespace PCAN_Client.LIN_API
             return err == LinPlError.errOK;
         }
 
-        /// <summary>软件调度发一帧：有缓存数据发完整帧（dirPublisher），无数据发 Header-only</summary>
+        /// <summary>软件调度发一帧：有缓存数据发完整帧（dirPublisher），无数据时——
+        /// 主节点发布帧（LDF Publisher==MasterName）发全零完整帧（LIN 协议要求主节点发布帧必须带数据槽，
+        /// Header-only 会让从节点判错误帧）；从节点发布帧发 Header-only 等从节点应答。</summary>
         public bool SendScheduleFrame(byte pid, byte dlc)
         {
             byte[] data;
             lock (_frameData)
             {
-                if (!_frameData.TryGetValue(pid, out data) || data == null || data.Length == 0)
+                if (_frameData.TryGetValue(pid, out data) && data != null && data.Length > 0)
                 {
-                    LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 无缓存数据 → Header-only");
-                    return SendHeader(pid, dlc);
+                    LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 有缓存数据 " + data.Length + " 字节 → 完整帧");
+                    return Transmit(pid, data, LinChecksumKind.Enhanced);
                 }
             }
-            LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 有缓存数据 " + data.Length + " 字节 → 完整帧");
-            return Transmit(pid, data, LinChecksumKind.Enhanced);
+            // 无缓存：主节点发布帧必须带数据（全零），从节点发布帧才允许 Header-only
+            if (IsMasterPublisherFrame(pid))
+            {
+                byte len = dlc == 0 ? (byte)8 : dlc;
+                LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 无缓存数据但为主节点发布帧 → 发全零 " + len + " 字节帧");
+                return Transmit(pid, new byte[len], LinChecksumKind.Enhanced);
+            }
+            LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 无缓存数据 → Header-only");
+            return SendHeader(pid, dlc);
+        }
+
+        /// <summary>该 PID 是否为 LDF 中主节点发布帧（无 LDF/无定义返回 false）</summary>
+        private bool IsMasterPublisherFrame(byte pid)
+        {
+            var ldf = _cfg.LdfHelper;
+            if (ldf == null || ldf.Frames == null) return false;
+            LinFrameDef def;
+            if (!ldf.Frames.TryGetValue(pid, out def)) return false;
+            return !string.IsNullOrEmpty(ldf.MasterName) && def.Publisher == ldf.MasterName;
         }
 
         /// <summary>软件调度帧数据（回显用；无缓存返回 null）</summary>
