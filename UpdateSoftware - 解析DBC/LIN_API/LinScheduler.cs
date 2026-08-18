@@ -66,6 +66,7 @@ namespace PCAN_Client.LIN_API
         private int _cursor;
         private long _nextDueMs;
         private long _tickCount;
+        private string _lastError = "";
 
         /// <summary>当前槽变化（UI 高亮刷新）</summary>
         public event Action<int> SlotChanged;
@@ -120,18 +121,23 @@ namespace PCAN_Client.LIN_API
             return "";
         }
 
+        /// <summary>最近一次启动失败的详细错误（空=无）</summary>
+        public string LastError => _lastError;
+
         public bool Start()
         {
             if (_running || _slots.Count == 0) return false;
+            _lastError = "";
             if (_useHardwareSchedule)
             {
-                if (!Lin_API.StartSchedule(_logicChannel, _slots)) return false;
+                _lastError = Lin_API.StartSchedule(_logicChannel, _slots);
+                if (_lastError.Length > 0) return false;
             }
             else
             {
                 _cursor = 0;
                 _nextDueMs = NowMs();
-                if (!_timer.Start(1, OnTick)) return false;
+                if (!_timer.Start(1, OnTick)) { _lastError = "定时器启动失败"; return false; }
             }
             _running = true;
             RunningChanged?.Invoke(true);

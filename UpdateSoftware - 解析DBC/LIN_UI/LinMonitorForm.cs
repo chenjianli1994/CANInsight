@@ -673,7 +673,7 @@ namespace PCAN_Client.LIN_UI
                         MessageBox.Show(this, err, "调度表", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
-                    if (!sc.Start()) ShowError("调度启动失败（无槽或未连接）");
+                    if (!sc.Start()) ShowError(sc.LastError.Length > 0 ? "调度启动失败: " + sc.LastError : "调度启动失败（无槽或未连接）");
                     break;
                 case "suspend":
                     sc.Suspend();

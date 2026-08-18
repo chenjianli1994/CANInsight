@@ -232,7 +232,7 @@ namespace PCAN_Client.LIN_API
         /// 启动调度：先预置主节点发布帧的初始数据（Vector 需 XL_LinSetSlave 配置响应，否则发 Header 后无应答；
         /// PEAK 需帧条目数据，否则发全零帧），再启动硬件调度（PEAK）或软件调度（Vector 由 LinScheduler 驱动）。
         /// </summary>
-        public static bool StartSchedule(byte logicChannel, List<LinScheduleSlot> slots)
+        public static string StartSchedule(byte logicChannel, List<LinScheduleSlot> slots)
         {
             // M2: 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）
             var ldf = GetLdf(logicChannel);
@@ -252,7 +252,7 @@ namespace PCAN_Client.LIN_API
                 if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.StartSchedule(slots);
             }
             // Vector 模式：软件调度由 LinScheduler 驱动，无需硬件级操作
-            return true;
+            return "";
         }
 
         public static bool SuspendSchedule(byte logicChannel)

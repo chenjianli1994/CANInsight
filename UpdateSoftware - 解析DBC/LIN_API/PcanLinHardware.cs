@@ -286,9 +286,9 @@ namespace PCAN_Client.LIN_API
         // ==================== 调度表（硬件自主运行） ====================
 
         /// <summary>下发调度槽到硬件并启动（slot 0；无条件帧）</summary>
-        public bool StartSchedule(List<LinScheduleSlot> slots)
+        public string StartSchedule(List<LinScheduleSlot> slots)
         {
-            if (!IsConnected) return false;
+            if (!IsConnected) return "未连接";
             var active = new List<LinScheduleSlot>(slots);
             var arr = new LinPlScheduleSlot[active.Count];
             for (int i = 0; i < active.Count; i++)
@@ -303,8 +303,10 @@ namespace PCAN_Client.LIN_API
                 arr[i].FrameId[0] = active[i].Pid;
             }
             LinPlError err = LinPlApi.SetSchedule(_client, _hw, 0, arr, arr.Length);
-            if (err != LinPlError.errOK) return false;
-            return LinPlApi.StartSchedule(_client, _hw, 0) == LinPlError.errOK;
+            if (err != LinPlError.errOK) return "设置调度表失败: " + LinPlErrorCodes.ToChinese(err);
+            err = LinPlApi.StartSchedule(_client, _hw, 0);
+            if (err != LinPlError.errOK) return "启动调度失败: " + LinPlErrorCodes.ToChinese(err);
+            return "";
         }
 
         public bool SuspendSchedule() => IsConnected && LinPlApi.SuspendSchedule(_client, _hw) == LinPlError.errOK;
