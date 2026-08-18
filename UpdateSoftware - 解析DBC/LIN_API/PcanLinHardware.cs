@@ -102,6 +102,12 @@ namespace PCAN_Client.LIN_API
                 if (err != LinPlError.errOK) return "注册 PLIN 客户端失败: " + LinPlErrorCodes.ToChinese(err);
                 if (_client == LinPlApi.INVALID_LIN_HANDLE) return "注册 PLIN 客户端失败（句柄无效）";
 
+                // 清客户端残留（过滤/帧注册/调度）：同会话断开→重连时 PLIN 管理器对硬件句柄的
+                // 过滤状态未完全复位，直接 SetClientFilter 会稳定返回 errUnknown（实测：首次连接
+                // OK，断开重连后 8/8 次失败）。ResetClient 将客户端设置复位为默认值，幂等安全。
+                LinPlError rerr = LinPlApi.ResetClient(_client);
+                LinDebugLog.Write("[CONN] ResetClient → err=" + rerr);
+
                 // 按 HwHandle 定位硬件句柄
                 ushort count = 0;
                 err = LinPlApi.GetAvailableHardware(null, 0, out count);
@@ -144,6 +150,14 @@ namespace PCAN_Client.LIN_API
                 LinDebugLog.Write("[CONN] SetClientFilter mask=FFFFFFFFFFFFFFFF type=0 → err=" + err);
                 if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
                 {
+                    // 重连场景兜底：ResetClient 复位客户端后重试一次（首次连接无残留，通常直接成功）
+                    LinPlError rerr2 = LinPlApi.ResetClient(_client);
+                    LinDebugLog.Write("[CONN] SetClientFilter 失败 → ResetClient(err=" + rerr2 + ") 后重试");
+                    err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
+                    LinDebugLog.Write("[CONN] SetClientFilter(重试) → err=" + err);
+                }
+                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
+                {
                     CleanupClient();
                     return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err) + "\n（PLIN 管理器状态异常时可重新插拔 PCAN 设备或重启「PLIN Device Manager」服务后重试）";
                 }
@@ -182,6 +196,8 @@ namespace PCAN_Client.LIN_API
                         LinPlError err = LinPlApi.DisconnectClient(_client, _hw);
                         LinDebugLog.Write("[CONN] Cleanup DisconnectClient → err=" + err);
                     }
+                    LinPlError rerr = LinPlApi.ResetClient(_client);
+                    LinDebugLog.Write("[CONN] Cleanup ResetClient → err=" + rerr);
                     LinPlError err2 = LinPlApi.RemoveClient(_client);
                     LinDebugLog.Write("[CONN] Cleanup RemoveClient → err=" + err2);
                 }
@@ -205,6 +221,9 @@ namespace PCAN_Client.LIN_API
                 }
                 if (_client != LinPlApi.INVALID_LIN_HANDLE)
                 {
+                    // 复位客户端设置（过滤/帧/调度残留），保证下次连接 SetClientFilter 干净
+                    LinPlError rerr = LinPlApi.ResetClient(_client);
+                    LinDebugLog.Write("[CONN] Disconnect ResetClient → err=" + rerr);
                     LinPlError err2 = LinPlApi.RemoveClient(_client);
                     LinDebugLog.Write("[CONN] Disconnect RemoveClient → err=" + err2);
                 }

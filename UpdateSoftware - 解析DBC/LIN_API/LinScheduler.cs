@@ -242,6 +242,13 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         private void CheckResponseTimeout(LinScheduleSlot slot)
         {
+            // 未连接时停止注入：断开后 winmm 定时器仍在跑，继续注入会在列表刷错误帧，
+            // 且无连接时注入无意义（实测：断开后持续注入直到重连）。
+            if (!Lin_API.IsConnected(_logicChannel))
+            {
+                LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 未连接，跳过注入");
+                return;
+            }
             if (Lin_API.IsMasterPublisherFrame(_logicChannel, slot.Pid))
             {
                 LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 主节点发布帧，跳过（不期待应答）");
