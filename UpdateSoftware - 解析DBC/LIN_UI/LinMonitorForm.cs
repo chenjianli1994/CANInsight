@@ -32,6 +32,8 @@ namespace PCAN_Client.LIN_UI
 
         // 从节点页签
         private DataGridView _dgvResp;
+        /// <summary>从节点页签已展开（信号解析）的帧 PID 集合</summary>
+        private readonly HashSet<byte> _expandedResp = new HashSet<byte>();
 
         // 信号页签
         private DataGridView _dgvSignals;
@@ -284,24 +286,23 @@ namespace PCAN_Client.LIN_UI
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
             };
             UiTheme.StyleGrid(_dgvResp);
-            var colRspEn = new DataGridViewCheckBoxColumn { Name = "colRspEn", HeaderText = "启用", Width = 46, ThreeState = false };
+            var colRspExpand = new DataGridViewTextBoxColumn { Name = "colRspExpand", HeaderText = "", Width = 30, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable };
+            _dgvResp.Columns.Add(colRspExpand);
+            var colRspEn = new DataGridViewCheckBoxColumn { Name = "colRspEn", HeaderText = "应答", Width = 46, ThreeState = false };
+            colRspEn.ToolTipText = "勾选 = 该帧启用硬件自动应答（主节点发 Header 时自动回复本行数据）；\n与调度表页签的勾选（是否参与循环调度发送）相互独立";
             _dgvResp.Columns.Add(colRspEn);
             _dgvResp.Columns.Add("colRspId", "响应 ID");
             _dgvResp.Columns["colRspId"].Width = 80;
             _dgvResp.Columns.Add("colRspName", "帧名称");
             _dgvResp.Columns["colRspName"].Width = 240;
-            _dgvResp.Columns.Add("colRspDlc", "DLC");
+            _dgvResp.Columns.Add("colRspDlc", "DLC/位");
             _dgvResp.Columns["colRspDlc"].Width = 50;
             _dgvResp.Columns.Add("colRspData", "数据 (Hex)");
             _dgvResp.Columns["colRspData"].Width = 250;
-            _dgvResp.Columns.Add("colRspCs", "校验和");
-            _dgvResp.Columns["colRspCs"].Width = 110;
-            var colRspEdit = new DataGridViewButtonColumn { Name = "colRspEdit", HeaderText = "信号编辑", Width = 80, ReadOnly = true, Text = "编辑信号" };
-            // 注意：不用 UseColumnTextForButtonValue=true（会忽略单元格 Value）
-            _dgvResp.Columns.Add(colRspEdit);
             _dgvResp.CellContentClick += DgvResp_CellContentClick;
             _dgvResp.CellValueChanged += DgvResp_CellValueChanged;
             _dgvResp.CellFormatting += DgvResp_CellFormatting;
+            _dgvResp.CellDoubleClick += DgvResp_CellDoubleClick;
             _dgvResp.CurrentCellDirtyStateChanged += (s, e) =>
             {
                 if (_dgvResp.IsCurrentCellDirty) _dgvResp.CommitEdit(DataGridViewDataErrorContexts.Commit);
@@ -312,7 +313,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。加载 LDF 后已自动填充，「编辑信号」按 LDF 解析成信号改物理值，勾选=启用",
+                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。点「＋」或双击行展开信号（带单位）改物理值，「应答」勾选=启用自动应答",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -846,6 +847,7 @@ namespace PCAN_Client.LIN_UI
         {
             if (_disposed) return;
             _dgvResp.Rows.Clear();
+            _expandedResp.Clear();
             var ldf = GetLdf();
             if (ldf == null)
             {
@@ -855,7 +857,7 @@ namespace PCAN_Client.LIN_UI
             foreach (byte pid in ldf.SlaveRespIds)
             {
                 var def = ldf.Frames[pid];
-                int idx = _dgvResp.Rows.Add(true, "0x" + pid.ToString("X2"), def.Name, def.Dlc, new string('0', def.Dlc * 2), "增强·自动");
+                int idx = _dgvResp.Rows.Add("＋", true, "0x" + pid.ToString("X2"), def.Name, def.Dlc, new string('0', def.Dlc * 2));
                 _dgvResp.Rows[idx].Tag = pid;
             }
             if (IsMasterMode())
@@ -867,10 +869,10 @@ namespace PCAN_Client.LIN_UI
                     {
                         bool exists = false;
                         foreach (DataGridViewRow r in _dgvResp.Rows)
-                            if ((byte)r.Tag == kv.Key) { exists = true; break; }
+                            if (r.Tag is byte && (byte)r.Tag == kv.Key) { exists = true; break; }
                         if (!exists)
                         {
-                            int idx = _dgvResp.Rows.Add(true, "0x" + kv.Key.ToString("X2"), kv.Value.Name, kv.Value.Dlc, new string('0', kv.Value.Dlc * 2), "增强·自动");
+                            int idx = _dgvResp.Rows.Add("＋", true, "0x" + kv.Key.ToString("X2"), kv.Value.Name, kv.Value.Dlc, new string('0', kv.Value.Dlc * 2));
                             _dgvResp.Rows[idx].Tag = kv.Key;
                         }
                     }
@@ -888,6 +890,25 @@ namespace PCAN_Client.LIN_UI
         {
             if (e.RowIndex < 0) return;
             var row = _dgvResp.Rows[e.RowIndex];
+            // 信号解析行：编辑物理值/枚举 → 编码写回帧数据列并同步硬件
+            if (row.Tag is Tuple<byte, string>)
+            {
+                if (_dgvResp.Columns[e.ColumnIndex].Name != "colRspData") return;
+                var t = (Tuple<byte, string>)row.Tag;
+                var ldf = GetLdf();
+                if (ldf == null) return;
+                var sig = FindSignalDef(ldf, t.Item2);
+                if (sig == null) return;
+                ulong raw;
+                if (!TryParseSigValue((row.Cells["colRspData"].Value ?? "").ToString(), sig, out raw))
+                {
+                    // 非法输入：还原为该信号当前值
+                    if (GetRespFrameData(t.Item1) != null) RefreshSignalRows(t.Item1);
+                    return;
+                }
+                ApplySignalToFrame(t.Item1, sig, raw);
+                return;
+            }
             if (!(row.Tag is byte)) return;
             byte pid = (byte)row.Tag;
             if (_dgvResp.Columns[e.ColumnIndex].Name == "colRspEn")
@@ -919,6 +940,64 @@ namespace PCAN_Client.LIN_UI
             Lin_API.UpdateSlaveData(_channel, pid, data, dlc);
         }
 
+        /// <summary>取帧行的当前数据（Hex 解析失败返回 null）</summary>
+        private byte[] GetRespFrameData(byte pid)
+        {
+            for (int i = 0; i < _dgvResp.Rows.Count; i++)
+            {
+                var r = _dgvResp.Rows[i];
+                if (r.Tag is byte && (byte)r.Tag == pid)
+                    return ParseHexData((r.Cells["colRspData"].Value ?? "").ToString());
+            }
+            return null;
+        }
+
+        /// <summary>把信号新值编码进帧数据，写回帧行并同步硬件，刷新该帧全部信号行显示</summary>
+        private void ApplySignalToFrame(byte pid, LinSignalDef sig, ulong raw)
+        {
+            var ldf = GetLdf();
+            byte[] data = GetRespFrameData(pid);
+            if (data == null || data.Length == 0)
+            {
+                byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
+                data = new byte[dlc];
+            }
+            LinFrameSignal fs = null;
+            if (ldf != null && ldf.FrameSignals.ContainsKey(pid))
+                foreach (var x in ldf.FrameSignals[pid]) if (x.SignalName == sig.Name) { fs = x; break; }
+            if (fs == null) return;
+            LinLdfHelper.WriteSignalBits(data, fs.Offset, sig.Width, raw);
+            string hex = BitConverter.ToString(data).Replace("-", " ");
+            for (int i = 0; i < _dgvResp.Rows.Count; i++)
+            {
+                var r = _dgvResp.Rows[i];
+                if (r.Tag is byte && (byte)r.Tag == pid) { r.Cells["colRspData"].Value = hex; break; }
+            }
+            RefreshSignalRows(pid);
+            Lin_API.UpdateSlaveData(_channel, pid, data, (byte)data.Length);
+        }
+
+        /// <summary>按帧行当前数据刷新该帧全部信号行的显示值</summary>
+        private void RefreshSignalRows(byte pid)
+        {
+            var ldf = GetLdf();
+            byte[] data = GetRespFrameData(pid);
+            if (ldf == null || data == null) return;
+            for (int i = 0; i < _dgvResp.Rows.Count; i++)
+            {
+                var r = _dgvResp.Rows[i];
+                if (!(r.Tag is Tuple<byte, string>)) continue;
+                var t = (Tuple<byte, string>)r.Tag;
+                if (t.Item1 != pid) continue;
+                var s2 = FindSignalDef(ldf, t.Item2);
+                LinFrameSignal fs2 = null;
+                if (s2 != null && ldf.FrameSignals.ContainsKey(pid))
+                    foreach (var x in ldf.FrameSignals[pid]) if (x.SignalName == s2.Name) { fs2 = x; break; }
+                if (s2 != null && fs2 != null)
+                    r.Cells["colRspData"].Value = FormatSigValue(s2, LinLdfHelper.ReadSignalBits(data, fs2.Offset, s2.Width));
+            }
+        }
+
         /// <summary>解析 Hex 文本（空格/0x 分隔）→ 字节数组；非法或空返回 null</summary>
         private static byte[] ParseHexData(string text)
         {
@@ -946,31 +1025,126 @@ namespace PCAN_Client.LIN_UI
         private void DgvResp_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
-            if (e.ColumnIndex != _dgvResp.Columns["colRspEdit"].Index) return;
+            if (e.ColumnIndex != _dgvResp.Columns["colRspExpand"].Index) return;
             var row = _dgvResp.Rows[e.RowIndex];
             if (!(row.Tag is byte)) return;
-            byte pid = (byte)row.Tag;
+            ToggleRespExpand((byte)row.Tag);
+        }
+
+        private void DgvResp_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            // 数据列双击进入编辑，不参与展开/折叠
+            if (e.ColumnIndex == _dgvResp.Columns["colRspData"].Index) return;
+            var row = _dgvResp.Rows[e.RowIndex];
+            if (!(row.Tag is byte)) return;
+            ToggleRespExpand((byte)row.Tag);
+        }
+
+        /// <summary>展开/折叠一帧的信号解析行（＋/－ 切换）</summary>
+        private void ToggleRespExpand(byte pid)
+        {
             var ldf = GetLdf();
-            // 无 LDF 或该帧无信号定义：提示引导
-            if (ldf == null || !ldf.FrameSignals.ContainsKey(pid))
+            if (ldf == null || !ldf.FrameSignals.ContainsKey(pid) || ldf.FrameSignals[pid].Count == 0)
             {
-                MessageBox.Show(this, "该帧在 LDF 中没有信号定义，无法按信号编辑\n请直接编辑「数据 (Hex)」列，或先加载包含该帧信号的 LDF", "编辑信号", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "该帧在 LDF 中没有信号定义，无法展开解析\n可直接编辑「数据 (Hex)」列，或加载包含该帧信号的 LDF", "展开信号", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var data = ParseHexData((row.Cells["colRspData"].Value ?? "").ToString());
+            if (_expandedResp.Contains(pid)) CollapseRespFrame(pid);
+            else ExpandRespFrame(pid, ldf);
+        }
+
+        private void ExpandRespFrame(byte pid, LinLdfFile ldf)
+        {
+            // 定位帧行（忽略可能已存在的信号行）
+            int rowIdx = -1;
+            for (int i = 0; i < _dgvResp.Rows.Count; i++)
+                if (_dgvResp.Rows[i].Tag is byte && (byte)_dgvResp.Rows[i].Tag == pid) { rowIdx = i; break; }
+            if (rowIdx < 0) return;
+
+            var frameRow = _dgvResp.Rows[rowIdx];
+            var data = ParseHexData((frameRow.Cells["colRspData"].Value ?? "").ToString());
             if (data == null || data.Length == 0)
             {
                 byte dlc = ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
                 data = new byte[dlc];
             }
-            using (var dlg = new LinSignalEditForm(ldf, pid, data))
+            int insertAt = rowIdx + 1;
+            int maxNameLen = 0;
+            foreach (var fs in ldf.FrameSignals[pid])
+                if (fs.SignalName.Length > maxNameLen) maxNameLen = fs.SignalName.Length;
+            foreach (var fs in ldf.FrameSignals[pid])
             {
-                if (dlg.ShowDialog(this) != DialogResult.OK) return;
-                var newData = dlg.Data;
-                // 写回数据列（Hex 空格分隔）并同步硬件
-                row.Cells["colRspData"].Value = BitConverter.ToString(newData).Replace("-", " ");
-                Lin_API.UpdateSlaveData(_channel, pid, newData, (byte)newData.Length);
+                var sig = FindSignalDef(ldf, fs.SignalName);
+                ulong raw = sig != null ? LinLdfHelper.ReadSignalBits(data, fs.Offset, sig.Width) : 0;
+                string valText = sig != null ? FormatSigValue(sig, raw) : "—";
+                _dgvResp.Rows.Insert(insertAt, 1);
+                var srow = _dgvResp.Rows[insertAt];
+                srow.Cells["colRspExpand"].Value = "";
+                srow.Cells["colRspEn"].Value = null;
+                srow.Cells["colRspId"].Value = null;
+                srow.Cells["colRspName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
+                srow.Cells["colRspDlc"].Value = "bit " + fs.Offset;
+                srow.Cells["colRspData"].Value = valText;
+                srow.Tag = new Tuple<byte, string>(pid, fs.SignalName);
+                srow.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 248);
+                insertAt++;
             }
+            _expandedResp.Add(pid);
+            frameRow.Cells["colRspExpand"].Value = "－";
+        }
+
+        private void CollapseRespFrame(byte pid)
+        {
+            // 删除该帧的信号行
+            for (int i = _dgvResp.Rows.Count - 1; i >= 0; i--)
+            {
+                var r = _dgvResp.Rows[i];
+                if (r.Tag is Tuple<byte, string> && ((Tuple<byte, string>)r.Tag).Item1 == pid)
+                    _dgvResp.Rows.RemoveAt(i);
+            }
+            _expandedResp.Remove(pid);
+            for (int i = 0; i < _dgvResp.Rows.Count; i++)
+            {
+                var r = _dgvResp.Rows[i];
+                if (r.Tag is byte && (byte)r.Tag == pid) { r.Cells["colRspExpand"].Value = "＋"; break; }
+            }
+        }
+
+        private static LinSignalDef FindSignalDef(LinLdfFile ldf, string name)
+        {
+            foreach (var s in ldf.Signals) if (s.Name == name) return s;
+            return null;
+        }
+
+        /// <summary>信号原始值 → 显示文本（枚举 → 枚举文本；物理值 → 数值 + 单位）</summary>
+        private static string FormatSigValue(LinSignalDef sig, ulong raw)
+        {
+            if (sig.LogicalValues != null && sig.LogicalValues.Count > 0)
+            {
+                string text;
+                if (sig.LogicalValues.TryGetValue((byte)raw, out text)) return text;
+            }
+            double phys = LinLdfHelper.RawToPhys(raw, sig);
+            string num = phys == Math.Floor(phys) ? ((long)phys).ToString() : phys.ToString("0.###");
+            return sig.Unit.Length > 0 ? num + " " + sig.Unit : num;
+        }
+
+        /// <summary>信号值编辑文本 → 原始值（枚举文本 / 数值（可带单位后缀））</summary>
+        private static bool TryParseSigValue(string text, LinSignalDef sig, out ulong raw)
+        {
+            text = (text ?? "").Trim();
+            if (sig.LogicalValues != null && sig.LogicalValues.Count > 0)
+            {
+                foreach (var kv in sig.LogicalValues)
+                    if (string.Equals(kv.Value, text, StringComparison.OrdinalIgnoreCase)) { raw = kv.Key; return true; }
+            }
+            if (sig.Unit.Length > 0 && text.EndsWith(sig.Unit, StringComparison.OrdinalIgnoreCase))
+                text = text.Substring(0, text.Length - sig.Unit.Length).Trim();
+            double phys;
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out phys)) { raw = 0; return false; }
+            raw = LinLdfHelper.PhysToRaw(phys, sig);
+            return true;
         }
 
         // ==================== 信号页签 ====================

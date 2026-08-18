@@ -29,6 +29,12 @@ namespace PCAN_Client.LIN_API
         public double MaxValue;
         public double Scale = 1;
         public double Offset;
+        /// <summary>Signal_representations 绑定的编码名（Signal_encoding_types）</summary>
+        public string EncodingName = "";
+        /// <summary>physical_value 编码的单位（如 "V"、"ug/m^3"）；无单位为空</summary>
+        public string Unit = "";
+        /// <summary>logical_value 编码的枚举映射（raw → 文本）；非枚举信号为 null</summary>
+        public Dictionary<byte, string> LogicalValues;
     }
 
     /// <summary>帧内信号映射（SignalName 在帧数据中的起始位 offset）</summary>
@@ -159,8 +165,8 @@ namespace PCAN_Client.LIN_API
         {
             switch (block)
             {
-                case "Node_attributes": case "Signal_encoding_types": case "Signal_groups":
-                case "Signal_representation": case "Node_compositions":
+                case "Node_attributes": case "Signal_groups":
+                case "Node_compositions":
                 case "Diagnostic_addresses":
                     return true;
                 default:
@@ -175,6 +181,9 @@ namespace PCAN_Client.LIN_API
             string curTable = null;             // 当前调度表名
             var slaveNames = new HashSet<string>();
             var sporadicFrames = new HashSet<string>();
+            // Signal_encoding_types / Signal_representation 解析数据（收尾统一赋给信号）
+            var encData = new Dictionary<string, Tuple<string, Dictionary<byte, string>>>(); // 编码名 → (单位, 逻辑值枚举)
+            var repMap = new Dictionary<string, string>();                                  // 信号名 → 编码名
 
             for (int i = 0; i < lines.Length; i++)
             {
@@ -233,6 +242,12 @@ namespace PCAN_Client.LIN_API
                         curTable = head;
                         continue;
                     }
+                    // 2.5) Signal_encoding_types 内的编码定义名行：NAME {
+                    if (top == "Signal_encoding_types" && head.Length > 0)
+                    {
+                        stack.Add("EncodingBody:" + head);
+                        continue;
+                    }
                     // 3) Frames/Diagnostic_frames 内的帧定义行（嵌套信号列表）
                     if (top == "Frames" || top == "Diagnostic_frames")
                     {
@@ -275,6 +290,18 @@ namespace PCAN_Client.LIN_API
                         if (line.EndsWith(";")) line = line.Substring(0, line.Length - 1).Trim();
                         if (line.Length > 0 && curTable == null) { curTable = line; stack.Add("Table:" + line); }
                         break;
+                    case "Signal_encoding_types":
+                        // 编码类型定义：NAME { ... } → 进入编码体上下文
+                        if (line.EndsWith("{"))
+                        {
+                            string encName = line.Substring(0, line.Length - 1).Trim();
+                            if (encName.Length > 0) stack.Add("EncodingBody:" + encName);
+                        }
+                        break;
+                    case "Signal_representation":
+                        // 绑定行：ENC_NAME: SIG1, SIG2 ;  → 记录 信号名→编码名 映射
+                        ParseSignalRepresentation(line, repMap, lineNo);
+                        break;
                     case "Event_triggered_frames":
                         ParseEventFrame(file, line, lineNo);
                         break;
@@ -293,6 +320,12 @@ namespace PCAN_Client.LIN_API
                 if (ctx.StartsWith("Table:"))
                 {
                     ParseScheduleSlot(file, ctx.Substring(6), line, lineNo);
+                }
+
+                // EncodingBody:xxx 上下文（编码条目行：logical_value / physical_value）
+                if (ctx.StartsWith("EncodingBody:"))
+                {
+                    ParseEncodingEntry(encData, ctx.Substring(13), line, lineNo);
                 }
             }
 
@@ -321,7 +354,71 @@ namespace PCAN_Client.LIN_API
                 }
             }
             file.SlaveRespIds.Sort();
+
+            // ===== 收尾：信号编码信息（单位 / 枚举）=====
+            foreach (var sig in file.Signals)
+            {
+                string enc;
+                if (!repMap.TryGetValue(sig.Name, out enc)) continue;
+                Tuple<string, Dictionary<byte, string>> info;
+                if (!encData.TryGetValue(enc, out info)) continue;
+                sig.EncodingName = enc;
+                sig.Unit = info.Item1;
+                sig.LogicalValues = info.Item2 != null && info.Item2.Count > 0 ? info.Item2 : null;
+            }
             return file;
+        }
+
+        /// <summary>解析 Signal_representation 绑定行：ENC_NAME: SIG1, SIG2 ;</summary>
+        private static void ParseSignalRepresentation(string line, Dictionary<string, string> repMap, int lineNo)
+        {
+            string l = line.Trim().TrimEnd(';').Trim();
+            if (l.Length == 0) return;
+            int colon = l.IndexOf(':');
+            if (colon <= 0) return;
+            string encName = l.Substring(0, colon).Trim();
+            string[] sigs = SplitTopLevel(l.Substring(colon + 1));
+            foreach (string s in sigs)
+            {
+                string sigName = s.Trim();
+                if (sigName.Length > 0 && !repMap.ContainsKey(sigName)) repMap[sigName] = encName;
+            }
+        }
+
+        /// <summary>解析 Signal_encoding_types 内的编码条目：logical_value, raw, "文本" / physical_value, min, max, scale, offset, "单位"</summary>
+        private static void ParseEncodingEntry(Dictionary<string, Tuple<string, Dictionary<byte, string>>> encData,
+            string encName, string line, int lineNo)
+        {
+            string l = line.Trim().TrimEnd(';').Trim();
+            if (l.Length == 0) return;
+            Tuple<string, Dictionary<byte, string>> entry;
+            if (!encData.TryGetValue(encName, out entry))
+            {
+                entry = Tuple.Create<string, Dictionary<byte, string>>("", null);
+                encData[encName] = entry;
+            }
+            string[] parts = SplitTopLevel(l);
+            if (parts.Length < 2) return;
+            string kind = parts[0].Trim().ToUpperInvariant();
+            if (kind == "LOGICAL_VALUE")
+            {
+                byte raw;
+                if (!byte.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out raw)) return;
+                string text = parts.Length >= 3 ? parts[2].Trim().Trim('"') : "";
+                if (entry.Item2 == null) entry = Tuple.Create(entry.Item1, new Dictionary<byte, string>());
+                if (!entry.Item2.ContainsKey(raw)) entry.Item2[raw] = text;
+                encData[encName] = entry;
+            }
+            else if (kind == "PHYSICAL_VALUE")
+            {
+                // physical_value, min, max, scale, offset, "unit"
+                if (parts.Length >= 6)
+                {
+                    string unit = parts[5].Trim().Trim('"');
+                    if (unit.Length > 0 && entry.Item1.Length == 0) entry = Tuple.Create(unit, entry.Item2);
+                    encData[encName] = entry;
+                }
+            }
         }
 
         private static void ParseNodes(string line, LinLdfFile file, HashSet<string> slaveNames, int lineNo)
@@ -453,8 +550,7 @@ namespace PCAN_Client.LIN_API
                 MinValue = min,
                 MaxValue = max,
                 Scale = scale,
-                Offset = offset,
-            });
+                Offset = offset,            });
         }
 
         /// <summary>事件触发帧：NAME : COLLISION_TABLE, ID, F1, F2...;（无 DLC，取包含帧的 DLC）</summary>
