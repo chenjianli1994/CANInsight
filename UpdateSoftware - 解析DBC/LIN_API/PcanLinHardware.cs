@@ -93,24 +93,30 @@ namespace PCAN_Client.LIN_API
         /// <summary>连接：注册客户端 → 定位硬件句柄 → 初始化模式/波特率 → 配置帧条目 → 启动接收线程</summary>
         public string Connect()
         {
+            LinDebugLog.Open("ch" + _logicChannel + " " + _cfg.HwHandle);
+            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " Baud=" + _cfg.Baudrate);
             try
             {
                 LinPlError err = LinPlApi.RegisterClient("CANInsight_LIN", IntPtr.Zero, out _client);
+                LinDebugLog.Write("[CONN] RegisterClient → err=" + err + " client=" + _client);
                 if (err != LinPlError.errOK) return "注册 PLIN 客户端失败: " + LinPlErrorCodes.ToChinese(err);
                 if (_client == LinPlApi.INVALID_LIN_HANDLE) return "注册 PLIN 客户端失败（句柄无效）";
 
                 // 按 HwHandle 定位硬件句柄
                 ushort count = 0;
                 err = LinPlApi.GetAvailableHardware(null, 0, out count);
+                LinDebugLog.Write("[CONN] GetAvailableHardware(count) → err=" + err + " count=" + count);
                 if (err != LinPlError.errOK || count == 0) { CleanupClient(); return "未找到 PEAK LIN 硬件（检查硬件连接与驱动、PLINDeviceManager 是否运行）"; }
                 var handles = new ushort[count];
                 err = LinPlApi.GetAvailableHardware(handles, (ushort)(count * 2), out count);
+                LinDebugLog.Write("[CONN] GetAvailableHardware(list) → err=" + err + " count=" + count);
                 if (err != LinPlError.errOK) { CleanupClient(); return "枚举 PEAK LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 bool found = false;
                 foreach (ushort hw in handles)
                 {
                     string hwHandle = $"{GetHwName(hw)}:LIN{GetHwChannelNumber(hw)}";
+                    LinDebugLog.Write("[CONN] 枚举硬件句柄 hw=" + hw + " name=" + hwHandle);
                     if (string.Equals(hwHandle, _cfg.HwHandle, StringComparison.OrdinalIgnoreCase))
                     {
                         _hw = hw;
@@ -121,6 +127,7 @@ namespace PCAN_Client.LIN_API
                 if (!found) { CleanupClient(); return $"未找到配置的 LIN 通道 {_cfg.HwHandle}（硬件未连接或已被其他软件占用）"; }
 
                 err = LinPlApi.ConnectClient(_client, _hw);
+                LinDebugLog.Write("[CONN] ConnectClient → err=" + err + " client=" + _client + " hw=" + _hw);
                 if (err != LinPlError.errOK) { CleanupClient(); return "连接 LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
@@ -129,10 +136,12 @@ namespace PCAN_Client.LIN_API
                 // 重新 InitializeHardware 可复位管理器对该硬件的过滤/客户端注册状态。重复初始化同参数为幂等操作。
                 LinPlHardwareMode mode = _cfg.Mode == LinNodeMode.Master ? LinPlHardwareMode.modMaster : LinPlHardwareMode.modSlave;
                 err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
+                LinDebugLog.Write("[CONN] InitializeHardware mode=" + mode + " baud=" + _cfg.Baudrate + " → err=" + err);
                 if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；wFilterType=0 用管理器默认过滤类型）
                 err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
+                LinDebugLog.Write("[CONN] SetClientFilter mask=FFFFFFFFFFFFFFFF type=0 → err=" + err);
                 if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
                 {
                     CleanupClient();
@@ -141,6 +150,7 @@ namespace PCAN_Client.LIN_API
 
                 // 接收全部帧 ID（0-63）
                 err = LinPlApi.RegisterFrameId(_client, _hw, 0, LinPlApi.LIN_MAX_FRAME_ID);
+                LinDebugLog.Write("[CONN] RegisterFrameId 0..63 → err=" + err);
                 if (err != LinPlError.errOK && err != LinPlError.errIllegalFrameID) { CleanupClient(); return "注册帧 ID 失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 ConfigureFrameEntries();
@@ -148,10 +158,12 @@ namespace PCAN_Client.LIN_API
                 _running = true;
                 _recvThread = new Thread(ReceiveLoop) { IsBackground = true, Name = $"PLIN_Rx_CH{_logicChannel}" };
                 _recvThread.Start();
+                LinDebugLog.Write("[CONN] Connect 成功（接收线程已启动），日志文件: " + LinDebugLog.LogPath);
                 return "";
             }
             catch (Exception ex)
             {
+                LinDebugLog.Write("[CONN] Connect 异常: " + ex);
                 CleanupClient();
                 return "PEAK LIN 连接异常: " + ex.Message;
             }
@@ -160,36 +172,44 @@ namespace PCAN_Client.LIN_API
         /// <summary>连接失败路径清理：断开客户端连接并移除注册，避免残留导致下次连接状态异常</summary>
         private void CleanupClient()
         {
+            LinDebugLog.Write("[CONN] CleanupClient: client=" + _client + " hw=" + _hw);
             try
             {
                 if (_client != LinPlApi.INVALID_LIN_HANDLE)
                 {
                     if (_hw != LinPlApi.INVALID_LIN_HANDLE)
-                        LinPlApi.DisconnectClient(_client, _hw);
-                    LinPlApi.RemoveClient(_client);
+                    {
+                        LinPlError err = LinPlApi.DisconnectClient(_client, _hw);
+                        LinDebugLog.Write("[CONN] Cleanup DisconnectClient → err=" + err);
+                    }
+                    LinPlError err2 = LinPlApi.RemoveClient(_client);
+                    LinDebugLog.Write("[CONN] Cleanup RemoveClient → err=" + err2);
                 }
             }
-            catch { }
+            catch (Exception ex) { LinDebugLog.Write("[CONN] CleanupClient 异常: " + ex.Message); }
             _client = LinPlApi.INVALID_LIN_HANDLE;
             _hw = LinPlApi.INVALID_LIN_HANDLE;
         }
 
         public void Disconnect()
         {
+            LinDebugLog.Write("[CONN] Disconnect: client=" + _client + " hw=" + _hw + " running=" + _running);
             _running = false;
             try { if (_recvThread != null && _recvThread.IsAlive) _recvThread.Join(500); } catch { }
             try
             {
                 if (_client != LinPlApi.INVALID_LIN_HANDLE && _hw != LinPlApi.INVALID_LIN_HANDLE)
                 {
-                    LinPlApi.DisconnectClient(_client, _hw);
+                    LinPlError err = LinPlApi.DisconnectClient(_client, _hw);
+                    LinDebugLog.Write("[CONN] Disconnect DisconnectClient → err=" + err);
                 }
                 if (_client != LinPlApi.INVALID_LIN_HANDLE)
                 {
-                    LinPlApi.RemoveClient(_client);
+                    LinPlError err2 = LinPlApi.RemoveClient(_client);
+                    LinDebugLog.Write("[CONN] Disconnect RemoveClient → err=" + err2);
                 }
             }
-            catch { }
+            catch (Exception ex) { LinDebugLog.Write("[CONN] Disconnect 异常: " + ex.Message); }
             _client = LinPlApi.INVALID_LIN_HANDLE;
             _hw = LinPlApi.INVALID_LIN_HANDLE;
         }
@@ -200,7 +220,11 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         private void ConfigureFrameEntries()
         {
-            if (_cfg.LdfHelper == null || _cfg.LdfHelper.Frames.Count == 0) return;
+            if (_cfg.LdfHelper == null || _cfg.LdfHelper.Frames.Count == 0)
+            {
+                LinDebugLog.Write("[SLAVE] ConfigureFrameEntries: 无 LDF，跳过帧条目配置");
+                return;
+            }
             foreach (var kv in _cfg.LdfHelper.Frames)
             {
                 byte pid = kv.Key;
@@ -210,7 +234,8 @@ namespace PCAN_Client.LIN_API
                 bool slaveResp = _cfg.Mode == LinNodeMode.Slave && !publisher;
                 if (publisher || slaveResp)
                 {
-                    SetFrameEntry(pid, def.Dlc, slaveResp, def.Publisher.Length == 0 ? null : def.Publisher);
+                    bool ok = SetFrameEntry(pid, def.Dlc, slaveResp, def.Publisher.Length == 0 ? null : def.Publisher);
+                    LinDebugLog.Write("[SLAVE] SetFrameEntry pid=" + pid + " dlc=" + def.Dlc + " publisher=" + def.Publisher + " slaveResp=" + slaveResp + " → " + (ok ? "OK" : "FAIL"));
                 }
             }
         }
@@ -226,7 +251,9 @@ namespace PCAN_Client.LIN_API
                 Flags = (ushort)(responseEnable ? LinPlApi.FRAME_FLAG_RESPONSE_ENABLE : 0),
                 InitialData = new byte[8],
             };
-            return LinPlApi.SetFrameEntry(_client, _hw, ref entry) == LinPlError.errOK;
+            LinPlError err = LinPlApi.SetFrameEntry(_client, _hw, ref entry);
+            LinDebugLog.Write("[SLAVE] SetFrameEntry pid=" + pid + " len=" + len + " respEnable=" + responseEnable + " publisher=" + (publisher == null ? "" : publisher) + " → err=" + err);
+            return err == LinPlError.errOK;
         }
 
         // ==================== 发送 ====================
@@ -242,7 +269,7 @@ namespace PCAN_Client.LIN_API
 
         public bool Transmit(byte pid, byte[] data, LinChecksumKind ck)
         {
-            if (!IsConnected) return false;
+            if (!IsConnected) { LinDebugLog.Write("[TX] Transmit pid=" + pid + " 未连接，拒绝"); return false; }
             byte len = (byte)(data == null ? 0 : data.Length);
             if (len > 8) return false;
             var msg = new LinPlMsg
@@ -255,13 +282,15 @@ namespace PCAN_Client.LIN_API
             };
             if (data != null) Array.Copy(data, msg.Data, len);
             msg.Checksum = LinChecksum.Calculate(data, pid, ck == LinChecksumKind.Enhanced);
-            return LinPlApi.Write(_client, _hw, ref msg) == LinPlError.errOK;
+            LinPlError err = LinPlApi.Write(_client, _hw, ref msg);
+            LinDebugLog.Write("[TX] Transmit pid=" + pid + " pidParity=" + msg.FrameId + " len=" + len + " data=" + LinDebugLog.Hex(data) + " ckType=" + msg.ChecksumType + " checksum=0x" + msg.Checksum.ToString("X2") + " → err=" + err);
+            return err == LinPlError.errOK;
         }
 
         /// <summary>发 Header（dirSubscriber：硬件发 Header 后等待从节点应答；Length 为期望响应长度）</summary>
         public bool SendHeader(byte pid, byte dlc)
         {
-            if (!IsConnected) return false;
+            if (!IsConnected) { LinDebugLog.Write("[TX] SendHeader pid=" + pid + " 未连接，拒绝"); return false; }
             byte len = dlc == 0 ? (byte)8 : dlc;
             var msg = new LinPlMsg
             {
@@ -272,7 +301,9 @@ namespace PCAN_Client.LIN_API
                 Data = new byte[8],
                 Checksum = 0,
             };
-            return LinPlApi.Write(_client, _hw, ref msg) == LinPlError.errOK;
+            LinPlError err = LinPlApi.Write(_client, _hw, ref msg);
+            LinDebugLog.Write("[TX] SendHeader pid=" + pid + " pidParity=" + msg.FrameId + " expectLen=" + len + " → err=" + err);
+            return err == LinPlError.errOK;
         }
 
         /// <summary>软件调度发一帧：有缓存数据发完整帧（dirPublisher），无数据发 Header-only</summary>
@@ -282,8 +313,12 @@ namespace PCAN_Client.LIN_API
             lock (_frameData)
             {
                 if (!_frameData.TryGetValue(pid, out data) || data == null || data.Length == 0)
+                {
+                    LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 无缓存数据 → Header-only");
                     return SendHeader(pid, dlc);
+                }
             }
+            LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 有缓存数据 " + data.Length + " 字节 → 完整帧");
             return Transmit(pid, data, LinChecksumKind.Enhanced);
         }
 
@@ -300,7 +335,7 @@ namespace PCAN_Client.LIN_API
         /// <summary>更新从节点发布帧数据（硬件自动应答内容）；帧条目缺失或被禁用时先重建 RESPONSE_ENABLE 条目</summary>
         public bool UpdateSlaveData(byte pid, byte[] data)
         {
-            if (!IsConnected || data == null || data.Length > 8) return false;
+            if (!IsConnected || data == null || data.Length > 8) { LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " 未连接或数据非法 len=" + (data == null ? -1 : data.Length)); return false; }
             lock (_frameData) { _frameData[pid] = (byte[])data.Clone(); }
             // 确保帧条目为 Publisher + RESPONSE_ENABLE（被 DisableResponse 置 dirDisabled 后需恢复）
             var entry = new LinPlFrameEntry
@@ -314,8 +349,10 @@ namespace PCAN_Client.LIN_API
             };
             Array.Copy(data, entry.InitialData, data.Length);
             LinPlError err = LinPlApi.SetFrameEntry(_client, _hw, ref entry);
-            if (err != LinPlError.errOK) return false;
-            return LinPlApi.UpdateByteArray(_client, _hw, pid, 0, (byte)data.Length, data) == LinPlError.errOK;
+            if (err != LinPlError.errOK) { LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " SetFrameEntry → err=" + err); return false; }
+            LinPlError err2 = LinPlApi.UpdateByteArray(_client, _hw, pid, 0, (byte)data.Length, data);
+            LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " len=" + data.Length + " data=" + LinDebugLog.Hex(data) + " SetFrameEntry=OK UpdateByteArray → err=" + err2);
+            return err2 == LinPlError.errOK;
         }
 
         /// <summary>停用响应：帧条目方向置禁用（硬件不再自动应答该 ID）</summary>
@@ -400,7 +437,16 @@ namespace PCAN_Client.LIN_API
                 if (err == LinPlError.errOK && count > 0)
                 {
                     _consecutiveErrors = 0;
-                    for (int i = 0; i < count; i++) HandleRcvMsg(buf[i]);
+                    for (int i = 0; i < count; i++)
+                    {
+                        LinDebugLog.Write("[RX] msg Type=" + buf[i].Type + " ID=" + buf[i].FrameId + " len=" + buf[i].Length +
+                            " dir=" + buf[i].Direction + " ckType=" + buf[i].ChecksumType +
+                            " data=" + LinDebugLog.Hex(buf[i].Data, buf[i].Length) +
+                            " checksum=0x" + buf[i].Checksum.ToString("X2") +
+                            " errFlags=0x" + ((int)buf[i].ErrorFlags).ToString("X8") +
+                            " ts=" + buf[i].TimeStamp + " hw=" + buf[i].hHw);
+                        HandleRcvMsg(buf[i]);
+                    }
                     continue; // 立即再读，尽量排空硬件队列
                 }
                 if (err == LinPlError.errRcvQueueEmpty)
@@ -412,6 +458,8 @@ namespace PCAN_Client.LIN_API
                 else
                 {
                     _consecutiveErrors++;
+                    if (_consecutiveErrors == 1 || _consecutiveErrors == 10)
+                        LinDebugLog.Write("[RX] ReadMulti → err=" + err + " consecutive=" + _consecutiveErrors);
                     if (_consecutiveErrors >= 10)
                     {
                         _consecutiveErrors = 0;
@@ -420,6 +468,7 @@ namespace PCAN_Client.LIN_API
                     Thread.Sleep(20);
                 }
             }
+            LinDebugLog.Write("[RX] 接收线程退出");
         }
 
         private void HandleRcvMsg(LinPlRcvMsg m)
@@ -429,7 +478,12 @@ namespace PCAN_Client.LIN_API
             {
                 if (m.Type == LinPlMsgType.mstBusSleep || m.Type == LinPlMsgType.mstBusWakeUp || m.Type == LinPlMsgType.mstOverrun)
                 {
+                    LinDebugLog.Write("[RX] 总线事件 Type=" + m.Type + " errFlags=0x" + ((int)m.ErrorFlags).ToString("X8"));
                     Lin_API.OnBusEvent(_logicChannel, m.Type == LinPlMsgType.mstBusSleep ? "Sleep" : m.Type == LinPlMsgType.mstBusWakeUp ? "WakeUp" : "Overrun");
+                }
+                else
+                {
+                    LinDebugLog.Write("[RX] 非标准消息 Type=" + m.Type + " errFlags=0x" + ((int)m.ErrorFlags).ToString("X8"));
                 }
                 return;
             }
@@ -457,6 +511,9 @@ namespace PCAN_Client.LIN_API
             else if ((m.ErrorFlags & (LinPlMsgErrors.GroundShort | LinPlMsgErrors.VBatShort | LinPlMsgErrors.SlotDelay)) != 0)
                 frame.ErrorKind = LinErrorKind.Hw;
             // OtherResponse（其他节点响应）：正常帧语义，不标错
+
+            if (frame.ErrorKind != LinErrorKind.None)
+                LinDebugLog.Write("[ERR] id=" + m.FrameId + " errFlags=0x" + ((int)m.ErrorFlags).ToString("X8") + " → ErrorKind=" + frame.ErrorKind + " checksumOk=" + frame.ChecksumOk);
 
             Lin_API.LinReceive(_logicChannel, frame);
         }

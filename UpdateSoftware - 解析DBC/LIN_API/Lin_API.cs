@@ -50,6 +50,8 @@ namespace PCAN_Client.LIN_API
         /// <summary>按通道配置连接硬件；成功返回 ""，失败返回中文原因</summary>
         public static string LinConnect(byte logicChannel)
         {
+            LinDebugLog.Open("ch" + logicChannel);
+            LinDebugLog.Write("[CONN] LinConnect 入口 ch=" + logicChannel);
             if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return "逻辑通道号越界";
             var cfg = LinConfig.Channels[logicChannel - 1];
 
@@ -62,12 +64,14 @@ namespace PCAN_Client.LIN_API
                 var hw = new PcanLinHardware(logicChannel, cfg);
                 err = hw.Connect();
                 lock (_hwLock) { if (err.Length == 0) _pcan[logicChannel] = hw; }
+                LinDebugLog.Write("[CONN] LinConnect PEAK ch=" + logicChannel + " → err='" + err + "'");
             }
             else if (cfg.HwType == LinConfig.HwTypeCanoe)
             {
                 var hw = new XlLinHardware(logicChannel, cfg);
                 err = hw.Connect();
                 lock (_hwLock) { if (err.Length == 0) _xl[logicChannel] = hw; }
+                LinDebugLog.Write("[CONN] LinConnect Vector ch=" + logicChannel + " → err='" + err + "'");
             }
             else
             {
@@ -83,6 +87,7 @@ namespace PCAN_Client.LIN_API
 
         public static void LinDisconnect(byte logicChannel)
         {
+            LinDebugLog.Write("[CONN] LinDisconnect 入口 ch=" + logicChannel);
             PcanLinHardware pcan = null;
             XlLinHardware xl = null;
             lock (_hwLock)
@@ -141,6 +146,7 @@ namespace PCAN_Client.LIN_API
                 if (_pcan.TryGetValue(logicChannel, out pcan)) ok = pcan.SendHeader(pid, GetFrameDlc(logicChannel, pid));
                 else if (_xl.TryGetValue(logicChannel, out xl)) ok = xl.SendRequest(pid);
             }
+            LinDebugLog.Write("[SCH] LinSendHeader ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
             if (ok) EchoTx(logicChannel, pid, null, LinChecksumKind.Enhanced);
             return ok;
         }
@@ -154,11 +160,13 @@ namespace PCAN_Client.LIN_API
                 if (_pcan.TryGetValue(logicChannel, out pcan))
                 {
                     bool ok = pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
+                    LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
                     // 回显：硬件不回传本端发送帧，软件调度须自行显示（数据为缓存帧数据，无缓存为 Header 记录）
                     if (ok) EchoTx(logicChannel, pid, pcan.GetFrameData(pid), LinChecksumKind.Enhanced);
                     return ok;
                 }
             }
+            LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → false（非 PEAK，回退 LinSendHeader）");
             return false;
         }
 
@@ -230,8 +238,13 @@ namespace PCAN_Client.LIN_API
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
 
-                // 总线活动记录（响应超时判定）：任何该帧记录都算活动（含硬件错误帧——说明 Header 已到）
-                lock (_pidLock) { _pidActivityMs[((long)logicChannel << 8) | frame.Pid] = SessionMs; }
+                // 总线活动记录（响应超时判定）：仅 Rx 记录算活动——Tx 是本机发送回显（EchoTx），
+                // 若计入会把"本机刚发送"误当"从节点应答"，主节点模式超时检测将永不触发。
+                // 含硬件错误帧（errFlags 非 0）——说明 Header 已到总线，也算活动。
+                if (frame.Direction == LinFrameDir.Rx)
+                {
+                    lock (_pidLock) { _pidActivityMs[((long)logicChannel << 8) | frame.Pid] = SessionMs; }
+                }
 
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
                 var ldf = GetLdf(logicChannel);
@@ -271,12 +284,16 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public static string StartSchedule(byte logicChannel, List<LinScheduleSlot> slots)
         {
+            bool master = logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
+                          LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master;
+            var sb = new System.Text.StringBuilder();
+            foreach (var s in slots) { if (s.Enabled) { if (sb.Length > 0) sb.Append(','); sb.Append("0x").Append(s.Pid.ToString("X2")).Append('@').Append(s.SlotMs).Append("ms"); } }
+            LinDebugLog.Write("[SCH] StartSchedule ch=" + logicChannel + " master=" + master + " slots=" + sb);
             // M2: 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）。
             // 仅主节点模式：从节点模式下预置会让本机对主节点发布帧配置 RESPONSE_ENABLE 自动应答，
             // 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
             // 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
-            if (logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
-                LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master)
+            if (master)
             {
                 var ldf = GetLdf(logicChannel);
                 if (ldf != null)
@@ -374,6 +391,7 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public static void OnLinkLost(byte logicChannel, string reason, object sender)
         {
+            LinDebugLog.Write("[LINK] OnLinkLost ch=" + logicChannel + " reason=" + reason + " sender=" + (sender == null ? "null" : sender.GetType().Name));
             LinkLost?.Invoke(logicChannel, reason);
             Task.Run(async () =>
             {
@@ -397,8 +415,10 @@ namespace PCAN_Client.LIN_API
                             hw = cur;
                         }
                     }
+                    LinDebugLog.Write("[LINK] 自动重连 attempt=" + attempt);
                     LinDisconnect(logicChannel);
                     string err = LinConnect(logicChannel);
+                    LinDebugLog.Write("[LINK] 自动重连 attempt=" + attempt + " → " + (err.Length == 0 ? "成功" : "失败: " + err));
                     if (err.Length == 0) return; // 重连成功（ChannelStateChanged 已通知）
                     // 重连失败：实例未写回字典，恢复亲和占位使下一次尝试可继续
                     if (hw != null)
@@ -443,6 +463,7 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         internal static void InjectNoResponse(byte logicChannel, byte pid)
         {
+            LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + "（窗口内无 Rx 活动）");
             var ldf = GetLdf(logicChannel);
             byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
             var frame = new LinFrameRecord
@@ -457,6 +478,16 @@ namespace PCAN_Client.LIN_API
                 FrameName = LinLdfHelper.GetFrameName(ldf, pid),
             };
             LinReceive(logicChannel, frame);
+        }
+
+        /// <summary>该帧是否为 LDF 中主节点发布帧（主节点模式发完整帧后无需应答，超时检测应跳过）；无 LDF 返回 false</summary>
+        internal static bool IsMasterPublisherFrame(byte logicChannel, byte pid)
+        {
+            var ldf = GetLdf(logicChannel);
+            if (ldf == null) return false;
+            LinFrameDef def;
+            if (!ldf.Frames.TryGetValue(pid, out def)) return false;
+            return def.Publisher == ldf.MasterName;
         }
     }
 }

@@ -212,12 +212,23 @@ namespace PCAN_Client.LIN_API
             _cursor = (idx + 1) % snapshot.Count;
             _nextDueMs = now + slot.SlotMs; // 累计式：基于实际时刻，防漂移
 
-            // 发出 Header（Vector：数据由发布配置在硬件侧自动补响应；
-            // PEAK：有缓存数据发完整帧，否则发 Header-only 等从节点应答）
-            if (!Lin_API.LinSendScheduleFrame(_logicChannel, slot.Pid))
-                Lin_API.LinSendHeader(_logicChannel, slot.Pid);
+            // 主节点模式：软件调度发 Header/帧（有缓存数据发完整帧，否则发 Header-only 等从节点应答）。
+            // 从节点模式：LIN 从节点无权主动发 Header（协议约束），调度仅作响应监控——检测外部主节点
+            // 周期内本机/总线应答是否发生（CheckResponseTimeout）；若也从节点模式发帧，会与真实主节点
+            // 抢总线 → 数据冲突、全部校验和错误（实测症状：接入外部主节点后所有报文报错误帧）。
+            bool master = _logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
+                          LinConfig.Channels[_logicChannel - 1].Mode == LinNodeMode.Master;
+            bool sent = false;
+            if (master)
+            {
+                if (!Lin_API.LinSendScheduleFrame(_logicChannel, slot.Pid))
+                    sent = Lin_API.LinSendHeader(_logicChannel, slot.Pid);
+                else
+                    sent = true;
+            }
             CheckResponseTimeout(slot); // 发送后：窗口内无该帧活动 → 注入无应答错误（主/从节点模式均适用）
             slot.Counter++;
+            LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") + " slotMs=" + slot.SlotMs + " master=" + master + " sent=" + sent);
             SlotChanged?.Invoke(idx);
         }
 
@@ -226,15 +237,28 @@ namespace PCAN_Client.LIN_API
         /// 主节点 = 硬件回报应答/错误帧）。窗口内无活动（无帧头/无应答且硬件未报错）→ 注入
         /// NoResponse 错误帧 → 报文列表 err 列亮红灯。节流：同 PID 每超时窗口最多注入一条。
         /// 硬件已报错误帧（有活动）时不再注入，避免重复。
+        /// 主节点发布帧（LDF Publisher==MasterName）跳过：主节点模式发完整帧后从节点只接收
+        /// 不应答，无活动是正常协议行为，不注入。
         /// </summary>
         private void CheckResponseTimeout(LinScheduleSlot slot)
         {
+            if (Lin_API.IsMasterPublisherFrame(_logicChannel, slot.Pid))
+            {
+                LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 主节点发布帧，跳过（不期待应答）");
+                return;
+            }
             long timeoutMs = Math.Max(500, (long)slot.SlotMs * 2);
-            if (Lin_API.HasPidActivity(_logicChannel, slot.Pid, timeoutMs)) return; // 窗口内有活动（含硬件错误帧）
+            bool hasActivity = Lin_API.HasPidActivity(_logicChannel, slot.Pid, timeoutMs);
+            if (hasActivity) return; // 窗口内有活动（含硬件错误帧）
             long now = Lin_API.SessionMs;
             long last;
-            if (_respErrStamp.TryGetValue(slot.Pid, out last) && now - last < timeoutMs) return; // 冷却中
+            if (_respErrStamp.TryGetValue(slot.Pid, out last) && now - last < timeoutMs)
+            {
+                LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " windowMs=" + timeoutMs + " activity=false → 冷却中，跳过");
+                return; // 冷却中
+            }
             _respErrStamp[slot.Pid] = now;
+            LinDebugLog.Write("[SCH] timeoutCheck ch=" + _logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " windowMs=" + timeoutMs + " activity=false → 注入 NoResponse");
             Lin_API.InjectNoResponse(_logicChannel, slot.Pid);
         }
     }

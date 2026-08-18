@@ -332,6 +332,7 @@
     <Compile Include="LIN_API\PcanLinHardware.cs" />
     <Compile Include="LIN_API\XlLinHardware.cs" />
     <Compile Include="LIN_API\Lin_API.cs" />
+    <Compile Include="LIN_API\LinDebugLog.cs" />
     <Compile Include="LIN_API\LinScheduler.cs" />
     <Compile Include="LIN_UI\LinChannelPanel.cs">
       <SubType>UserControl</SubType>
