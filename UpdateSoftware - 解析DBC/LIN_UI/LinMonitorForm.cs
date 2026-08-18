@@ -533,8 +533,6 @@ namespace PCAN_Client.LIN_UI
 
         private void LayoutControls()
         {
-            _toolStripLin.Dock = DockStyle.Top;
-            // 表格与页签上下分栏：上表格（报文显示）约 46%，下页签约 54%
             var split = new SplitContainer
             {
                 Dock = DockStyle.Fill,
@@ -543,8 +541,15 @@ namespace PCAN_Client.LIN_UI
             };
             split.Panel1.Controls.Add(_dgvFrames);
             split.Panel2.Controls.Add(_tabLin);
+            // Dock 布局顺序（实测最小复现）：Fill 容器必须先于 Top/Bottom 条带加入——
+            // 条带先加入时 Fill 分栏会占满全客户区、工具栏/状态栏叠画其上，报文表头被工具栏盖住。
+            // 其余窗体（AnalysisTypeSelector 等）均为「Fill 先添加、条带后添加」，与之一致。
+            Controls.Remove(_toolStripLin);
+            Controls.Remove(_statusStrip);
             Controls.Add(split);
-            _dgvFrames.Dock = DockStyle.Fill;
+            Controls.Add(_toolStripLin);
+            Controls.Add(_statusStrip);
+            _toolStripLin.Dock = DockStyle.Top;
             _statusStrip.Dock = DockStyle.Bottom;
             // SplitterDistance 须在窗体尺寸确定后设置（构造时 ClientSize 未知会按比例失真）
             this.Shown += (s, e) => { try { split.SplitterDistance = 320; } catch { } };
