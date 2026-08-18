@@ -208,14 +208,15 @@ namespace PCAN_Client.LIN_UI
             // ---- 调度表页签 ----
             var slotPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _slotToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start" });
-            _slotToolbar.Items.Add(new ToolStripButton("暂停", ToolbarIcons.Get("stop")) { Tag = "suspend" });
-            _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step" });
+            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "按勾选启用的帧循环发送 Header" });
+            _slotToolbar.Items.Add(new ToolStripButton("暂停", ToolbarIcons.Get("stop")) { Tag = "suspend", ToolTipText = "暂停调度" });
+            _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step", ToolTipText = "发送选中帧 Header 一次（Vector 软件模式）" });
             _slotToolbar.Items.Add(new ToolStripSeparator());
-            _slotToolbar.Items.Add(new ToolStripButton("添加帧槽", ToolbarIcons.Get("plus")) { Tag = "add" });
-            _slotToolbar.Items.Add(new ToolStripButton("删除", ToolbarIcons.Get("clear")) { Tag = "del" });
-            _slotToolbar.Items.Add(new ToolStripButton("上移", ToolbarIcons.Get("scroll")) { Tag = "up" });
-            _slotToolbar.Items.Add(new ToolStripButton("下移", ToolbarIcons.Get("scroll")) { Tag = "down" });
+            _slotToolbar.Items.Add(new ToolStripButton("从 LDF 导入", ToolbarIcons.Get("dbc")) { Tag = "import", ToolTipText = "按 LDF 调度表自动填充报文（帧ID/名称/时隙），默认全部勾选" });
+            _slotToolbar.Items.Add(new ToolStripButton("添加帧槽", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "手动添加一条空帧槽（默认 PID 0x00、时隙 15ms）" });
+            _slotToolbar.Items.Add(new ToolStripButton("删除", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中帧槽" });
+            _slotToolbar.Items.Add(new ToolStripButton("上移", ToolbarIcons.Get("scroll")) { Tag = "up", ToolTipText = "选中帧上移（调度顺序提前）" });
+            _slotToolbar.Items.Add(new ToolStripButton("下移", ToolbarIcons.Get("scroll")) { Tag = "down", ToolTipText = "选中帧下移（调度顺序延后）" });
             _slotToolbar.ItemClicked += SlotToolbar_ItemClicked;
             slotPanel.Controls.Add(_slotToolbar);
             _slotToolbar.Dock = DockStyle.Top;
@@ -248,6 +249,16 @@ namespace PCAN_Client.LIN_UI
                 if (_dgvSlots.IsCurrentCellDirty) _dgvSlots.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
             slotPanel.Controls.Add(_dgvSlots);
+            var slotHint = new Label
+            {
+                Dock = DockStyle.Bottom,
+                AutoSize = false,
+                Height = 24,
+                Text = "勾选 = 该帧参与循环调度（默认全勾）；帧 ID = 报文 PID；时隙 = 两帧发送间隔(ms)；周期数 = 已发送次数(只读)。「从 LDF 导入」按 LDF 调度表自动填充",
+                ForeColor = Color.Gray,
+                Font = UiTheme.UiFont,
+            };
+            slotPanel.Controls.Add(slotHint);
             _tabLin.TabPages[0].Controls.Add(slotPanel);
 
             // ---- 从节点/发布页签 ----
@@ -285,8 +296,8 @@ namespace PCAN_Client.LIN_UI
             {
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
-                Height = 24,
-                Text = "Vector: 硬件自动应答 (XL_LinSetSlave)    PEAK: 硬件从节点模式    （主节点模式下此处编辑本机发布的数据）",
+                Height = 40,
+                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。加载 LDF 后已自动填充，勾选=启用，编辑数据即时生效",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -324,7 +335,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 24,
-                Text = "显示最近一帧各信号解码值；加载 LDF 后可用",
+                Text = "作用：把总线上收到的帧解码成信号物理值（车速、温度等）。加载 LDF 后自动生效，随监控实时刷新；未加载 LDF 时为空",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -362,7 +373,7 @@ namespace PCAN_Client.LIN_UI
             sendPanel.Controls.Add(_txtPeriodMs);
             sendPanel.Controls.Add(new Label
             {
-                Text = "校验和自动按 LIN 2.x 增强算法（含 PID）计算；发送失败时状态栏给出原因（无应答/总线忙/硬件错误）",
+                Text = "用法：① PID 填帧 ID（如 0x11）→ ② 数据填 Hex 字节（空格分隔，如 01 02 03）→ ③ 校验和选「增强/经典 自动」→ ④ 点「发送」。\n勾选「周期发送」按设定周期重复发送。仅发 Header（让从节点应答）可配合「从节点/发布」页签预置数据",
                 Location = new Point(12, y + 50),
                 AutoSize = true,
                 ForeColor = Color.Gray,
@@ -720,6 +731,9 @@ namespace PCAN_Client.LIN_UI
                     sc.Slots.Add(new LinScheduleSlot { Pid = 0x00, SlotMs = 15 });
                     RefreshSlotGrid();
                     break;
+                case "import":
+                    ImportSlotsFromLdf();
+                    break;
                 case "del":
                     if (_dgvSlots.SelectedRows.Count > 0)
                     {
@@ -748,6 +762,51 @@ namespace PCAN_Client.LIN_UI
             sc.Slots[j] = t;
             RefreshSlotGrid();
             if (j >= 0 && j < _dgvSlots.Rows.Count) _dgvSlots.Rows[j].Selected = true;
+        }
+
+        /// <summary>
+        /// 从 LDF 导入调度表：优先按 LDF 官方调度表（帧名+时隙）填充，无调度表时回退全部帧（时隙默认 15ms）。
+        /// 追加到现有调度表并按 PID 去重（不破坏已手动配置的帧槽）；导入的帧默认勾选（Enabled=true）。
+        /// </summary>
+        private void ImportSlotsFromLdf()
+        {
+            var ldf = GetLdf();
+            if (ldf == null)
+            {
+                MessageBox.Show(this, "请先加载 LDF 文件（顶部工具栏「加载 LDF」）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            var sc = GetScheduler();
+            var toAdd = new List<LinScheduleSlot>();
+            if (ldf.ScheduleTables.Count > 0)
+            {
+                // 取第一个调度表（通常为 NormalTable，含每帧官方时隙）
+                var table = ldf.ScheduleTables.First().Value;
+                foreach (var def in table)
+                {
+                    var frame = ldf.Frames.Values.FirstOrDefault(f => f.Name == def.FrameName);
+                    if (frame == null) continue;
+                    toAdd.Add(new LinScheduleSlot { Enabled = true, Pid = frame.Pid, SlotMs = def.SlotMs > 0 ? def.SlotMs : 15 });
+                }
+            }
+            else
+            {
+                foreach (var kv in ldf.Frames)
+                    toAdd.Add(new LinScheduleSlot { Enabled = true, Pid = kv.Key, SlotMs = 15 });
+            }
+            if (toAdd.Count == 0)
+            {
+                MessageBox.Show(this, "LDF 中无可用帧（调度表为空）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            int added = 0;
+            var existing = new HashSet<byte>(sc.Slots.Select(s => s.Pid));
+            foreach (var s in toAdd)
+            {
+                if (existing.Add(s.Pid)) { sc.Slots.Add(s); added++; }
+            }
+            RefreshSlotGrid();
+            MessageBox.Show(this, $"已从 LDF 导入 {added} 条报文到调度表（勾选=参与调度，默认全勾）\n时隙按 LDF 调度表自动填充，可自行调整", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private LinLdfFile GetLdf()
