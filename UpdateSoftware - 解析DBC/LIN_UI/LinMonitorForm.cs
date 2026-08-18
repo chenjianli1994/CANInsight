@@ -19,7 +19,7 @@ namespace PCAN_Client.LIN_UI
         // ==================== 控件 ====================
         private ToolStrip _toolStripLin;
         private ToolStripComboBox _cmbChannel;
-        private ToolStripButton _btnConnect, _btnDisconnect, _btnLoadLdf, _btnStart, _btnPause, _btnClear, _btnWakeUp, _btnSleep;
+        private ToolStripButton _btnLoadLdf, _btnStart, _btnPause, _btnClear, _btnWakeUp, _btnSleep;
         private ToolStripTextBox _txtFilter;
         private DataGridView _dgvFrames;
         private TabControl _tabLin;
@@ -113,10 +113,6 @@ namespace PCAN_Client.LIN_UI
             };
             _cmbChannel = new ToolStripComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
             _cmbChannel.SelectedIndexChanged += (s, e) => SelectChannel();
-            _btnConnect = new ToolStripButton("连接", ToolbarIcons.Get("play"));
-            _btnConnect.Click += (s, e) => TryConnect();
-            _btnDisconnect = new ToolStripButton("断开", ToolbarIcons.Get("stop"));
-            _btnDisconnect.Click += (s, e) => Lin_API.LinDisconnect(_channel);
             _btnLoadLdf = new ToolStripButton("加载 LDF", ToolbarIcons.Get("dbc"));
             _btnLoadLdf.Click += (s, e) => LoadLdf();
             _btnStart = new ToolStripButton("开始", ToolbarIcons.Get("play"));
@@ -125,7 +121,7 @@ namespace PCAN_Client.LIN_UI
             _btnPause.Click += (s, e) => { _paused = true; };
             _btnClear = new ToolStripButton("清空", ToolbarIcons.Get("clear"));
             _btnClear.Click += (s, e) => { _frames.Clear(); RebuildFilter(); };
-            _txtFilter = new ToolStripTextBox { Width = 160, ToolTipText = "PID 过滤：0x11 / 0x11..0x15 / 0x* / 空=全部" };
+            _txtFilter = new ToolStripTextBox { Width = 160, ToolTipText = "帧 ID 过滤（规则与 CAN 接收窗口一致）：精确 11 / 0x11；通配符 3*（匹配 0x30-0x3F）、*（全部）；逗号或空格分隔多个，如 11, 3*" };
             _txtFilter.TextChanged += (s, e) => RebuildFilter();
             _btnWakeUp = new ToolStripButton("唤醒", ToolbarIcons.Get("plus"));
             _btnWakeUp.Click += (s, e) => { if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接）"); };
@@ -134,8 +130,6 @@ namespace PCAN_Client.LIN_UI
 
             _toolStripLin.Items.Add(new ToolStripLabel("通道:"));
             _toolStripLin.Items.Add(_cmbChannel);
-            _toolStripLin.Items.Add(_btnConnect);
-            _toolStripLin.Items.Add(_btnDisconnect);
             _toolStripLin.Items.Add(new ToolStripSeparator());
             _toolStripLin.Items.Add(btnChMgr);
             _toolStripLin.Items.Add(_btnLoadLdf);
@@ -170,13 +164,14 @@ namespace PCAN_Client.LIN_UI
             _dgvFrames.DefaultCellStyle.Font = new Font("Consolas", 9f);
             _dgvFrames.CellValueNeeded += DgvFrames_CellValueNeeded;
             _dgvFrames.CellFormatting += DgvFrames_CellFormatting;
-            // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）
+            // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）；画在数据区（表头下方）
             _dgvFrames.Paint += (s, e) =>
             {
                 if (_dgvFrames.RowCount > 0) return;
+                var area = _dgvFrames.DisplayRectangle;
                 TextRenderer.DrawText(e.Graphics,
                     "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）",
-                    UiTheme.UiFont, _dgvFrames.ClientRectangle, Color.Gray,
+                    UiTheme.UiFont, area, Color.Gray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
 
@@ -468,17 +463,6 @@ namespace PCAN_Client.LIN_UI
             RefreshSignalGrid();
         }
 
-        private void TryConnect()
-        {
-            if (_channel < 1 || _channel > LinConfig.Channels.Count)
-            {
-                MessageBox.Show(this, "请先在「LIN 通道管理」中添加并配置通道（Main 窗口 → 通道管理 → 添加 LIN 通道）", "LIN 监控", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            string err = Lin_API.LinConnect(_channel);
-            if (err.Length > 0) ShowError(err);
-        }
-
         private void LoadLdf()
         {
             if (_channel < 1 || _channel > LinConfig.Channels.Count) return;
@@ -530,68 +514,30 @@ namespace PCAN_Client.LIN_UI
             catch { /* 窗口关闭竞态 */ }
         }
 
-        /// <summary>PID 过滤：空=全部；0x11；0x11..0x15；0x* 通配</summary>
+        /// <summary>帧 ID 过滤（规则与 CAN 接收窗口一致）：空=全部；精确 11 / 0x11；通配符 3*（匹配 0x30-0x3F）；逗号/空格分隔多个（如 11, 3*）</summary>
         private void RebuildFilter()
         {
             if (_disposed) return;
             string text = _txtFilter.Text.Trim();
+            // IdFilterRule 不支持 0x 前缀：先剥除
+            string norm = text.Replace("0x", "").Replace("0X", "");
+            var exact = new HashSet<uint>();
+            var wildcards = new List<(uint mask, uint value, uint maxId)>();
+            IdFilterRule.Parse(norm, exact, wildcards);
+            bool hasRule = exact.Count > 0 || wildcards.Count > 0;
             lock (_frames)
             {
                 _filtered.Clear();
-                if (text.Length == 0)
+                for (int i = 0; i < _frames.Count; i++)
                 {
-                    for (int i = 0; i < _frames.Count; i++) _filtered.Add(i);
-                }
-                else
-                {
-                    var range = ParseFilterRange(text);
-                    for (int i = 0; i < _frames.Count; i++)
-                    {
-                        if (range == null) { _filtered.Add(i); continue; }
-                        byte pid = _frames[i].Pid;
-                        if (pid >= range.Item1 && pid <= range.Item2) _filtered.Add(i);
-                    }
+                    if (!hasRule) { _filtered.Add(i); continue; }
+                    if (IdFilterRule.Match(_frames[i].Pid, exact, wildcards)) _filtered.Add(i);
                 }
                 _dgvFrames.RowCount = _filtered.Count;
                 _dgvFrames.Invalidate();
             }
         }
 
-        /// <summary>解析 PID 过滤文本 → (lo, hi)；无法解析返回 null（显示全部）
-        /// 支持：0x11；0x11..0x15；0x1*（通配补全为 0x10-0x1F）；*（全部）</summary>
-        private static Tuple<byte, byte> ParseFilterRange(string text)
-        {
-            try
-            {
-                int dot = text.IndexOf("..", StringComparison.Ordinal);
-                if (dot > 0)
-                {
-                    byte lo = ParsePid(text.Substring(0, dot));
-                    byte hi = ParsePid(text.Substring(dot + 2));
-                    return Tuple.Create(lo, hi);
-                }
-                // 通配符：0x1* → 0x10..0x1F；* → 0x00..0x3F
-                if (text.TrimEnd().EndsWith("*", StringComparison.Ordinal))
-                {
-                    string prefix = text.Trim().TrimEnd('*').Trim();
-                    if (prefix.Length == 0) return Tuple.Create((byte)0x00, (byte)0x3F);
-                    string t = prefix;
-                    if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) t = t.Substring(2);
-                    int v = int.Parse(t, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
-                    int nibbles = t.Length;
-                    int shift = nibbles * 4;
-                    int hi = (v << (8 - shift)) | ((1 << (8 - shift)) - 1);
-                    if (hi > 0x3F) hi = 0x3F;
-                    return Tuple.Create((byte)(v << (8 - shift)), (byte)hi);
-                }
-                byte pid = ParsePid(text);
-                return Tuple.Create(pid, pid);
-            }
-            catch
-            {
-                return null;
-            }
-        }
 
         private static byte ParsePid(string s)
         {
