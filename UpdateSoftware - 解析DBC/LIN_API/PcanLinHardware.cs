@@ -158,15 +158,15 @@ namespace PCAN_Client.LIN_API
                 LinDebugLog.Write("[CONN] InitializeHardware mode=" + mode + " baud=" + _cfg.Baudrate + " → err=" + err);
                 if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
 
-                // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；wFilterType=0 用管理器默认过滤类型）
-                err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
-                LinDebugLog.Write("[CONN] SetClientFilter mask=FFFFFFFFFFFFFFFF type=0 → err=" + err);
+                // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；官方签名为 3 参无 filterType）
+                err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
+                LinDebugLog.Write("[CONN] SetClientFilter mask=FFFFFFFFFFFFFFFF → err=" + err);
                 if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
                 {
                     // 重连场景兜底：ResetClient 复位客户端后重试一次（首次连接无残留，通常直接成功）
                     LinPlError rerr2 = LinPlApi.ResetClient(_client);
                     LinDebugLog.Write("[CONN] SetClientFilter 失败 → ResetClient(err=" + rerr2 + ") 后重试");
-                    err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
+                    err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
                     LinDebugLog.Write("[CONN] SetClientFilter(重试) → err=" + err);
                 }
                 if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
@@ -174,6 +174,10 @@ namespace PCAN_Client.LIN_API
                     CleanupClient();
                     return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err) + "\n（PLIN 管理器状态异常时可重新插拔 PCAN 设备或重启「PLIN Device Manager」服务后重试）";
                 }
+
+                // 使能总线状态帧（Sleep/WakeUp）上报：诊断"硬件是否看到总线"的关键信号
+                LinPlError prm = LinPlApi.SetClientParam(_client, LinPlClientParam.clpReceiveStatusFrames, 1);
+                LinDebugLog.Write("[CONN] SetClientParam clpReceiveStatusFrames=1 → err=" + prm);
 
                 // 接收全部帧 ID（0-63）
                 err = LinPlApi.RegisterFrameId(_client, _hw, 0, LinPlApi.LIN_MAX_FRAME_ID);
@@ -481,8 +485,32 @@ namespace PCAN_Client.LIN_API
         private void ReceiveLoop()
         {
             var buf = new LinPlRcvMsg[32];
+            long lastDiagMs = Environment.TickCount;
             while (_running)
             {
+                // 每 2s 输出管理器侧计数诊断：clpMessagesOnQueue=本客户端接收队列未读消息数（ReadMulti 应能读到）；
+                // clpReceivedMessages=管理器累计收到的消息数；clpTransmittedMessages=管理器累计发送数。
+                // 用于定位"总线上有报文但软件收不到"：管理器计数为 0 → 硬件/管理器接收链路问题；
+                // 计数增长但 ReadMulti 读空 → 本软件读取路径问题。
+                long nowMs = Environment.TickCount;
+                if (nowMs - lastDiagMs >= 2000)
+                {
+                    lastDiagMs = nowMs;
+                    int onQueue = 0, rxTotal = 0, txTotal = 0;
+                    LinPlApi.GetClientParam(_client, LinPlClientParam.clpMessagesOnQueue, out onQueue, 4);
+                    LinPlApi.GetClientParam(_client, LinPlClientParam.clpReceivedMessages, out rxTotal, 4);
+                    LinPlApi.GetClientParam(_client, LinPlClientParam.clpTransmittedMessages, out txTotal, 4);
+                    // 硬件侧总线状态：hwsAutobaudrate=未锁定总线（可能接线/电平问题或该通道无流量）、hwsActive=已同步可收发
+                    string busState = "未知";
+                    try
+                    {
+                        LinPlHardwareStatus st;
+                        if (LinPlApi.GetStatus(_hw, out st) == LinPlError.errOK)
+                            busState = st.Status.ToString() + "(" + (int)st.Status + ")";
+                    }
+                    catch { }
+                    LinDebugLog.Write("[RX] 诊断(2s) queue=" + onQueue + " rxTotal=" + rxTotal + " txTotal=" + txTotal + " hwBus=" + busState);
+                }
                 int count = 0;
                 LinPlError err = LinPlApi.ReadMulti(_client, buf, buf.Length, out count);
                 if (err == LinPlError.errOK && count > 0)

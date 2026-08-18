@@ -259,8 +259,11 @@ namespace PCAN_Client.LIN_API
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_GetClientParam")]
         internal static extern LinPlError GetClientParam(byte hClient, LinPlClientParam wParam, out int pBuff, ushort wBuffSize);
 
+        // 官方签名（PLinApi SDK PLinApi.h / 文档）：LIN_SetClientFilter(hClient, hHw, iRcvMask) —— 3 个参数，
+        // 无 wFilterType。此前误加第 4 参（提交 1223183 的"修复"实为错误推断）：x64 下多出的寄存器参数
+        // 会被调用方忽略、行为不变，但非规范；errUnknown 根因是 PLIN Device Manager 状态异常而非签名。
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_SetClientFilter")]
-        internal static extern LinPlError SetClientFilter(byte hClient, ushort hHw, UInt64 iRcvMask, ushort wFilterType);
+        internal static extern LinPlError SetClientFilter(byte hClient, ushort hHw, UInt64 iRcvMask);
 
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_Read")]
         internal static extern LinPlError Read(byte hClient, out LinPlRcvMsg pMsg);
