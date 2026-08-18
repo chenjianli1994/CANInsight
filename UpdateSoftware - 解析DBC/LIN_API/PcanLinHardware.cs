@@ -90,11 +90,24 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 连接/断开 ====================
 
-        /// <summary>连接：注册客户端 → 定位硬件句柄 → 初始化模式/波特率 → 配置帧条目 → 启动接收线程</summary>
+        /// <summary>连接：注册客户端 → 定位硬件句柄 → 初始化模式/波特率 → 配置帧条目 → 启动接收线程。
+        /// SetClientFilter 间歇性 errUnknown（PLIN 管理器状态抖动，实测 18:15:07 失败 → 7 秒后
+        /// 18:15:14 成功）——失败后延迟 500ms 完整重建客户端（RegisterClient 起）重试一次。</summary>
         public string Connect()
         {
             LinDebugLog.Open("ch" + _logicChannel + " " + _cfg.HwHandle);
-            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " Baud=" + _cfg.Baudrate);
+            string err = TryConnect(1);
+            if (err.Length == 0) return "";
+            LinDebugLog.Write("[CONN] 首次连接失败: " + err + " → 延迟 500ms 完整重试（重建客户端）");
+            Thread.Sleep(500);
+            string err2 = TryConnect(2);
+            if (err2.Length > 0) LinDebugLog.Write("[CONN] 重试仍失败: " + err2);
+            return err2;
+        }
+
+        private string TryConnect(int attempt)
+        {
+            LinDebugLog.Write("[CONN] Connect 开始(尝试" + attempt + "): HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " Baud=" + _cfg.Baudrate);
             try
             {
                 LinPlError err = LinPlApi.RegisterClient("CANInsight_LIN", IntPtr.Zero, out _client);
