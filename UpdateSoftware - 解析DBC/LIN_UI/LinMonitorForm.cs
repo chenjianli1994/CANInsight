@@ -288,24 +288,35 @@ namespace PCAN_Client.LIN_UI
             UiTheme.StyleGrid(_dgvResp);
             var colRspExpand = new DataGridViewTextBoxColumn { Name = "colRspExpand", HeaderText = "", Width = 30, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable };
             _dgvResp.Columns.Add(colRspExpand);
-            var colRspEn = new DataGridViewCheckBoxColumn { Name = "colRspEn", HeaderText = "应答", Width = 46, ThreeState = false };
-            colRspEn.ToolTipText = "勾选 = 该帧启用硬件自动应答（主节点发 Header 时自动回复本行数据）；\n与调度表页签的勾选（是否参与循环调度发送）相互独立";
-            _dgvResp.Columns.Add(colRspEn);
-            _dgvResp.Columns.Add("colRspId", "响应 ID");
-            _dgvResp.Columns["colRspId"].Width = 80;
-            _dgvResp.Columns.Add("colRspName", "帧名称");
-            _dgvResp.Columns["colRspName"].Width = 240;
-            _dgvResp.Columns.Add("colRspDlc", "DLC/位");
-            _dgvResp.Columns["colRspDlc"].Width = 50;
+            // LDF 导入内容（ID/帧名/DLC）固定，仅「数据」列可编辑
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspId", HeaderText = "响应 ID", Width = 80, ReadOnly = true });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspName", HeaderText = "帧名称", Width = 240, ReadOnly = true });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspDlc", HeaderText = "DLC/位", Width = 50, ReadOnly = true });
             _dgvResp.Columns.Add("colRspData", "数据 (Hex)");
             _dgvResp.Columns["colRspData"].Width = 250;
             _dgvResp.CellContentClick += DgvResp_CellContentClick;
             _dgvResp.CellValueChanged += DgvResp_CellValueChanged;
-            _dgvResp.CellFormatting += DgvResp_CellFormatting;
             _dgvResp.CellDoubleClick += DgvResp_CellDoubleClick;
             _dgvResp.CurrentCellDirtyStateChanged += (s, e) =>
             {
                 if (_dgvResp.IsCurrentCellDirty) _dgvResp.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            // 信号行编辑时编辑框只显示数值（去掉单位后缀），单位不可编辑
+            _dgvResp.EditingControlShowing += (s, e) =>
+            {
+                if (!(e.Control is DataGridViewTextBoxEditingControl ed)) return;
+                var cur = _dgvResp.CurrentCell;
+                if (cur == null) return;
+                var row = _dgvResp.Rows[cur.RowIndex];
+                if (!(row.Tag is Tuple<byte, string>)) return;
+                var ldf2 = GetLdf();
+                if (ldf2 == null) return;
+                var sig = FindSignalDef(ldf2, ((Tuple<byte, string>)row.Tag).Item2);
+                if (sig == null || sig.Unit.Length == 0) return;
+                string txt = (cur.Value ?? "").ToString();
+                if (txt.EndsWith(sig.Unit, StringComparison.OrdinalIgnoreCase))
+                    txt = txt.Substring(0, txt.Length - sig.Unit.Length).Trim();
+                ed.Text = txt;
             };
             respPanel.Controls.Add(_dgvResp);
             var respHint = new Label
@@ -313,7 +324,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "作用：配置本机在总线上应答/发布的数据。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机自动应答收到 Header 的帧。点「＋」或双击行展开信号（带单位）改物理值，「应答」勾选=启用自动应答",
+                Text = "作用：配置本机在总线上发布/应答的数据（LDF 导入后自动填充）。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机按数据应答收到 Header 的帧。点「＋」或双击行展开信号（带单位）改物理值，调度表页签勾选决定哪些帧参与发送",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -857,7 +868,7 @@ namespace PCAN_Client.LIN_UI
             foreach (byte pid in ldf.SlaveRespIds)
             {
                 var def = ldf.Frames[pid];
-                int idx = _dgvResp.Rows.Add("＋", true, "0x" + pid.ToString("X2"), def.Name, def.Dlc, new string('0', def.Dlc * 2));
+                int idx = _dgvResp.Rows.Add("＋", "0x" + pid.ToString("X2"), def.Name, def.Dlc, new string('0', def.Dlc * 2));
                 _dgvResp.Rows[idx].Tag = pid;
             }
             if (IsMasterMode())
@@ -872,7 +883,7 @@ namespace PCAN_Client.LIN_UI
                             if (r.Tag is byte && (byte)r.Tag == kv.Key) { exists = true; break; }
                         if (!exists)
                         {
-                            int idx = _dgvResp.Rows.Add("＋", true, "0x" + kv.Key.ToString("X2"), kv.Value.Name, kv.Value.Dlc, new string('0', kv.Value.Dlc * 2));
+                            int idx = _dgvResp.Rows.Add("＋", "0x" + kv.Key.ToString("X2"), kv.Value.Name, kv.Value.Dlc, new string('0', kv.Value.Dlc * 2));
                             _dgvResp.Rows[idx].Tag = kv.Key;
                         }
                     }
@@ -911,26 +922,6 @@ namespace PCAN_Client.LIN_UI
             }
             if (!(row.Tag is byte)) return;
             byte pid = (byte)row.Tag;
-            if (_dgvResp.Columns[e.ColumnIndex].Name == "colRspEn")
-            {
-                // 勾选/取消勾选 → 启停硬件自动应答
-                bool en = (row.Cells["colRspEn"].Value as bool?) ?? false;
-                var ldf2 = GetLdf();
-                byte respDlc = ldf2 != null && ldf2.Frames.ContainsKey(pid) ? ldf2.Frames[pid].Dlc : (byte)0;
-                if (!en)
-                {
-                    Lin_API.DisableSlaveResponse(_channel, pid, respDlc);
-                }
-                else
-                {
-                    // 重新勾选：把行内数据重新下发恢复硬件应答（Vector 恢复 XL_LinSetSlave；
-                    // PEAK 由 UpdateSlaveData 重建 RESPONSE_ENABLE 帧条目）
-                    var rspData = ParseHexData((row.Cells["colRspData"].Value ?? "").ToString());
-                    if (rspData == null) rspData = new byte[respDlc];
-                    Lin_API.UpdateSlaveData(_channel, pid, rspData, (byte)rspData.Length);
-                }
-                return;
-            }
             if (_dgvResp.Columns[e.ColumnIndex].Name != "colRspData") return;
             // 数据 Hex 输入（空格分隔）→ 下发硬件
             var data = ParseHexData((row.Cells["colRspData"].Value ?? "").ToString());
@@ -1013,15 +1004,6 @@ namespace PCAN_Client.LIN_UI
             return data;
         }
 
-        private void DgvResp_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
-        {
-            if (e.RowIndex < 0) return;
-            // 未启用行灰显
-            var row = _dgvResp.Rows[e.RowIndex];
-            if (row.Cells["colRspEn"].Value is bool && !(bool)row.Cells["colRspEn"].Value)
-                e.CellStyle.ForeColor = Color.Gray;
-        }
-
         private void DgvResp_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
@@ -1081,7 +1063,6 @@ namespace PCAN_Client.LIN_UI
                 _dgvResp.Rows.Insert(insertAt, 1);
                 var srow = _dgvResp.Rows[insertAt];
                 srow.Cells["colRspExpand"].Value = "";
-                srow.Cells["colRspEn"].Value = null;
                 srow.Cells["colRspId"].Value = null;
                 srow.Cells["colRspName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
                 srow.Cells["colRspDlc"].Value = "bit " + fs.Offset;
