@@ -260,7 +260,7 @@ namespace PCAN_Client.LIN_API
         internal static extern LinPlError GetClientParam(byte hClient, LinPlClientParam wParam, out int pBuff, ushort wBuffSize);
 
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_SetClientFilter")]
-        internal static extern LinPlError SetClientFilter(byte hClient, ushort hHw, UInt64 iRcvMask);
+        internal static extern LinPlError SetClientFilter(byte hClient, ushort hHw, UInt64 iRcvMask, ushort wFilterType);
 
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_Read")]
         internal static extern LinPlError Read(byte hClient, out LinPlRcvMsg pMsg);

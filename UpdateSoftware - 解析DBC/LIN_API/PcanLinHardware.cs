@@ -134,8 +134,8 @@ namespace PCAN_Client.LIN_API
                     if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
                 }
 
-                // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧）
-                err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
+                // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；wFilterType=0 用管理器默认过滤类型）
+                err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
                 if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType) { CleanupClient(); return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 接收全部帧 ID（0-63）
