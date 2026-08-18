@@ -38,12 +38,9 @@ namespace PCAN_Client.LIN_UI
         // 信号页签
         private DataGridView _dgvSignals;
 
-        // 发送页签
-        private TextBox _txtSendPid, _txtSendData, _txtSendCs;
-        private ComboBox _cmbSendCs;
-        private CheckBox _chkPeriodic;
-        private TextBox _txtPeriodMs;
-        private Button _btnSend;
+        // 发送页签（自定义报文定义表）
+        private DataGridView _dgvSend;
+        private ToolStrip _sendToolbar;
 
         // ==================== 数据 ====================
         private readonly List<LinFrameRecord> _frames = new List<LinFrameRecord>();
@@ -53,7 +50,6 @@ namespace PCAN_Client.LIN_UI
         private byte _channel;          // 当前监控通道（逻辑号）
         private readonly Dictionary<byte, LinScheduler> _schedulers = new Dictionary<byte, LinScheduler>();
         private readonly Timer _uiTimer;
-        private LinWinmmTimer _periodicTimer;
         private bool _disposed;
 
         private const int MaxFrames = 500000;
@@ -90,7 +86,6 @@ namespace PCAN_Client.LIN_UI
             {
                 _disposed = true;
                 _uiTimer.Stop();
-                _periodicTimer?.Dispose();
                 foreach (var sc in _schedulers.Values) sc.Suspend();
                 Lin_API.LinFrameReceived -= OnFrameReceived;
                 Lin_API.BusEvent -= OnBusEvent;
@@ -369,43 +364,51 @@ namespace PCAN_Client.LIN_UI
             sigPanel.Controls.Add(sigHint);
             _tabLin.TabPages[2].Controls.Add(sigPanel);
 
-            // ---- 发送页签 ----
-            var sendPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
-            var f = UiTheme.UiFont;
-            int y = 20;
-            sendPanel.Controls.Add(new Label { Text = "PID:", Location = new Point(12, y + 6), AutoSize = true, Font = f });
-            _txtSendPid = new TextBox { Location = new Point(60, y), Width = 80, Font = f, Text = "0x11" };
-            sendPanel.Controls.Add(_txtSendPid);
-            sendPanel.Controls.Add(new Label { Text = "数据 (Hex, ≤8 字节):", Location = new Point(160, y + 6), AutoSize = true, Font = f });
-            _txtSendData = new TextBox { Location = new Point(310, y), Width = 260, Font = f, Text = "" };
-            sendPanel.Controls.Add(_txtSendData);
-            sendPanel.Controls.Add(new Label { Text = "校验和:", Location = new Point(590, y + 6), AutoSize = true, Font = f });
-            _cmbSendCs = new ComboBox { Location = new Point(660, y), Width = 120, Font = f, DropDownStyle = ComboBoxStyle.DropDownList };
-            _cmbSendCs.Items.AddRange(new object[] { "增强 (自动)", "经典 (自动)" });
-            _cmbSendCs.SelectedIndex = 0;
-            sendPanel.Controls.Add(_cmbSendCs);
-            _txtSendCs = new TextBox { Location = new Point(800, y), Width = 60, Font = f, Text = "0x00", Enabled = false };
-            sendPanel.Controls.Add(_txtSendCs);
-            y += 46;
-            _btnSend = new Button { Text = "发送", Location = new Point(12, y), Size = new Size(90, 32), Font = f };
-            UiTheme.StyleButton(_btnSend);
-            _btnSend.Click += (s, e) => SendFrame();
-            sendPanel.Controls.Add(_btnSend);
-            _chkPeriodic = new CheckBox { Text = "周期发送", Location = new Point(120, y + 6), AutoSize = true, Font = f };
-            _chkPeriodic.CheckedChanged += (s, e) => UpdatePeriodicTimer();
-            sendPanel.Controls.Add(_chkPeriodic);
-            sendPanel.Controls.Add(new Label { Text = "周期 (ms):", Location = new Point(230, y + 6), AutoSize = true, Font = f });
-            _txtPeriodMs = new TextBox { Location = new Point(310, y), Width = 70, Font = f, Text = "100" };
-            _txtPeriodMs.TextChanged += (s, e) => UpdatePeriodicTimer();
-            sendPanel.Controls.Add(_txtPeriodMs);
-            sendPanel.Controls.Add(new Label
+            // ---- 发送页签：自定义报文定义表（一条一行，是否发送由调度表勾选）----
+            var sendPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
+            _sendToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
+            _sendToolbar.Items.Add(new ToolStripButton("添加报文", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "新增一条报文定义（默认 PID 0x00、数据全 0），自动加入「调度表」页签并默认勾选" });
+            _sendToolbar.Items.Add(new ToolStripButton("删除报文", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中报文（同步从「调度表」移除）" });
+            _sendToolbar.ItemClicked += SendToolbar_ItemClicked;
+            _dgvSend = new DataGridView
             {
-                Text = "用法：① PID 填帧 ID（如 0x11）→ ② 数据填 Hex 字节（空格分隔，如 01 02 03）→ ③ 校验和选「增强/经典 自动」→ ④ 点「发送」。\n勾选「周期发送」按设定周期重复发送。仅发 Header（让从节点应答）可配合「从节点/发布」页签预置数据",
-                Location = new Point(12, y + 50),
-                AutoSize = true,
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+            };
+            UiTheme.StyleGrid(_dgvSend);
+            _dgvSend.Columns.Add("colSendPid", "帧 ID");
+            _dgvSend.Columns["colSendPid"].Width = 80;
+            _dgvSend.Columns.Add("colSendName", "帧名称");
+            _dgvSend.Columns["colSendName"].Width = 240;
+            _dgvSend.Columns["colSendName"].ReadOnly = true;
+            _dgvSend.Columns.Add("colSendDlc", "DLC");
+            _dgvSend.Columns["colSendDlc"].Width = 50;
+            _dgvSend.Columns["colSendDlc"].ReadOnly = true;
+            _dgvSend.Columns.Add("colSendData", "数据 (Hex)");
+            _dgvSend.Columns["colSendData"].Width = 250;
+            _dgvSend.CellValueChanged += DgvSend_CellValueChanged;
+            _dgvSend.CurrentCellDirtyStateChanged += (s, e) =>
+            {
+                if (_dgvSend.IsCurrentCellDirty) _dgvSend.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            };
+            sendPanel.Controls.Add(_dgvSend);
+            var sendHint = new Label
+            {
+                Dock = DockStyle.Bottom,
+                AutoSize = false,
+                Height = 40,
+                Text = "作用：定义本机要发送的报文（一条一行，可多条）。「添加报文」自动把该报文加入「调度表」页签并默认勾选——调度表勾选决定是否参与循环发送。\n帧 ID/数据可直接编辑（帧名称按 LDF 自动显示，DLC 随数据长度），编辑后自动同步硬件；发送动作统一在「调度表」页签进行",
                 ForeColor = Color.Gray,
-                Font = f,
-            });
+                Font = UiTheme.UiFont,
+            };
+            sendPanel.Controls.Add(sendHint);
+            // toolbar 最后 Add（Dock=Top 布局须在 Fill 之后处理）
+            sendPanel.Controls.Add(_sendToolbar);
+            _sendToolbar.Dock = DockStyle.Top;
             _tabLin.TabPages[3].Controls.Add(sendPanel);
             Controls.Add(_tabLin);
         }
@@ -1202,43 +1205,60 @@ namespace PCAN_Client.LIN_UI
 
         // ==================== 发送页签 ====================
 
-        private void SendFrame()
+        private void SendToolbar_ItemClicked(object sender, ToolStripItemClickedEventArgs e)
         {
-            try
+            if (!(e.ClickedItem.Tag is string op)) return;
+            var sc = GetScheduler();
+            switch (op)
             {
-                byte pid = ParsePid(_txtSendPid.Text);
-                if (pid > 0x3F) { ShowError("PID 须 0x00-0x3F"); return; }
-                var data = new byte[0];
-                string hex = _txtSendData.Text.Replace(" ", "").Replace("0x", "").Trim();
-                if (hex.Length > 0)
-                {
-                    if (hex.Length % 2 != 0) { ShowError("数据须为偶数个十六进制字符"); return; }
-                    data = new byte[hex.Length / 2];
-                    for (int i = 0; i < data.Length; i++) data[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-                    if (data.Length > 8) { ShowError("数据最多 8 字节"); return; }
-                }
-                LinChecksumKind ck = _cmbSendCs.SelectedIndex == 1 ? LinChecksumKind.Classic : LinChecksumKind.Enhanced;
-                if (!Lin_API.LinTransmit(_channel, pid, data, ck))
-                    ShowError("发送失败（未连接或总线忙）");
-            }
-            catch (Exception ex)
-            {
-                ShowError("发送参数错误: " + ex.Message);
+                case "add":
+                    // 新增报文定义：加入调度表（默认勾选）并显示一行
+                    var slot = new LinScheduleSlot { Pid = 0x00, SlotMs = 15, Enabled = true };
+                    sc.Slots.Add(slot);
+                    RefreshSlotGrid();
+                    int idx = _dgvSend.Rows.Add("0x00", LinLdfHelper.GetFrameName(GetLdf(), 0x00), 0, "");
+                    _dgvSend.Rows[idx].Tag = slot;
+                    _dgvSend.CurrentCell = _dgvSend.Rows[idx].Cells["colSendPid"];
+                    _dgvSend.BeginEdit(true);
+                    break;
+                case "del":
+                    if (_dgvSend.SelectedRows.Count > 0)
+                    {
+                        var sel = _dgvSend.SelectedRows[0];
+                        if (sel.Tag is LinScheduleSlot s)
+                        {
+                            sc.Slots.Remove(s);
+                            RefreshSlotGrid();
+                        }
+                        _dgvSend.Rows.Remove(sel);
+                    }
+                    break;
             }
         }
 
-        private void UpdatePeriodicTimer()
+        private void DgvSend_CellValueChanged(object sender, DataGridViewCellEventArgs e)
         {
-            if (_disposed) return;
-            _periodicTimer?.Stop();
-            if (!_chkPeriodic.Checked) return;
-            int ms;
-            if (!int.TryParse(_txtPeriodMs.Text, out ms) || ms < 10) return;
-            _periodicTimer = new LinWinmmTimer();
-            _periodicTimer.Start(ms, () =>
+            if (e.RowIndex < 0) return;
+            var row = _dgvSend.Rows[e.RowIndex];
+            if (!(row.Tag is LinScheduleSlot slot)) return;
+            switch (_dgvSend.Columns[e.ColumnIndex].Name)
             {
-                try { BeginInvoke(new Action(SendFrame)); } catch { }
-            });
+                case "colSendPid":
+                    byte newPid;
+                    try { newPid = ParsePid((row.Cells["colSendPid"].Value ?? "").ToString()); }
+                    catch { return; }
+                    if (newPid > 0x3F) { ShowError("PID 须 0x00-0x3F"); return; }
+                    slot.Pid = newPid;
+                    row.Cells["colSendName"].Value = LinLdfHelper.GetFrameName(GetLdf(), newPid);
+                    RefreshSlotGrid();
+                    break;
+                case "colSendData":
+                    var data = ParseHexData((row.Cells["colSendData"].Value ?? "").ToString());
+                    if (data == null) return;
+                    row.Cells["colSendDlc"].Value = data.Length;
+                    Lin_API.UpdateSlaveData(_channel, slot.Pid, data, (byte)data.Length);
+                    break;
+            }
         }
 
         // ==================== 状态栏 ====================
@@ -1252,7 +1272,6 @@ namespace PCAN_Client.LIN_UI
                 _lblBus.Text = ch.IsConnected ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
                 _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
-                if (_chkPeriodic != null && _chkPeriodic.Checked) _lblSched.Text += " +周期发送";
             }
             else
             {
