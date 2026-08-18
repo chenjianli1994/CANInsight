@@ -42,8 +42,8 @@ namespace PCAN_Client.LIN_UI
         private ToolStrip _sendToolbar;
 
         // ==================== 数据 ====================
+        // 帧日志（Scroll 数据源）：接收线程 O(1) 追加，UI 线程按 100ms 节流重建（与 CAN 报文窗口同架构）
         private readonly List<LinFrameRecord> _frames = new List<LinFrameRecord>();
-        private readonly List<int> _filtered = new List<int>();   // 过滤后行 → _frames 索引
         private long _errorCount;
         private volatile bool _paused;
         private byte _channel;          // 当前监控通道（逻辑号）
@@ -52,6 +52,56 @@ namespace PCAN_Client.LIN_UI
         private bool _disposed;
 
         private const int MaxFrames = 500000;
+
+        // === 显示模式（对齐 CAN 报文窗口）：Fixed=按 (PID,通道) 聚合；Scroll=按时间逐帧 ===
+        private bool _linScrollMode;            // false=Fixed, true=Scroll
+        private ToolStripButton _btnLinScroll;  // 工具栏 Fixed/Scroll 切换按钮
+
+        // === Fixed 模式聚合表（每 (PID,通道) 一行，接收时 O(1) 更新） ===
+        private class LinFixedInfo
+        {
+            public byte Pid;
+            public byte Channel;
+            public uint Count;
+            public ulong LastTimestampUs;
+            public ulong PrevSameIdGapUs;   // 与同键上一帧间隔（写入时预计算，替代每行 O(n) 前向扫描）
+            public LinFrameRecord Last;     // 最新帧快照（Data 引用不可变，可安全共享）
+        }
+        private readonly List<LinFixedInfo> _linFixedList = new List<LinFixedInfo>();
+        private readonly Dictionary<long, LinFixedInfo> _linMsgIndexMap = new Dictionary<long, LinFixedInfo>();
+        private static long LinMsgKey(byte pid, byte ch) => ((long)ch << 8) | pid;
+
+        // === 展开/折叠信号（对齐 CAN：＋/－ 列 + 双击整行） ===
+        private enum LinRowType { Frame, Signal }
+        private class LinFlatRow
+        {
+            public LinRowType Type;
+            public int FrameIndex = -1;      // _frames 索引（Scroll 模式帧行/信号行）
+            public int FixedIndex = -1;      // _linFixedList 索引（Fixed 模式帧行）
+            public byte Pid;
+            public byte Channel;
+            public string SignalName = "";   // 仅 Signal 行
+            public int SigOffset = -1;       // 仅 Signal 行（LDF 起始位）
+        }
+        private readonly List<LinFlatRow> _linFlatRows = new List<LinFlatRow>();
+        private readonly HashSet<long> _linExpandedKeys = new HashSet<long>();   // Fixed：按 (ch,pid) 复合键
+        private readonly HashSet<int> _linExpandedFrames = new HashSet<int>();  // Scroll：按帧索引
+
+        // === 刷新节流（对齐 CAN MIN_REFRESH_MS=100，最大 10fps 重建，消除每帧全量过滤的 O(n²) 卡顿） ===
+        private bool _linRefreshPending;
+        private bool _linRefreshScheduled;   // 已排队 BeginInvoke（避免每帧排队堆积）
+        private DateTime _lastLinRefresh = DateTime.MinValue;
+        private const int LIN_MIN_REFRESH_MS = 100;
+        private bool _linFlatRowsDirty = true;
+        // Scroll：已显示帧数（暂停/离开底部时增量追加）+ 自动跟随状态
+        private int _linFramesLoaded;
+        private bool _linUserScrolledAway;
+        private int _lastLinScrollRowCount;
+        private const int LIN_SCROLL_LIVE_FRAMES = 50; // 接收中只显示最新 N 条匹配帧（LIN 帧率低，取 50 保留更多上下文）
+
+        // 帧 ID 过滤规则（文本变化时解析缓存，重建时复用）
+        private readonly HashSet<uint> _linFilterIds = new HashSet<uint>();
+        private readonly List<(uint mask, uint value, uint maxId)> _linFilterWildcards = new List<(uint, uint, uint)>();
 
         public LinMonitorForm()
         {
@@ -72,6 +122,7 @@ namespace PCAN_Client.LIN_UI
             {
                 RefreshStatusBar();
                 RefreshSignalValues(); // 信号页签实时解码刷新（与状态栏同节奏）
+                RefreshLinMessageDisplay(); // 节流内兜底刷新（BeginInvoke 被节流丢弃时补上）
             };
             _uiTimer.Start();
 
@@ -113,13 +164,39 @@ namespace PCAN_Client.LIN_UI
             _btnLoadLdf = new ToolStripButton("加载 LDF", ToolbarIcons.Get("dbc"));
             _btnLoadLdf.Click += (s, e) => LoadLdf();
             _btnStart = new ToolStripButton("开始", ToolbarIcons.Get("play"));
-            _btnStart.Click += (s, e) => { _paused = false; };
+            _btnStart.Click += (s, e) => { _paused = false; _linRefreshPending = true; RefreshLinMessageDisplay(); };
             _btnPause = new ToolStripButton("暂停", ToolbarIcons.Get("stop"));
-            _btnPause.Click += (s, e) => { _paused = true; };
+            _btnPause.Click += (s, e) =>
+            {
+                _paused = true;
+                // 暂停后 Scroll 模式显示全部帧（供回看），Fixed 模式冻结最新聚合
+                _linFramesLoaded = 0;
+                _linFlatRowsDirty = true;
+                _linRefreshPending = true;
+                DoLinRefresh();
+            };
             _btnClear = new ToolStripButton("清空", ToolbarIcons.Get("clear"));
-            _btnClear.Click += (s, e) => { _frames.Clear(); RebuildFilter(); };
+            _btnClear.Click += (s, e) => ClearLinFrames();
             _txtFilter = new ToolStripTextBox { Width = 160, ToolTipText = "帧 ID 过滤（规则与 CAN 接收窗口一致）：精确 11 / 0x11；通配符 3*（匹配 0x30-0x3F）、*（全部）；逗号或空格分隔多个，如 11, 3*" };
-            _txtFilter.TextChanged += (s, e) => RebuildFilter();
+            _txtFilter.TextChanged += (s, e) => { ParseLinFilter(); RebuildLinFiltered(); };
+            // Fixed/Scroll 切换（对齐 CAN 报文窗口：CheckOnClick 高亮表示 Scroll 模式）
+            _btnLinScroll = new ToolStripButton("Fixed", ToolbarIcons.Get("scroll"));
+            _btnLinScroll.CheckOnClick = true;
+            _btnLinScroll.Click += (s, e) =>
+            {
+                _linScrollMode = !_linScrollMode;
+                _btnLinScroll.Checked = _linScrollMode;
+                _btnLinScroll.Text = _linScrollMode ? "Scroll" : "Fixed";
+                _linFramesLoaded = 0;           // 重置增量计数
+                _linUserScrolledAway = false;
+                _lastLinScrollRowCount = 0;
+                _linExpandedFrames.Clear();
+                _linFlatRowsDirty = true;
+                // 海量帧↔聚合视图切换：先清空行数，避免 DataGridView 对数万旧行做增量布局（切换卡顿主因）
+                if (_dgvFrames.RowCount > 0) _dgvFrames.RowCount = 0;
+                _linRefreshPending = true;
+                DoLinRefresh();
+            };
             _btnWakeUp = new ToolStripButton("唤醒", ToolbarIcons.Get("plus"));
             _btnWakeUp.Click += (s, e) => { if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接）"); };
             _btnSleep = new ToolStripButton("休眠", ToolbarIcons.Get("stop"));
@@ -131,6 +208,7 @@ namespace PCAN_Client.LIN_UI
             _toolStripLin.Items.Add(_btnStart);
             _toolStripLin.Items.Add(_btnPause);
             _toolStripLin.Items.Add(_btnClear);
+            _toolStripLin.Items.Add(_btnLinScroll);
             _toolStripLin.Items.Add(new ToolStripSeparator());
             _toolStripLin.Items.Add(new ToolStripLabel("PID 过滤:"));
             _toolStripLin.Items.Add(_txtFilter);
@@ -162,17 +240,52 @@ namespace PCAN_Client.LIN_UI
             _dgvFrames.CellBorderStyle = DataGridViewCellBorderStyle.Single;
             _dgvFrames.CellValueNeeded += DgvFrames_CellValueNeeded;
             _dgvFrames.CellFormatting += DgvFrames_CellFormatting;
-            // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）；画在数据区（表头下方）
+            _dgvFrames.CellPainting += DgvFrames_CellPainting;
+            _dgvFrames.CellClick += DgvFrames_CellClick;
+            _dgvFrames.CellDoubleClick += DgvFrames_CellDoubleClick;
+            _dgvFrames.Scroll += (ss, ee) =>
+            {
+                // Scroll 模式自动跟随：检测用户是否在底部；离开底部切换为显示全部帧（供回看）
+                if (!_linScrollMode || _dgvFrames.RowCount <= 0) return;
+                bool wasAway = _linUserScrolledAway;
+                int visibleRows = _dgvFrames.DisplayedRowCount(false);
+                int firstRow = _dgvFrames.FirstDisplayedScrollingRowIndex;
+                bool atBottom = firstRow >= 0 && firstRow + visibleRows >= _dgvFrames.RowCount - 1;
+                _linUserScrolledAway = !atBottom;
+                if (wasAway != _linUserScrolledAway)
+                {
+                    _linFlatRowsDirty = true;
+                    _linRefreshPending = true;
+                    if (!_linUserScrolledAway) _lastLinScrollRowCount = 0;
+                    RefreshLinMessageDisplay();
+                }
+            };
+            // 双缓冲消除滚动闪烁（与 CAN 报文窗口一致）
+            typeof(DataGridView).InvokeMember("DoubleBuffered",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.SetProperty,
+                null, _dgvFrames, new object[] { true });
+            // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）；
+            // 只画在数据区（表头下方），避免遮住列头文字
             _dgvFrames.Paint += (s, e) =>
             {
                 if (_dgvFrames.RowCount > 0) return;
                 var area = _dgvFrames.DisplayRectangle;
+                area.Y += _dgvFrames.ColumnHeadersHeight;
+                area.Height -= _dgvFrames.ColumnHeadersHeight;
+                if (area.Height <= 0) return;
                 TextRenderer.DrawText(e.Graphics,
                     "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）",
                     UiTheme.UiFont, area, Color.Gray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
 
+            // 展开列（＋/－，CellPainting 绘制，无信号定义的帧不显示）
+            _dgvFrames.Columns.Add("colExpand", "");
+            _dgvFrames.Columns["colExpand"].Width = 24;
+            _dgvFrames.Columns["colExpand"].SortMode = DataGridViewColumnSortMode.NotSortable;
+            _dgvFrames.Columns.Add("colCount", "次数");
+            _dgvFrames.Columns["colCount"].Width = 60;
+            _dgvFrames.Columns["colCount"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             _dgvFrames.Columns.Add("colTime", "时间(ms)");
             _dgvFrames.Columns["colTime"].Width = 90;
             _dgvFrames.Columns.Add("colCh", "通道");
@@ -478,52 +591,249 @@ namespace PCAN_Client.LIN_UI
 
         // ==================== 帧接收 ====================
 
+        /// <summary>
+        /// 接收线程回调：O(1) 写入帧日志与 Fixed 聚合，标记待刷新并节流排队 UI 更新。
+        /// 旧实现每帧 BeginInvoke + 全量 RebuildFilter（O(n) 扫描 + 全表 Invalidate）是报文繁忙时
+        /// UI 卡顿、CPU 飙升的根因；现按 CAN 报文窗口同架构改为 100ms 节流重建。
+        /// </summary>
         private void OnFrameReceived(LinFrameRecord frame)
         {
             if (_disposed) return;
-            if (_paused) return;
+            lock (_frames)
+            {
+                _frames.Add(frame);
+                if (frame.ErrorKind != LinErrorKind.None) _errorCount++;
+                if (_frames.Count > MaxFrames)
+                {
+                    int remove = _frames.Count - MaxFrames;
+                    _frames.RemoveRange(0, remove);
+                }
+                UpdateLinFixed(frame); // O(1) 聚合（同锁保护）
+            }
+            _linRefreshPending = true;
+            if (_linRefreshScheduled) return;
+            _linRefreshScheduled = true;
             try
             {
                 BeginInvoke(new Action(() =>
                 {
-                    lock (_frames)
-                    {
-                        _frames.Add(frame);
-                        if (frame.ErrorKind != LinErrorKind.None) _errorCount++;
-                        if (_frames.Count > MaxFrames)
-                        {
-                            int remove = _frames.Count - MaxFrames;
-                            _frames.RemoveRange(0, remove);
-                        }
-                    }
-                    RebuildFilter();
+                    _linRefreshScheduled = false;
+                    RefreshLinMessageDisplay();
                 }));
             }
-            catch { /* 窗口关闭竞态 */ }
+            catch { _linRefreshScheduled = false; } /* 窗口关闭竞态 */
         }
 
-        /// <summary>帧 ID 过滤（规则与 CAN 接收窗口一致）：空=全部；精确 11 / 0x11；通配符 3*（匹配 0x30-0x3F）；逗号/空格分隔多个（如 11, 3*）</summary>
-        private void RebuildFilter()
+        /// <summary>Fixed 聚合 O(1) 更新：命中 (PID,通道) 键更新计数/间隔/最新帧；新键追加聚合表</summary>
+        private void UpdateLinFixed(LinFrameRecord frame)
         {
-            if (_disposed) return;
-            string text = _txtFilter.Text.Trim();
-            // IdFilterRule 不支持 0x 前缀：先剥除
-            string norm = text.Replace("0x", "").Replace("0X", "");
-            var exact = new HashSet<uint>();
-            var wildcards = new List<(uint mask, uint value, uint maxId)>();
-            IdFilterRule.Parse(norm, exact, wildcards);
-            bool hasRule = exact.Count > 0 || wildcards.Count > 0;
+            long key = LinMsgKey(frame.Pid, frame.LogicChannel);
+            LinFixedInfo info;
+            if (!_linMsgIndexMap.TryGetValue(key, out info))
+            {
+                info = new LinFixedInfo { Pid = frame.Pid, Channel = frame.LogicChannel };
+                _linMsgIndexMap[key] = info;
+                _linFixedList.Add(info);
+                _linFlatRowsDirty = true;
+            }
+            info.Count++;
+            if (info.LastTimestampUs > 0 && frame.TimestampUs >= info.LastTimestampUs)
+                info.PrevSameIdGapUs = frame.TimestampUs - info.LastTimestampUs;
+            info.LastTimestampUs = frame.TimestampUs;
+            info.Last = frame;
+        }
+
+        /// <summary>清空全部报文数据与统计（保留显示模式/过滤设置）</summary>
+        private void ClearLinFrames()
+        {
             lock (_frames)
             {
-                _filtered.Clear();
-                for (int i = 0; i < _frames.Count; i++)
-                {
-                    if (!hasRule) { _filtered.Add(i); continue; }
-                    if (IdFilterRule.Match(_frames[i].Pid, exact, wildcards)) _filtered.Add(i);
-                }
-                _dgvFrames.RowCount = _filtered.Count;
+                _frames.Clear();
+                _linFixedList.Clear();
+                _linMsgIndexMap.Clear();
+                _errorCount = 0;
+            }
+            _linExpandedKeys.Clear();
+            _linExpandedFrames.Clear();
+            _linFlatRows.Clear();
+            _linFramesLoaded = 0;
+            _linUserScrolledAway = false;
+            _lastLinScrollRowCount = 0;
+            _linFlatRowsDirty = true;
+            _dgvFrames.RowCount = 0;
+            _linRefreshPending = true;
+            DoLinRefresh();
+            RefreshStatusBar();
+        }
+
+        /// <summary>过滤文本变化：解析规则（0x 前缀剥除，规则与 CAN 一致）</summary>
+        private void ParseLinFilter()
+        {
+            if (_disposed) return;
+            string norm = _txtFilter.Text.Trim().Replace("0x", "").Replace("0X", "");
+            _linFilterIds.Clear();
+            _linFilterWildcards.Clear();
+            IdFilterRule.Parse(norm, _linFilterIds, _linFilterWildcards);
+        }
+
+        /// <summary>过滤变化后的重建触发：Scroll 从头增量 / Fixed 全量（绕过暂停门，暂停下也生效）</summary>
+        private void RebuildLinFiltered()
+        {
+            if (_disposed) return;
+            _linFramesLoaded = 0;
+            _linFlatRowsDirty = true;
+            _linRefreshPending = true;
+            DoLinRefresh();
+        }
+
+        private bool LinPassesFilter(byte pid)
+        {
+            return IdFilterRule.Match(pid, _linFilterIds, _linFilterWildcards);
+        }
+
+        /// <summary>UI 线程：节流重建扁平行列表并同步表格（最大 10fps，对齐 CAN MIN_REFRESH_MS）。
+        /// 暂停时冻结画面（帧仍持续记录），仅返回不刷新。</summary>
+        private void RefreshLinMessageDisplay()
+        {
+            if (_disposed) return;
+            if (!_linRefreshPending) return;
+            if (_paused) return; // 暂停时冻结画面（帧仍持续记录）
+            DoLinRefresh();
+        }
+
+        /// <summary>实际刷新（绕过暂停门：模式切换/展开/过滤等用户操作在暂停下也须生效）</summary>
+        private void DoLinRefresh()
+        {
+            if (_disposed) return;
+            var now = DateTime.Now;
+            if ((now - _lastLinRefresh).TotalMilliseconds < LIN_MIN_REFRESH_MS) return;
+            _linRefreshPending = false;
+            _lastLinRefresh = now;
+
+            RebuildLinFlatRows();
+
+            _dgvFrames.SuspendLayout();
+            int targetCount = _linFlatRows.Count;
+            if (_dgvFrames.RowCount != targetCount)
+            {
+                // Fixed 模式行数差异大时先归零再设目标（避免 DataGridView 内部大量增量重算）
+                if (!_linScrollMode && targetCount > _linFixedList.Count * 5)
+                    _dgvFrames.RowCount = 0;
+                _dgvFrames.RowCount = targetCount;
+            }
+            else
+            {
+                // 行数不变仍需强制刷新单元格内容（Scroll 最新帧替换旧帧）
                 _dgvFrames.Invalidate();
             }
+            _dgvFrames.ResumeLayout();
+
+            // Scroll 自动跟随：仅用户未离开底部且行数增长时滚动到最新（节流：增量超阈值才滚）
+            if (_linScrollMode && targetCount > 0 && !_linUserScrolledAway && targetCount > _lastLinScrollRowCount)
+            {
+                try { _dgvFrames.FirstDisplayedScrollingRowIndex = targetCount - 1; }
+                catch { }
+                _lastLinScrollRowCount = targetCount;
+            }
+        }
+
+        /// <summary>重建扁平行列表（_frames 锁内）：Fixed=聚合行+展开信号行；Scroll=帧行+展开信号行</summary>
+        private void RebuildLinFlatRows()
+        {
+            lock (_frames)
+            {
+                if (_linScrollMode)
+                {
+                    bool showAll = _paused || _linUserScrolledAway;
+                    if (showAll)
+                    {
+                        // 暂停/离开底部：增量追加全部匹配帧
+                        if (_linFlatRowsDirty || _linFlatRows.Count == 0 || _linFramesLoaded > _frames.Count)
+                        {
+                            _linFlatRows.Clear();
+                            _linFramesLoaded = 0;
+                        }
+                        for (int i = _linFramesLoaded; i < _frames.Count; i++)
+                        {
+                            var f = _frames[i];
+                            if (!LinPassesFilter(f.Pid)) continue;
+                            AppendLinFrameRow(f, i);
+                        }
+                        _linFramesLoaded = _frames.Count;
+                    }
+                    else
+                    {
+                        // 接收中：只显示最新 LIN_SCROLL_LIVE_FRAMES 条匹配帧（全量重建，仅几十行极快）
+                        int matched = 0;
+                        int start = Math.Max(0, _frames.Count - LIN_SCROLL_LIVE_FRAMES);
+                        for (int i = _frames.Count - 1; i >= 0 && matched < LIN_SCROLL_LIVE_FRAMES; i--)
+                        {
+                            if (!LinPassesFilter(_frames[i].Pid)) continue;
+                            matched++;
+                            start = i;
+                        }
+                        _linFlatRows.Clear();
+                        for (int i = start; i < _frames.Count; i++)
+                        {
+                            var f = _frames[i];
+                            if (!LinPassesFilter(f.Pid)) continue;
+                            AppendLinFrameRow(f, i);
+                        }
+                        _linFramesLoaded = _frames.Count;
+                    }
+                }
+                else
+                {
+                    // Fixed：聚合视图（按 PID,通道 排序；行数 ≤ 128，重建极快）
+                    if (!_linFlatRowsDirty && _linFlatRows.Count > 0) return;
+                    _linFixedList.Sort((a, b) => a.Pid != b.Pid ? a.Pid.CompareTo(b.Pid) : a.Channel.CompareTo(b.Channel));
+                    _linFlatRows.Clear();
+                    for (int i = 0; i < _linFixedList.Count; i++)
+                    {
+                        var info = _linFixedList[i];
+                        if (!LinPassesFilter(info.Pid)) continue;
+                        _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, FixedIndex = i, Pid = info.Pid, Channel = info.Channel });
+                        if (_linExpandedKeys.Contains(LinMsgKey(info.Pid, info.Channel)))
+                            AppendLinSignalRows(info.Last, -1);
+                    }
+                }
+            }
+            _linFlatRowsDirty = false;
+        }
+
+        /// <summary>追加一帧行及展开信号行（须在 _frames 锁内）</summary>
+        private void AppendLinFrameRow(LinFrameRecord f, int frameIndex)
+        {
+            _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, FrameIndex = frameIndex, Pid = f.Pid, Channel = f.LogicChannel });
+            if (_linExpandedFrames.Contains(frameIndex))
+                AppendLinSignalRows(f, frameIndex);
+        }
+
+        /// <summary>按帧追加该帧全部信号行（LDF 按通道匹配；无定义时跳过）</summary>
+        private void AppendLinSignalRows(LinFrameRecord f, int frameIndex)
+        {
+            var ldf = GetLdfForChannel(f.LogicChannel);
+            if (ldf == null) return;
+            List<LinFrameSignal> sigs;
+            if (!ldf.FrameSignals.TryGetValue(f.Pid, out sigs) || sigs.Count == 0) return;
+            foreach (var fs in sigs)
+                _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Signal, FrameIndex = frameIndex, Pid = f.Pid, Channel = f.LogicChannel, SignalName = fs.SignalName, SigOffset = fs.Offset });
+        }
+
+        private static LinLdfFile GetLdfForChannel(byte ch)
+        {
+            if (ch >= 1 && ch <= LinConfig.Channels.Count)
+                return LinConfig.Channels[ch - 1].LdfHelper;
+            return null;
+        }
+
+        /// <summary>某帧是否有 LDF 信号定义（展开按钮绘制/切换判断）</summary>
+        private bool LinFrameHasSignals(byte pid, byte ch)
+        {
+            var ldf = GetLdfForChannel(ch);
+            if (ldf == null) return false;
+            List<LinFrameSignal> sigs;
+            return ldf.FrameSignals.TryGetValue(pid, out sigs) && sigs.Count > 0;
         }
 
 
@@ -538,23 +848,188 @@ namespace PCAN_Client.LIN_UI
 
         private void DgvFrames_CellValueNeeded(object sender, DataGridViewCellValueEventArgs e)
         {
-            if (e.RowIndex < 0 || e.RowIndex >= _filtered.Count) return;
-            LinFrameRecord f;
-            lock (_frames) { f = _frames[_filtered[e.RowIndex]]; }
-            switch (_dgvFrames.Columns[e.ColumnIndex].Name)
+            if (e.RowIndex < 0 || e.RowIndex >= _linFlatRows.Count) return;
+            var flat = _linFlatRows[e.RowIndex];
+            string col = _dgvFrames.Columns[e.ColumnIndex].Name;
+            if (flat.Type == LinRowType.Frame)
             {
-                case "colTime": e.Value = (f.TimestampUs / 1000.0).ToString("F3"); break;
-                case "colCh": e.Value = "CH" + f.LogicChannel; break;
-                case "colDir": e.Value = f.Direction == LinFrameDir.Tx ? "Tx" : "Rx"; break;
-                case "colId": e.Value = "0x" + f.Pid.ToString("X2"); break;
-                case "colName": e.Value = f.FrameName; break;
-                case "colType": e.Value = FrameTypeText(f.FrameType); break;
-                case "colDlc": e.Value = f.Dlc.ToString(); break;
-                case "colData": e.Value = f.DataHex; break;
-                case "colCs":
-                    e.Value = f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
-                    break;
-                case "colStatus": e.Value = f.StatusText; break;
+                LinFrameRecord f;
+                LinFixedInfo info = null;
+                lock (_frames)
+                {
+                    if (flat.FixedIndex >= 0)
+                    {
+                        if (flat.FixedIndex >= _linFixedList.Count) return;
+                        info = _linFixedList[flat.FixedIndex];
+                        f = info.Last;
+                    }
+                    else
+                    {
+                        if (flat.FrameIndex < 0 || flat.FrameIndex >= _frames.Count) return;
+                        f = _frames[flat.FrameIndex];
+                    }
+                }
+                switch (col)
+                {
+                    case "colExpand": e.Value = ""; break;
+                    case "colCount":
+                        e.Value = info != null ? info.Count.ToString() : (flat.FrameIndex + 1).ToString();
+                        break;
+                    case "colTime":
+                        e.Value = ((info != null ? info.LastTimestampUs : f.TimestampUs) / 1000.0).ToString("F3");
+                        break;
+                    case "colCh": e.Value = "CH" + f.LogicChannel; break;
+                    case "colDir": e.Value = f.Direction == LinFrameDir.Tx ? "Tx" : "Rx"; break;
+                    case "colId": e.Value = "0x" + f.Pid.ToString("X2"); break;
+                    case "colName": e.Value = f.FrameName; break;
+                    case "colType": e.Value = FrameTypeText(f.FrameType); break;
+                    case "colDlc": e.Value = f.Dlc.ToString(); break;
+                    case "colData": e.Value = f.DataHex; break;
+                    case "colCs":
+                        e.Value = f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
+                        break;
+                    case "colStatus": e.Value = f.StatusText; break;
+                }
+            }
+            else
+            {
+                // 信号行：按帧数据 + LDF 定义解码物理值/枚举（Scroll 取帧日志，Fixed 取聚合最新帧）
+                LinFrameRecord f;
+                lock (_frames)
+                {
+                    if (flat.FrameIndex >= 0)
+                    {
+                        if (flat.FrameIndex >= _frames.Count) return;
+                        f = _frames[flat.FrameIndex];
+                    }
+                    else
+                    {
+                        LinFixedInfo info;
+                        if (!_linMsgIndexMap.TryGetValue(LinMsgKey(flat.Pid, flat.Channel), out info)) return;
+                        f = info.Last;
+                    }
+                }
+                var ldf = GetLdfForChannel(flat.Channel);
+                if (ldf == null) return;
+                var sigDef = FindSignalDef(ldf, flat.SignalName);
+                if (sigDef == null) return;
+                ulong raw = (f.Data != null && f.Data.Length > 0)
+                    ? LinLdfHelper.ReadSignalBits(f.Data, flat.SigOffset, sigDef.Width)
+                    : 0;
+                switch (col)
+                {
+                    case "colName": e.Value = "　├ " + flat.SignalName; break;
+                    case "colDlc": e.Value = "bit " + flat.SigOffset; break;
+                    case "colData": e.Value = FormatSigValue(sigDef, raw); break;
+                    default: e.Value = ""; break;
+                }
+            }
+        }
+
+        /// <summary>展开列绘制 ＋/－（仅该帧有 LDF 信号定义时显示，对齐 CAN colFilter）</summary>
+        private void DgvFrames_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
+        {
+            try
+            {
+                if (e.RowIndex < 0 || e.ColumnIndex != _dgvFrames.Columns["colExpand"].Index) return;
+                if (e.RowIndex >= _linFlatRows.Count) return;
+                var flat = _linFlatRows[e.RowIndex];
+                if (flat.Type != LinRowType.Frame) return;
+                if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
+                e.Handled = true;
+                bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
+                    : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
+                {
+                    e.Graphics.FillRectangle(bg, e.CellBounds);
+                }
+                bool isExpanded = flat.FixedIndex >= 0
+                    ? _linExpandedKeys.Contains(LinMsgKey(flat.Pid, flat.Channel))
+                    : _linExpandedFrames.Contains(flat.FrameIndex);
+                using (var btnFont = new Font("Arial", 10f, FontStyle.Bold))
+                using (var brush = new SolidBrush(Color.FromArgb(60, 60, 60)))
+                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                {
+                    e.Graphics.DrawString(isExpanded ? "−" : "+", btnFont, brush, e.CellBounds, sf);
+                }
+                e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
+            }
+            catch { /* 防御：绘制异常不中断 */ }
+        }
+
+        /// <summary>展开列单击：切换信号展开（对齐 CAN colFilter 交互）</summary>
+        private void DgvFrames_CellClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (e.ColumnIndex != _dgvFrames.Columns["colExpand"].Index) return;
+            ToggleLinExpansion(e.RowIndex);
+        }
+
+        /// <summary>双击整行：切换信号展开（对齐 CAN：除展开列外任意列双击）</summary>
+        private void DgvFrames_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (e.ColumnIndex == _dgvFrames.Columns["colExpand"].Index) return; // 由 CellClick 处理
+            ToggleLinExpansion(e.RowIndex);
+        }
+
+        /// <summary>切换一行帧的信号展开/折叠（无信号定义时静默忽略，与 CAN 一致）</summary>
+        private void ToggleLinExpansion(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= _linFlatRows.Count) return;
+            var flat = _linFlatRows[rowIndex];
+            if (flat.Type != LinRowType.Frame) return;
+            if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return;
+
+            if (flat.FixedIndex >= 0)
+            {
+                // Fixed 模式：聚合键展开（重建，行数 ≤ 128 极快；绕过暂停门）
+                long key = LinMsgKey(flat.Pid, flat.Channel);
+                if (_linExpandedKeys.Contains(key)) _linExpandedKeys.Remove(key);
+                else _linExpandedKeys.Add(key);
+                _linFlatRowsDirty = true;
+                _linRefreshPending = true;
+                DoLinRefresh();
+            }
+            else
+            {
+                // Scroll 模式：帧索引展开（原地插入/删除信号行，避免全量重建）
+                lock (_frames)
+                {
+                    if (flat.FrameIndex < 0 || flat.FrameIndex >= _frames.Count) return;
+                    bool wasExpanded = _linExpandedFrames.Contains(flat.FrameIndex);
+                    if (wasExpanded) _linExpandedFrames.Remove(flat.FrameIndex);
+                    else _linExpandedFrames.Add(flat.FrameIndex);
+                    _dgvFrames.SuspendLayout();
+                    if (wasExpanded)
+                    {
+                        // 折叠：删除该帧全部信号子行
+                        for (int i = _linFlatRows.Count - 1; i >= 0; i--)
+                            if (_linFlatRows[i].Type == LinRowType.Signal && _linFlatRows[i].FrameIndex == flat.FrameIndex)
+                                _linFlatRows.RemoveAt(i);
+                    }
+                    else
+                    {
+                        // 展开：仅在点击帧行后插入信号行
+                        int insertPos = rowIndex + 1;
+                        if (rowIndex < _linFlatRows.Count && _linFlatRows[rowIndex].FrameIndex == flat.FrameIndex)
+                        {
+                            var f = _frames[flat.FrameIndex];
+                            var ldf = GetLdfForChannel(flat.Channel);
+                            List<LinFrameSignal> sigs;
+                            if (ldf != null && ldf.FrameSignals.TryGetValue(flat.Pid, out sigs) && sigs.Count > 0)
+                            {
+                                var rows = new List<LinFlatRow>(sigs.Count);
+                                foreach (var fs in sigs)
+                                    rows.Add(new LinFlatRow { Type = LinRowType.Signal, FrameIndex = flat.FrameIndex, Pid = flat.Pid, Channel = flat.Channel, SignalName = fs.SignalName, SigOffset = fs.Offset });
+                                _linFlatRows.InsertRange(insertPos, rows);
+                            }
+                        }
+                    }
+                    _dgvFrames.RowCount = _linFlatRows.Count;
+                    _dgvFrames.ResumeLayout();
+                    _dgvFrames.Invalidate();
+                }
             }
         }
 
@@ -572,9 +1047,28 @@ namespace PCAN_Client.LIN_UI
 
         private void DgvFrames_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
         {
-            if (e.RowIndex < 0 || e.RowIndex >= _filtered.Count) return;
+            if (e.RowIndex < 0 || e.RowIndex >= _linFlatRows.Count) return;
+            var flat = _linFlatRows[e.RowIndex];
+            if (flat.Type == LinRowType.Signal)
+            {
+                // 信号行浅灰底（与从节点页签展开行一致）
+                e.CellStyle.BackColor = Color.FromArgb(245, 245, 248);
+                return;
+            }
             LinFrameRecord f;
-            lock (_frames) { f = _frames[_filtered[e.RowIndex]]; }
+            lock (_frames)
+            {
+                if (flat.FixedIndex >= 0)
+                {
+                    if (flat.FixedIndex >= _linFixedList.Count) return;
+                    f = _linFixedList[flat.FixedIndex].Last;
+                }
+                else
+                {
+                    if (flat.FrameIndex < 0 || flat.FrameIndex >= _frames.Count) return;
+                    f = _frames[flat.FrameIndex];
+                }
+            }
             if (e.ColumnIndex == _dgvFrames.Columns["colDir"].Index)
             {
                 e.CellStyle.ForeColor = f.Direction == LinFrameDir.Tx ? Color.FromArgb(0, 90, 200) : Color.FromArgb(0, 128, 0);

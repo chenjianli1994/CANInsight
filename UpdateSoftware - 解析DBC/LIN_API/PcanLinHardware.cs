@@ -124,17 +124,12 @@ namespace PCAN_Client.LIN_API
                 if (err != LinPlError.errOK) { CleanupClient(); return "连接 LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
-                // 条件：未初始化（modNone）或波特率不同或模式不符——模式残留（如上次 Slave）
-                // 会让调度函数（需 Master）全部返回 errUnknown，必须重新初始化
+                // 无条件初始化（官方序列）：上次会话/其他程序残留的初始化状态（模式/波特率恰好匹配时
+                // 旧实现会跳过初始化）会让后续 SetClientFilter 稳定返回 errUnknown——实测仅重插设备可恢复，
+                // 重新 InitializeHardware 可复位管理器对该硬件的过滤/客户端注册状态。重复初始化同参数为幂等操作。
                 LinPlHardwareMode mode = _cfg.Mode == LinNodeMode.Master ? LinPlHardwareMode.modMaster : LinPlHardwareMode.modSlave;
-                int hwMode = -1, hwBaud = -1;
-                LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpMode, out hwMode, 4);
-                LinPlApi.GetHardwareParam(_hw, LinPlHardwareParam.hwpBaudrate, out hwBaud, 4);
-                if ((LinPlHardwareMode)hwMode != mode || hwBaud != (int)_cfg.Baudrate || (LinPlHardwareMode)hwMode == LinPlHardwareMode.modNone)
-                {
-                    err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
-                    if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
-                }
+                err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
+                if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；wFilterType=0 用管理器默认过滤类型）
                 err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
