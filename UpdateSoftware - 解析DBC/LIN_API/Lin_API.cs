@@ -271,15 +271,22 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public static string StartSchedule(byte logicChannel, List<LinScheduleSlot> slots)
         {
-            // M2: 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）
-            var ldf = GetLdf(logicChannel);
-            if (ldf != null)
+            // M2: 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）。
+            // 仅主节点模式：从节点模式下预置会让本机对主节点发布帧配置 RESPONSE_ENABLE 自动应答，
+            // 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
+            // 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
+            if (logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
+                LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master)
             {
-                foreach (var kv in ldf.Frames)
+                var ldf = GetLdf(logicChannel);
+                if (ldf != null)
                 {
-                    if (kv.Value.Publisher == ldf.MasterName)
+                    foreach (var kv in ldf.Frames)
                     {
-                        UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
+                        if (kv.Value.Publisher == ldf.MasterName)
+                        {
+                            UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
+                        }
                     }
                 }
             }
