@@ -292,6 +292,10 @@ namespace PCAN_Client.LIN_UI
             _dgvFrames.Columns["colCh"].Width = 52;
             _dgvFrames.Columns.Add("colDir", "方向");
             _dgvFrames.Columns["colDir"].Width = 48;
+            _dgvFrames.Columns.Add("colErr", "错误");
+            _dgvFrames.Columns["colErr"].Width = 40;
+            _dgvFrames.Columns["colErr"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _dgvFrames.Columns["colErr"].SortMode = DataGridViewColumnSortMode.NotSortable;
             _dgvFrames.Columns.Add("colId", "ID");
             _dgvFrames.Columns["colId"].Width = 50;
             _dgvFrames.Columns.Add("colName", "帧名称");
@@ -851,6 +855,21 @@ namespace PCAN_Client.LIN_UI
             return byte.Parse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
         }
 
+        /// <summary>取扁平行对应的帧记录（Fixed 取聚合最新帧，Scroll 取帧日志）；失败返回 false（须在 _frames 锁内调用）</summary>
+        private bool TryGetLinFlatFrame(LinFlatRow flat, out LinFrameRecord f)
+        {
+            f = default(LinFrameRecord);
+            if (flat.FixedIndex >= 0)
+            {
+                if (flat.FixedIndex >= _linFixedList.Count) return false;
+                f = _linFixedList[flat.FixedIndex].Last;
+                return true;
+            }
+            if (flat.FrameIndex < 0 || flat.FrameIndex >= _frames.Count) return false;
+            f = _frames[flat.FrameIndex];
+            return true;
+        }
+
         private void DgvFrames_CellValueNeeded(object sender, DataGridViewCellValueEventArgs e)
         {
             if (e.RowIndex < 0 || e.RowIndex >= _linFlatRows.Count) return;
@@ -885,6 +904,7 @@ namespace PCAN_Client.LIN_UI
                         break;
                     case "colCh": e.Value = "CH" + f.LogicChannel; break;
                     case "colDir": e.Value = f.Direction == LinFrameDir.Tx ? "Tx" : "Rx"; break;
+                    case "colErr": e.Value = ""; break; // 指示灯由 CellPainting 绘制
                     case "colId": e.Value = "0x" + f.Pid.ToString("X2"); break;
                     case "colName": e.Value = f.FrameName; break;
                     case "colType": e.Value = FrameTypeText(f.FrameType); break;
@@ -931,33 +951,67 @@ namespace PCAN_Client.LIN_UI
             }
         }
 
-        /// <summary>展开列绘制 ＋/－（仅该帧有 LDF 信号定义时显示，对齐 CAN colFilter）</summary>
+        /// <summary>展开列绘制 ＋/－（仅该帧有 LDF 信号定义时显示）；错误列绘制红灯（校验和/同步/无应答/硬件错误），对齐 CAN 报文窗口</summary>
         private void DgvFrames_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
             try
             {
-                if (e.RowIndex < 0 || e.ColumnIndex != _dgvFrames.Columns["colExpand"].Index) return;
-                if (e.RowIndex >= _linFlatRows.Count) return;
+                if (e.RowIndex < 0 || e.RowIndex >= _linFlatRows.Count) return;
                 var flat = _linFlatRows[e.RowIndex];
-                if (flat.Type != LinRowType.Frame) return;
-                if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
-                e.Handled = true;
-                bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
-                using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
-                    : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
+                string colName = _dgvFrames.Columns[e.ColumnIndex].Name;
+
+                if (colName == "colExpand")
                 {
-                    e.Graphics.FillRectangle(bg, e.CellBounds);
+                    if (flat.Type != LinRowType.Frame) return;
+                    if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
+                    e.Handled = true;
+                    bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                    using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
+                        : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
+                    {
+                        e.Graphics.FillRectangle(bg, e.CellBounds);
+                    }
+                    bool isExpanded = flat.FixedIndex >= 0
+                        ? _linExpandedKeys.Contains(LinMsgKey(flat.Pid, flat.Channel))
+                        : _linExpandedFrames.Contains(flat.FrameIndex);
+                    using (var btnFont = new Font("Arial", 10f, FontStyle.Bold))
+                    using (var brush = new SolidBrush(Color.FromArgb(60, 60, 60)))
+                    using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                    {
+                        e.Graphics.DrawString(isExpanded ? "−" : "+", btnFont, brush, e.CellBounds, sf);
+                    }
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
+                    return;
                 }
-                bool isExpanded = flat.FixedIndex >= 0
-                    ? _linExpandedKeys.Contains(LinMsgKey(flat.Pid, flat.Channel))
-                    : _linExpandedFrames.Contains(flat.FrameIndex);
-                using (var btnFont = new Font("Arial", 10f, FontStyle.Bold))
-                using (var brush = new SolidBrush(Color.FromArgb(60, 60, 60)))
-                using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+
+                if (colName == "colErr")
                 {
-                    e.Graphics.DrawString(isExpanded ? "−" : "+", btnFont, brush, e.CellBounds, sf);
+                    if (flat.Type != LinRowType.Frame) return;
+                    LinFrameRecord f;
+                    lock (_frames)
+                    {
+                        if (!TryGetLinFlatFrame(flat, out f)) return;
+                    }
+                    if (f.ErrorKind == LinErrorKind.None) return; // 正常帧：默认绘制
+                    // 错误帧：红灯（中心高光，指示灯质感）
+                    e.Handled = true;
+                    bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+                    using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
+                        : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
+                    {
+                        e.Graphics.FillRectangle(bg, e.CellBounds);
+                    }
+                    const int d = 12;
+                    var rc = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d) / 2,
+                        e.CellBounds.Y + (e.CellBounds.Height - d) / 2, d, d);
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (var red = new SolidBrush(Color.FromArgb(226, 68, 54)))
+                        e.Graphics.FillEllipse(red, rc);
+                    using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
+                        e.Graphics.FillEllipse(hl, rc.X + rc.Width / 4, rc.Y + rc.Height / 4, rc.Width / 2, rc.Height / 2);
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
+                    return;
                 }
-                e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
             }
             catch { /* 防御：绘制异常不中断 */ }
         }
