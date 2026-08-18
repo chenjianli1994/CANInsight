@@ -138,7 +138,11 @@ namespace PCAN_Client.LIN_API
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；wFilterType=0 用管理器默认过滤类型）
                 err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF, 0);
-                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType) { CleanupClient(); return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err); }
+                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType)
+                {
+                    CleanupClient();
+                    return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err) + "\n（PLIN 管理器状态异常时可重新插拔 PCAN 设备或重启「PLIN Device Manager」服务后重试）";
+                }
 
                 // 接收全部帧 ID（0-63）
                 err = LinPlApi.RegisterFrameId(_client, _hw, 0, LinPlApi.LIN_MAX_FRAME_ID);
@@ -158,13 +162,15 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>连接失败路径清理：移除已注册的客户端，避免泄漏</summary>
+        /// <summary>连接失败路径清理：断开客户端连接并移除注册，避免残留导致下次连接状态异常</summary>
         private void CleanupClient()
         {
             try
             {
                 if (_client != LinPlApi.INVALID_LIN_HANDLE)
                 {
+                    if (_hw != LinPlApi.INVALID_LIN_HANDLE)
+                        LinPlApi.DisconnectClient(_client, _hw);
                     LinPlApi.RemoveClient(_client);
                 }
             }
@@ -284,6 +290,16 @@ namespace PCAN_Client.LIN_API
                     return SendHeader(pid, dlc);
             }
             return Transmit(pid, data, LinChecksumKind.Enhanced);
+        }
+
+        /// <summary>软件调度帧数据（回显用；无缓存返回 null）</summary>
+        public byte[] GetFrameData(byte pid)
+        {
+            lock (_frameData)
+            {
+                byte[] d;
+                return _frameData.TryGetValue(pid, out d) ? (byte[])d.Clone() : null;
+            }
         }
 
         /// <summary>更新从节点发布帧数据（硬件自动应答内容）；帧条目缺失或被禁用时先重建 RESPONSE_ENABLE 条目</summary>

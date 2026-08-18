@@ -129,12 +129,14 @@ namespace PCAN_Client.LIN_API
         {
             PcanLinHardware pcan;
             XlLinHardware xl;
+            bool ok = false;
             lock (_hwLock)
             {
-                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.SendHeader(pid, GetFrameDlc(logicChannel, pid));
-                if (_xl.TryGetValue(logicChannel, out xl)) return xl.SendRequest(pid);
+                if (_pcan.TryGetValue(logicChannel, out pcan)) ok = pcan.SendHeader(pid, GetFrameDlc(logicChannel, pid));
+                else if (_xl.TryGetValue(logicChannel, out xl)) ok = xl.SendRequest(pid);
             }
-            return false;
+            if (ok) EchoTx(logicChannel, pid, null, LinChecksumKind.Enhanced);
+            return ok;
         }
 
         /// <summary>调度表发一帧（软件调度）：PEAK 有数据发完整帧，无数据发 Header；Vector 返回 false 回退 Header</summary>
@@ -143,7 +145,13 @@ namespace PCAN_Client.LIN_API
             PcanLinHardware pcan;
             lock (_hwLock)
             {
-                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
+                if (_pcan.TryGetValue(logicChannel, out pcan))
+                {
+                    bool ok = pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
+                    // 回显：硬件不回传本端发送帧，软件调度须自行显示（数据为缓存帧数据，无缓存为 Header 记录）
+                    if (ok) EchoTx(logicChannel, pid, pcan.GetFrameData(pid), LinChecksumKind.Enhanced);
+                    return ok;
+                }
             }
             return false;
         }
