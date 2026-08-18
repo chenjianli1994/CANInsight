@@ -18,7 +18,6 @@ namespace PCAN_Client.LIN_UI
     {
         // ==================== 控件 ====================
         private ToolStrip _toolStripLin;
-        private ToolStripComboBox _cmbChannel;
         private ToolStripButton _btnLoadLdf, _btnStart, _btnPause, _btnClear, _btnWakeUp, _btnSleep;
         private ToolStripTextBox _txtFilter;
         private DataGridView _dgvFrames;
@@ -81,7 +80,7 @@ namespace PCAN_Client.LIN_UI
             Lin_API.LinkLost += OnLinkLost;
             Lin_API.ChannelStateChanged += OnChannelStateChanged;
 
-            RefreshChannelCombo();
+            InitChannelView();
             FormClosing += (s, e) =>
             {
                 _disposed = true;
@@ -108,11 +107,9 @@ namespace PCAN_Client.LIN_UI
                     dlg.SelectLinTab();
                     dlg.ShowDialog(this);
                 }
-                RefreshChannelCombo();
+                InitChannelView();
                 RefreshStatusBar();
             };
-            _cmbChannel = new ToolStripComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-            _cmbChannel.SelectedIndexChanged += (s, e) => SelectChannel();
             _btnLoadLdf = new ToolStripButton("加载 LDF", ToolbarIcons.Get("dbc"));
             _btnLoadLdf.Click += (s, e) => LoadLdf();
             _btnStart = new ToolStripButton("开始", ToolbarIcons.Get("play"));
@@ -128,9 +125,6 @@ namespace PCAN_Client.LIN_UI
             _btnSleep = new ToolStripButton("休眠", ToolbarIcons.Get("stop"));
             _btnSleep.Click += (s, e) => { if (!Lin_API.Sleep(_channel)) ShowError("休眠失败（未连接）"); };
 
-            _toolStripLin.Items.Add(new ToolStripLabel("通道:"));
-            _toolStripLin.Items.Add(_cmbChannel);
-            _toolStripLin.Items.Add(new ToolStripSeparator());
             _toolStripLin.Items.Add(btnChMgr);
             _toolStripLin.Items.Add(_btnLoadLdf);
             _toolStripLin.Items.Add(new ToolStripSeparator());
@@ -162,6 +156,10 @@ namespace PCAN_Client.LIN_UI
             };
             UiTheme.StyleGrid(_dgvFrames);
             _dgvFrames.DefaultCellStyle.Font = new Font("Consolas", 9f);
+            _dgvFrames.DefaultCellStyle.ForeColor = Color.Black;
+            // 表头/单元格边框风格与 CAN 报文接收窗口一致（单线分隔，表头清晰可辨）
+            _dgvFrames.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
+            _dgvFrames.CellBorderStyle = DataGridViewCellBorderStyle.Single;
             _dgvFrames.CellValueNeeded += DgvFrames_CellValueNeeded;
             _dgvFrames.CellFormatting += DgvFrames_CellFormatting;
             // 空态提示：未收到报文时说明此区域用途（连接后实时显示总线报文）；画在数据区（表头下方）
@@ -441,23 +439,13 @@ namespace PCAN_Client.LIN_UI
 
         // ==================== 通道选择/连接 ====================
 
-        private void RefreshChannelCombo()
+        /// <summary>初始化页签操作通道（报文表显示全部通道，按「通道」列区分；页签操作第一个已配置通道）</summary>
+        private void InitChannelView()
         {
-            _cmbChannel.Items.Clear();
-            foreach (var ch in LinConfig.Channels)
-            {
-                _cmbChannel.Items.Add($"{ch.Name}  [{ch.HwType}|{ch.HwHandle}]{(ch.IsConnected ? " 已连接" : "")}");
-            }
-            if (_cmbChannel.Items.Count > 0) _cmbChannel.SelectedIndex = 0;
-            SelectChannel();
-        }
-
-        private void SelectChannel()
-        {
-            _channel = (byte)(_cmbChannel.SelectedIndex + 1);
-            if (_channel < 1 || _channel > LinConfig.Channels.Count) { _channel = 0; return; }
-            var ch = LinConfig.Channels[_channel - 1];
-            _lblBaud.Text = "波特率 " + ch.Baudrate;
+            _channel = LinConfig.Channels.Count > 0 ? (byte)1 : (byte)0;
+            _lblBaud.Text = LinConfig.Channels.Count > 0
+                ? "LIN 通道 " + LinConfig.Channels.Count + " 路 · 波特率 " + LinConfig.Channels[0].Baudrate
+                : "未配置 LIN 通道";
             RefreshSlotGrid();
             RefreshRespGrid();
             RefreshSignalGrid();
@@ -1254,7 +1242,7 @@ namespace PCAN_Client.LIN_UI
             {
                 BeginInvoke(new Action(() =>
                 {
-                    RefreshChannelCombo();
+                    InitChannelView();
                     RefreshStatusBar();
                     if (connected) _lblBus.Text = "总线: 已连接";
                 }));
