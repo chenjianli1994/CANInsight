@@ -405,6 +405,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ResistanceSleep.cs" />
+    <Compile Include="util\AppLog.cs" />
     <Compile Include="util\Delay.cs" />
     <Compile Include="util\FrameCrcCal.cs" />
     <Compile Include="util\SelfUpdater.cs" />

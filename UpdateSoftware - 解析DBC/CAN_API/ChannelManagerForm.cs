@@ -67,6 +67,7 @@ namespace PCAN_Client
         public ChannelManagerForm(Main main)
         {
             _main = main;
+            AppLog.Write("[CAN-UI] 通道管理对话框打开");
             _realTimeMode = Main.chartFromShow?.RealTimeDataSta ?? true;
             BuildUi();
             // 先用Main现有识别缓存立即填充（窗口秒开）；硬件识别为耗时操作（PCAN试开16槽位约1-2秒），窗口显示后后台异步刷新
@@ -199,7 +200,7 @@ namespace PCAN_Client
                 if (e.TabPageIndex == 1) EnsureLinPanel();
             };
 
-            this.FormClosed += (s, e) => { _statusTimer.Stop(); _statusTimer.Dispose(); };
+            this.FormClosed += (s, e) => { AppLog.Write("[CAN-UI] 通道管理对话框关闭"); _statusTimer.Stop(); _statusTimer.Dispose(); };
         }
 
         /// <summary>切换到 LIN 页签（LIN 监控窗口的通道管理入口用）</summary>
@@ -213,6 +214,7 @@ namespace PCAN_Client
         private void EnsureLinPanel()
         {
             if (_linPanel != null) return;
+            AppLog.Write("[LIN-UI] 首次切到 LIN 页签，创建 LinChannelPanel");
             _linPanel = new PCAN_Client.LIN_UI.LinChannelPanel();
             _linPanel.Location = new Point(0, 0);
             _linPanel.Size = new Size(1020, 520);

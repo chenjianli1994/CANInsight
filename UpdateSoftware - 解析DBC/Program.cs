@@ -40,6 +40,17 @@ namespace PCAN_Client
             PrepareEmbeddedNativeLibraries();
             //ExtractEmbeddedDLL();
             HideRelatedFiles();
+            // 未处理异常统一落盘（问题排查关键数据；WinForms 线程异常同时挂 ThreadException）
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                try { AppLog.Error("[APP] UnhandledException: " + (e.ExceptionObject != null ? e.ExceptionObject.ToString() : "null")); AppLog.Close(); }
+                catch { }
+            };
+            Application.ThreadException += (s, e) =>
+            {
+                try { AppLog.Error("[APP] ThreadException: " + (e.Exception != null ? e.Exception.ToString() : "null")); }
+                catch { }
+            };
             /* 首次打开或版本更新后首次打开：弹窗提示（/updated 为更新批处理重启时携带的参数） */
             bool justUpdated = false;
             foreach (var arg in args)

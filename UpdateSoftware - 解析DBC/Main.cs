@@ -1869,6 +1869,8 @@ namespace PCAN_Client
 
         private void Main_Load(object sender, EventArgs e)
         {
+            AppLog.Open("CANInsight 启动 v" + BaseParamter.softVersion);
+            AppLog.Write("[APP] Main_Load: exe=" + System.Windows.Forms.Application.ExecutablePath);
             // 应用图标:读取exe内嵌图标(csproj ApplicationIcon)
             this.Icon = System.Drawing.Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath);
             this.Text = "CANInsight  " + BaseParamter.softVersion;
@@ -2094,6 +2096,7 @@ namespace PCAN_Client
 
         public void PCAN_Connect(bool ShowFlag)
         {
+            AppLog.Write("[CAN] PCAN_Connect 入口 ShowFlag=" + ShowFlag + " 当前pcanOpenFlag=" + pcanOpenFlag);
             if (this.IsHandleCreated)
             {
                 this.BeginInvoke(new EventHandler(delegate
@@ -2111,6 +2114,7 @@ namespace PCAN_Client
                         pCAN_API.PCAN_ChannelUninitialize();
                         button1.Text = "连接";
                         pcanOpenFlag = false;
+                        AppLog.Write("[CAN] PCAN 断开完成");
                         RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                     else
@@ -2124,6 +2128,7 @@ namespace PCAN_Client
                         if (BaseParamter.BusChannels.Count > 0)
                         {
                             int connected = pCAN_API.ConnectMulti();
+                            AppLog.Write("[CAN] PCAN ConnectMulti → 成功 " + connected + " 路");
                             if (connected > 0)
                             {
                                 button1.Text = "已连接";
@@ -2136,6 +2141,7 @@ namespace PCAN_Client
                             {
                                 button1.Text = "连接";
                                 pcanOpenFlag = false;
+                                AppLog.Write("[CAN] PCAN ConnectMulti → 全部失败");
                                 if (ShowFlag)
                                 {
                                     MessageBox.Show("多通道连接失败：所有映射通道均连接失败（请在通道管理窗口\"刷新识别\"后检查硬件通道绑定与设备状态）");
@@ -2399,6 +2405,7 @@ namespace PCAN_Client
         }
         public void CANoeConnect(bool ShowFlag)
         {
+            AppLog.Write("[CAN] CANoeConnect 入口 ShowFlag=" + ShowFlag + " 当前canoeOpenFlag=" + canoeOpenFlag);
             if (this.IsHandleCreated)
             {
                 this.BeginInvoke((EventHandler)(delegate
@@ -2416,6 +2423,7 @@ namespace PCAN_Client
                         canoe_API.CANOE_Close();
                         button5.Text = "连接";
                         canoeOpenFlag = false;
+                        AppLog.Write("[CAN] CANoe 断开完成");
                         RefreshHwConnectedStatusLocal(); // 不做硬件识别，本地重算"已连接"状态
                     }
                     else
@@ -2447,6 +2455,7 @@ namespace PCAN_Client
                             {
                                 button5.Text = "已连接";
                                 canoeOpenFlag = true;
+                                AppLog.Write("[CAN] CANoe Open 成功 mask=0x" + mask.ToString("X"));
                                 // 固化"未指定类型"通道的认领（避免混合连接时PCAN重复认领）
                                 ClaimUntypedChannels(BaseParamter.HwTypeCanoe);
                                 RefreshHwConnectedStatusLocal();
@@ -2455,6 +2464,7 @@ namespace PCAN_Client
                             {
                                 button5.Text = "连接";
                                 canoeOpenFlag = false;
+                                AppLog.Write("[CAN] CANoe Open 失败 mask=0x" + mask.ToString("X"));
                                 if (ShowFlag)
                                 {
                                     MessageBox.Show("多通道连接失败（请在通道管理窗口\"刷新识别\"后检查硬件通道绑定与设备状态）");
@@ -2800,12 +2810,14 @@ namespace PCAN_Client
 
         private void Main_FormClosed(object sender, FormClosedEventArgs e)
         {
+            AppLog.Write("[APP] Main_FormClosed: 应用退出（PCAN=" + pcanOpenFlag + " CANoe=" + canoeOpenFlag + "）");
             if(!(canoe_API is null))
             {
                 canoe_API.CANOE_Close();
             }
             multiMessageCANScheduler.Stop();
             multiMessageCANScheduler.Dispose();
+            AppLog.Close();
         }
 
         private void comboBox_CanoeChannel_SelectedIndexChanged(object sender, EventArgs e)

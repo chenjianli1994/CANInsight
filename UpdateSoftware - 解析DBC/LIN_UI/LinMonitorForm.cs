@@ -105,6 +105,7 @@ namespace PCAN_Client.LIN_UI
 
         public LinMonitorForm()
         {
+            AppLog.Write("[LIN-UI] LinMonitorForm 打开");
             Text = "LIN 总线监控";
             Width = 1180;
             Height = 760;
@@ -135,6 +136,7 @@ namespace PCAN_Client.LIN_UI
             FormClosing += (s, e) =>
             {
                 _disposed = true;
+                AppLog.Write("[LIN-UI] LinMonitorForm 关闭");
                 _uiTimer.Stop();
                 foreach (var sc in _schedulers.Values) sc.Suspend();
                 Lin_API.LinFrameReceived -= OnFrameReceived;
@@ -153,11 +155,13 @@ namespace PCAN_Client.LIN_UI
             btnChMgr.Click += (s, e) =>
             {
                 // 统一通道管理入口：打开 Main 的通道管理对话框并切到 LIN 页签（与 CAN 同窗，冲突可见）
+                AppLog.Write("[LIN-UI] LIN 监控打开通道管理对话框");
                 using (var dlg = new ChannelManagerForm(PCAN_Client.Main.main))
                 {
                     dlg.SelectLinTab();
                     dlg.ShowDialog(this);
                 }
+                AppLog.Write("[LIN-UI] 通道管理对话框已关闭");
                 InitChannelView();
                 RefreshStatusBar();
             };
@@ -1755,8 +1759,7 @@ namespace PCAN_Client.LIN_UI
             if (_disposed) return;
             if (_channel >= 1 && _channel <= LinConfig.Channels.Count)
             {
-                var ch = LinConfig.Channels[_channel - 1];
-                _lblBus.Text = ch.IsConnected ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
+                _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
                 _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
             }
