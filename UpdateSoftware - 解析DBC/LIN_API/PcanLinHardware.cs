@@ -94,16 +94,16 @@ namespace PCAN_Client.LIN_API
             try
             {
                 LinPlError err = LinPlApi.RegisterClient("CANInsight_LIN", IntPtr.Zero, out _client);
-                if (err != LinPlError.errOK) return LinPlErrorCodes.ToChinese(err);
+                if (err != LinPlError.errOK) return "注册 PLIN 客户端失败: " + LinPlErrorCodes.ToChinese(err);
                 if (_client == LinPlApi.INVALID_LIN_HANDLE) return "注册 PLIN 客户端失败（句柄无效）";
 
                 // 按 HwHandle 定位硬件句柄
                 ushort count = 0;
                 err = LinPlApi.GetAvailableHardware(null, 0, out count);
-                if (err != LinPlError.errOK || count == 0) { CleanupClient(); return "未找到 PEAK LIN 硬件（检查硬件连接与驱动）"; }
+                if (err != LinPlError.errOK || count == 0) { CleanupClient(); return "未找到 PEAK LIN 硬件（检查硬件连接与驱动、PLINDeviceManager 是否运行）"; }
                 var handles = new ushort[count];
                 err = LinPlApi.GetAvailableHardware(handles, (ushort)(count * 2), out count);
-                if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                if (err != LinPlError.errOK) { CleanupClient(); return "枚举 PEAK LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 bool found = false;
                 foreach (ushort hw in handles)
@@ -119,7 +119,7 @@ namespace PCAN_Client.LIN_API
                 if (!found) { CleanupClient(); return $"未找到配置的 LIN 通道 {_cfg.HwHandle}（硬件未连接或已被其他软件占用）"; }
 
                 err = LinPlApi.ConnectClient(_client, _hw);
-                if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                if (err != LinPlError.errOK) { CleanupClient(); return "连接 LIN 硬件失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
                 // 按官方示例：仅当硬件未初始化（modNone）或波特率不同时才调用，
@@ -131,16 +131,16 @@ namespace PCAN_Client.LIN_API
                 if ((LinPlHardwareMode)hwMode == LinPlHardwareMode.modNone || hwBaud != (int)_cfg.Baudrate)
                 {
                     err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
-                    if (err != LinPlError.errOK) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                    if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
                 }
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧）
                 err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
-                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                if (err != LinPlError.errOK && err != LinPlError.errWrongParameterType) { CleanupClient(); return "设置接收过滤失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 接收全部帧 ID（0-63）
                 err = LinPlApi.RegisterFrameId(_client, _hw, 0, LinPlApi.LIN_MAX_FRAME_ID);
-                if (err != LinPlError.errOK && err != LinPlError.errIllegalFrameID) { CleanupClient(); return LinPlErrorCodes.ToChinese(err); }
+                if (err != LinPlError.errOK && err != LinPlError.errIllegalFrameID) { CleanupClient(); return "注册帧 ID 失败: " + LinPlErrorCodes.ToChinese(err); }
 
                 ConfigureFrameEntries();
 

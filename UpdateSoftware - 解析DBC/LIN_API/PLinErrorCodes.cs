@@ -32,7 +32,7 @@ namespace PCAN_Client.LIN_API
             { LinPlError.errManagerNotResponding, "与 PLIN 管理器通信中断（硬件可能已拔出）" },
             { LinPlError.errMemoryAccess, "PLinApi 内存访问异常" },
             { LinPlError.errNotImplemented, "PLinApi 未实现该功能" },
-            { LinPlError.errUnknown, "PLinApi 未知内部错误" },
+            { LinPlError.errUnknown, "PLinApi 未知内部错误（PLIN 设备管理器异常：请确认 PLINDeviceManager 已运行、设备未被 PLIN Explorer/其他程序占用、PCAN 设备型号支持 LIN）" },
         };
 
         /// <summary>
