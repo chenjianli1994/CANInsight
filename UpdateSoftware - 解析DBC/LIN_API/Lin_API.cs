@@ -15,12 +15,6 @@ namespace PCAN_Client.LIN_API
         private static readonly Stopwatch _sw = Stopwatch.StartNew();
         private static ulong _epochUs;
 
-        // ==================== 响应超时监控（调度运行期） ====================
-        // 通道+PID → 最近一次总线活动（收到该帧任何记录）的会话毫秒。
-        // 调度器按槽位检测：窗口内无活动 = 期待响应未发生（外部无帧头/无应答），注入 NoResponse 错误帧。
-        private static readonly Dictionary<long, long> _pidActivityMs = new Dictionary<long, long>();
-        private static readonly object _pidLock = new object();
-
         // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
         private static readonly Dictionary<byte, PcanLinHardware> _pcan = new Dictionary<byte, PcanLinHardware>();
         private static readonly Dictionary<byte, XlLinHardware> _xl = new Dictionary<byte, XlLinHardware>();
@@ -129,6 +123,7 @@ namespace PCAN_Client.LIN_API
         /// <summary>手动发送一帧；失败返回 false（原因经状态事件/返回值）</summary>
         public static bool LinTransmit(byte logicChannel, byte pid, byte[] data, LinChecksumKind ck)
         {
+            ck = GetFrameChecksumKind(logicChannel, pid, ck);
             PcanLinHardware pcan;
             XlLinHardware xl;
             lock (_hwLock)
@@ -152,6 +147,7 @@ namespace PCAN_Client.LIN_API
         /// <summary>调度表发 Header（软件调度；Vector 用 XL_SendRequest，PEAK 用 Write dirSubscriber）</summary>
         public static bool LinSendHeader(byte logicChannel, byte pid)
         {
+            LinChecksumKind ck = GetFrameChecksumKind(logicChannel, pid);
             PcanLinHardware pcan;
             XlLinHardware xl;
             bool ok = false;
@@ -161,26 +157,59 @@ namespace PCAN_Client.LIN_API
                 else if (_xl.TryGetValue(logicChannel, out xl)) ok = xl.SendRequest(pid);
             }
             LinDebugLog.Write("[SCH] LinSendHeader ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
-            if (ok) EchoTx(logicChannel, pid, null, LinChecksumKind.Enhanced);
+            if (ok) EchoTx(logicChannel, pid, null, ck);
             return ok;
         }
 
-        /// <summary>调度表发一帧（软件调度）：PEAK 有数据发完整帧，无数据发 Header；Vector 返回 false 回退 Header</summary>
+        /// <summary>调度表发一帧（软件调度）：本机发布帧发完整帧，从节点发布帧只发 Header</summary>
         public static bool LinSendScheduleFrame(byte logicChannel, byte pid)
         {
+            LinChecksumKind ck = GetFrameChecksumKind(logicChannel, pid);
             PcanLinHardware pcan;
+            XlLinHardware xl;
             lock (_hwLock)
             {
                 if (_pcan.TryGetValue(logicChannel, out pcan))
                 {
                     bool ok = pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
                     LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
-                    // 回显：硬件不回传本端发送帧，软件调度须自行显示（数据为缓存帧数据，无缓存为 Header 记录）
-                    if (ok) EchoTx(logicChannel, pid, pcan.GetFrameData(pid), LinChecksumKind.Enhanced);
+                    // 回显必须对应实际发送：主节点发布帧无缓存时，硬件发送的是全零完整帧；
+                    // 从节点发布帧无缓存时，硬件只发送 Header，不应伪造数据/校验和。
+                    if (ok)
+                    {
+                        bool localPublisher = IsMasterPublisherFrame(logicChannel, pid);
+                        byte[] data = localPublisher ? pcan.GetFrameData(pid) : null;
+                        if (data == null && localPublisher)
+                        {
+                            byte dlc = GetFrameDlc(logicChannel, pid);
+                            data = new byte[dlc == 0 ? 8 : dlc];
+                        }
+                        EchoTx(logicChannel, pid, data, ck);
+                    }
+                    return ok;
+                }
+                if (_xl.TryGetValue(logicChannel, out xl))
+                {
+                    bool localPublisher = IsMasterPublisherFrame(logicChannel, pid);
+                    if (!localPublisher)
+                    {
+                        bool headerOk = xl.SendRequest(pid);
+                        LinDebugLog.Write("[SCH] LinSendScheduleFrame Vector ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " Header → " + headerOk);
+                        if (headerOk) EchoTx(logicChannel, pid, null, ck);
+                        return headerOk;
+                    }
+
+                    byte dlc = GetFrameDlc(logicChannel, pid);
+                    if (dlc == 0) dlc = 8;
+                    byte[] data = xl.GetFrameData(pid);
+                    if (data == null || data.Length != dlc) data = new byte[dlc];
+                    bool ok = xl.ConfigureSlaveResponse(pid, data, dlc) && xl.SendRequest(pid);
+                    LinDebugLog.Write("[SCH] LinSendScheduleFrame Vector ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " 完整帧 len=" + dlc + " → " + ok);
+                    if (ok) EchoTx(logicChannel, pid, data, ck);
                     return ok;
                 }
             }
-            LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → false（非 PEAK，回退 LinSendHeader）");
+            LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → false（未连接）");
             return false;
         }
 
@@ -189,6 +218,14 @@ namespace PCAN_Client.LIN_API
             var ldf = GetLdf(logicChannel);
             if (ldf != null && ldf.Frames.ContainsKey(pid)) return ldf.Frames[pid].Dlc;
             return 0;
+        }
+
+        /// <summary>按通道 LDF 覆盖调用方校验和；未加载 LDF 时保留调用方默认值。</summary>
+        internal static LinChecksumKind GetFrameChecksumKind(byte logicChannel, byte pid,
+            LinChecksumKind fallback = LinChecksumKind.Enhanced)
+        {
+            var ldf = GetLdf(logicChannel);
+            return ldf == null ? fallback : LinLdfHelper.GetFrameChecksumType(ldf, pid);
         }
 
         /// <summary>更新发布/从节点响应数据</summary>
@@ -227,7 +264,7 @@ namespace PCAN_Client.LIN_API
                 Dlc = (byte)(data == null ? 0 : data.Length),
                 Data = data != null ? (byte[])data.Clone() : new byte[0],
                 ChecksumType = ck,
-                ChecksumRx = LinChecksum.Calculate(data, pid, ck == LinChecksumKind.Enhanced),
+                ChecksumRx = data == null ? (byte)0 : LinChecksum.Calculate(data, pid, ck == LinChecksumKind.Enhanced),
                 ChecksumOk = true,
                 FrameName = LinLdfHelper.GetFrameName(GetLdf(logicChannel), pid),
             };
@@ -252,16 +289,9 @@ namespace PCAN_Client.LIN_API
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
 
-                // 总线活动记录（响应超时判定）：仅 Rx 记录算活动——Tx 是本机发送回显（EchoTx），
-                // 若计入会把"本机刚发送"误当"从节点应答"，主节点模式超时检测将永不触发。
-                // 含硬件错误帧（errFlags 非 0）——说明 Header 已到总线，也算活动。
-                if (frame.Direction == LinFrameDir.Rx)
-                {
-                    lock (_pidLock) { _pidActivityMs[((long)logicChannel << 8) | frame.Pid] = SessionMs; }
-                }
-
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
                 var ldf = GetLdf(logicChannel);
+                frame.ChecksumType = GetFrameChecksumKind(logicChannel, frame.Pid, frame.ChecksumType);
                 LinFrameDef def = null;
                 if (ldf != null) ldf.Frames.TryGetValue(frame.Pid, out def);
                 if (def != null)
@@ -298,8 +328,7 @@ namespace PCAN_Client.LIN_API
         /// 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
         /// 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
         /// 软件调度（Vector/PEAK 均为 LinScheduler 驱动）与硬件调度启动前都必须调用——
-        /// 否则主节点发布帧无缓存数据，发送时退化为 Header-only（协议违规：主节点发布帧必须有数据槽），
-        /// 从节点把该帧判为错误帧（实测日志：master 模式全部 SendScheduleFrame 无缓存数据 → Header-only）。
+        /// 否则主节点发布帧只能使用发送层的全零兜底，无法保持用户配置的数据槽。
         /// </summary>
         public static void PrepareMasterFrames(byte logicChannel)
         {
@@ -311,7 +340,7 @@ namespace PCAN_Client.LIN_API
             int n = 0;
             foreach (var kv in ldf.Frames)
             {
-                if (kv.Value.Publisher != ldf.MasterName) continue;
+                if (!string.Equals(kv.Value.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase)) continue;
                 // 已有用户配置数据（发送页/发布数据页签先于调度写入）时不覆盖，仅补未配置帧的全零初始数据
                 if (HasFrameData(logicChannel, kv.Key)) continue;
                 UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
@@ -320,14 +349,17 @@ namespace PCAN_Client.LIN_API
             LinDebugLog.Write("[SCH] PrepareMasterFrames ch=" + logicChannel + " 补预置主节点发布帧 " + n + " 条（全零初始数据）");
         }
 
-        /// <summary>该帧是否已有缓存数据（PEAK 软件调度缓存；Vector 无独立缓存，返回 false 即始终走全零预置）</summary>
+        /// <summary>该帧是否已有缓存数据（PEAK/Vector 软件调度缓存）</summary>
         private static bool HasFrameData(byte logicChannel, byte pid)
         {
             PcanLinHardware pcan;
+            XlLinHardware xl;
             lock (_hwLock)
             {
                 if (_pcan.TryGetValue(logicChannel, out pcan))
                     return pcan.GetFrameData(pid) != null;
+                if (_xl.TryGetValue(logicChannel, out xl))
+                    return xl.GetFrameData(pid) != null;
             }
             return false;
         }
@@ -343,6 +375,10 @@ namespace PCAN_Client.LIN_API
             var sb = new System.Text.StringBuilder();
             foreach (var s in slots) { if (s.Enabled) { if (sb.Length > 0) sb.Append(','); sb.Append("0x").Append(s.Pid.ToString("X2")).Append('@').Append(s.SlotMs).Append("ms"); } }
             LinDebugLog.Write("[SCH] StartSchedule ch=" + logicChannel + " master=" + master + " slots=" + sb);
+            if (!master)
+                return "从节点模式不启动调度表，请等待外部主节点发送 Header";
+            if (!IsConnected(logicChannel))
+                return "LIN 通道未连接，不能启动调度表";
             PrepareMasterFrames(logicChannel);
             PcanLinHardware pcan;
             lock (_hwLock)
@@ -476,55 +512,16 @@ namespace PCAN_Client.LIN_API
             BusEvent?.Invoke(logicChannel, kind);
         }
 
-        // ==================== 响应超时监控 API ====================
-
-        /// <summary>会话毫秒（首次连接归零）</summary>
-        internal static long SessionMs => (long)_sw.ElapsedMilliseconds - (long)(_epochUs / 1000);
-
-        /// <summary>某通道某帧在 timeoutMs 窗口内是否有总线活动（无记录 = 从未活动 = 超时）</summary>
-        internal static bool HasPidActivity(byte logicChannel, byte pid, long timeoutMs)
-        {
-            lock (_pidLock)
-            {
-                long t;
-                if (!_pidActivityMs.TryGetValue(((long)logicChannel << 8) | pid, out t)) return false;
-                return SessionMs - t < timeoutMs;
-            }
-        }
-
-        /// <summary>
-        /// 注入无应答错误帧（调度期待响应但窗口内无总线活动：外部无帧头/无应答）。
-        /// 软件生成原因：硬件只在"收到 Header 但应答失败"时上报错误；根本没收到帧头时
-        /// 不产生任何记录，从节点模式无外部主节点驱动时列表将无任何提示。
-        /// 注入帧走 LinReceive 会刷新活动时间，配合调度器侧冷却实现稳定节流（每超时窗口一条）。
-        /// </summary>
-        internal static void InjectNoResponse(byte logicChannel, byte pid)
-        {
-            LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + "（窗口内无 Rx 活动）");
-            var ldf = GetLdf(logicChannel);
-            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
-            var frame = new LinFrameRecord
-            {
-                LogicChannel = logicChannel,
-                Pid = pid,
-                Direction = LinFrameDir.Rx,
-                Dlc = dlc,
-                Data = new byte[0],
-                ChecksumType = LinChecksumKind.Enhanced,
-                ErrorKind = LinErrorKind.NoResponse,
-                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
-            };
-            LinReceive(logicChannel, frame);
-        }
-
         /// <summary>该帧是否为 LDF 中主节点发布帧（主节点模式发完整帧后无需应答，超时检测应跳过）；无 LDF 返回 false</summary>
         internal static bool IsMasterPublisherFrame(byte logicChannel, byte pid)
         {
+            if (pid == 0x3C) return true;
             var ldf = GetLdf(logicChannel);
             if (ldf == null) return false;
             LinFrameDef def;
             if (!ldf.Frames.TryGetValue(pid, out def)) return false;
-            return def.Publisher == ldf.MasterName;
+            return !string.IsNullOrEmpty(ldf.MasterName)
+                && string.Equals(def.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

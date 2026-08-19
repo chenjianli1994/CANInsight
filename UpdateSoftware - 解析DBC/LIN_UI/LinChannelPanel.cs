@@ -562,7 +562,23 @@ namespace PCAN_Client.LIN_UI
                     UpdateConflict(row);   // 冲突标红即时刷新
                     break;
                 case "colMode":
-                    ch.Mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
+                    LinNodeMode mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
+                    if (ch.Mode != mode)
+                    {
+                        ch.Mode = mode;
+                        byte logicChannel = (byte)(e.RowIndex + 1);
+                        if (Lin_API.IsConnected(logicChannel))
+                        {
+                            Lin_API.LinDisconnect(logicChannel);
+                            ch.ConnectError = "节点模式已修改，请重新连接";
+                            UpdateRowStatus(row);
+                        }
+                        else
+                        {
+                            ch.ConnectError = "";
+                            UpdateRowStatus(row);
+                        }
+                    }
                     break;
                 case "colBaud":
                     uint b;

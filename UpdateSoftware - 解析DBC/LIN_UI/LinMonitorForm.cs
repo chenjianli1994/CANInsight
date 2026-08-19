@@ -328,9 +328,9 @@ namespace PCAN_Client.LIN_UI
             // ---- 调度表页签 ----
             var slotPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _slotToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "按勾选启用的帧循环发送 Header" });
+            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "主节点按调度槽发送完整帧或 Header；从节点等待外部主节点" });
             _slotToolbar.Items.Add(new ToolStripButton("暂停", ToolbarIcons.Get("stop")) { Tag = "suspend", ToolTipText = "暂停调度" });
-            _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step", ToolTipText = "发送选中帧 Header 一次（Vector 软件模式）" });
+            _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step", ToolTipText = "主节点发送选中槽一次；从节点不能主动发送 Header" });
             _slotToolbar.Items.Add(new ToolStripSeparator());
             _slotToolbar.Items.Add(new ToolStripButton("从 LDF 导入", ToolbarIcons.Get("dbc")) { Tag = "import", ToolTipText = "按 LDF 调度表自动填充报文（帧ID/名称/时隙），默认全部勾选" });
             _slotToolbar.Items.Add(new ToolStripButton("添加帧槽", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "手动添加一条空帧槽（默认 PID 0x00、时隙 15ms）" });
@@ -915,7 +915,9 @@ namespace PCAN_Client.LIN_UI
                     case "colDlc": e.Value = f.Dlc.ToString(); break;
                     case "colData": e.Value = f.DataHex; break;
                     case "colCs":
-                        e.Value = f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
+                        e.Value = f.Dlc == 0 && f.ErrorKind == LinErrorKind.None
+                            ? "—"
+                            : f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
                         break;
                     case "colStatus": e.Value = f.StatusText; break;
                 }
@@ -1224,6 +1226,12 @@ namespace PCAN_Client.LIN_UI
             switch (op)
             {
                 case "start":
+                    if (!IsMasterMode())
+                    {
+                        sc.Stop();
+                        ShowError("从节点不能启动调度表；请等待外部主节点发送 Header");
+                        break;
+                    }
                     string err = sc.ValidateSlots(GetBaudrate());
                     if (err.Length > 0)
                     {
@@ -1236,17 +1244,16 @@ namespace PCAN_Client.LIN_UI
                     sc.Suspend();
                     break;
                 case "step":
-                    // 单步：Vector 软件模式发当前选中槽 Header 一次；PEAK 硬件调度不支持单步
-                    bool isPcan = _channel >= 1 && _channel <= LinConfig.Channels.Count &&
-                                  LinConfig.Channels[_channel - 1].HwType == LinConfig.HwTypePcan;
-                    if (isPcan)
+                    if (!IsMasterMode())
                     {
-                        ShowError("PEAK 硬件调度不支持单步");
+                        ShowError("从节点不能单步发送 Header；请等待外部主节点");
+                        break;
                     }
-                    else if (_dgvSlots.SelectedRows.Count > 0)
+                    // 单步：按调度槽语义发送完整帧或 Header（PEAK/Vector 均走软件发送原语）
+                    if (_dgvSlots.SelectedRows.Count > 0)
                     {
                         var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
-                        if (slot != null && !Lin_API.LinSendHeader(_channel, slot.Pid))
+                        if (slot != null && !Lin_API.LinSendScheduleFrame(_channel, slot.Pid))
                             ShowError("单步发送失败（未连接）");
                     }
                     break;
@@ -1761,7 +1768,9 @@ namespace PCAN_Client.LIN_UI
             {
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
-                _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
+                _lblSched.Text = IsMasterMode()
+                    ? (sc.IsRunning ? "调度: 运行中" : "调度: 停止")
+                    : "从节点: 等待外部主节点";
             }
             else
             {

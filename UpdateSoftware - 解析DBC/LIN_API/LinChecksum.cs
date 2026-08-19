@@ -4,7 +4,7 @@ namespace PCAN_Client.LIN_API
 {
     /// <summary>
     /// LIN 校验和计算（LIN 1.x 经典 / LIN 2.x 增强）
-    /// 增强 = 数据字节 + PID 累加后取反；经典 = 仅数据字节累加后取反
+    /// 增强 = 数据字节 + 受保护 PID（含奇偶校验位）累加并回卷进位后取反；经典 = 仅数据字节累加并回卷进位后取反
     /// </summary>
     public static class LinChecksum
     {
@@ -12,7 +12,7 @@ namespace PCAN_Client.LIN_API
         /// 计算 LIN 校验和
         /// </summary>
         /// <param name="data">帧数据字节（0-8 字节）</param>
-        /// <param name="pid">受保护帧 ID（0x00-0x3F）</param>
+        /// <param name="pid">裸帧 ID（0x00-0x3F）；增强校验内部转换为受保护 PID</param>
         /// <param name="enhanced">true=增强校验（含 PID，LIN 2.x 默认）；false=经典校验（LIN 1.x）</param>
         public static byte Calculate(byte[] data, byte pid, bool enhanced)
         {
@@ -21,8 +21,19 @@ namespace PCAN_Client.LIN_API
             {
                 foreach (byte b in data) sum += b;
             }
-            if (enhanced) sum += pid;
+            if (enhanced) sum += GetProtectedId(pid);
+            // LIN 使用带回卷进位的 8 位一补和，而不是直接截断高位。
+            while (sum > 0xFF) sum = (sum & 0xFF) + (sum >> 8);
             return (byte)(~sum & 0xFF);
+        }
+
+        /// <summary>由裸帧 ID 计算 LIN 受保护 ID（ID6/ID7 为奇偶校验位）。</summary>
+        public static byte GetProtectedId(byte pid)
+        {
+            byte id = (byte)(pid & 0x3F);
+            byte p0 = (byte)(((id >> 0) ^ (id >> 1) ^ (id >> 2) ^ (id >> 4)) & 1);
+            byte p1 = (byte)((((id >> 1) ^ (id >> 3) ^ (id >> 4) ^ (id >> 5) ^ 1) & 1));
+            return (byte)(id | (p0 << 6) | (p1 << 7));
         }
 
         /// <summary>

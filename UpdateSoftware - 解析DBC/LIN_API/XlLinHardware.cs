@@ -20,9 +20,11 @@ namespace PCAN_Client.LIN_API
         private readonly XLDriver _xlDriver = new XLDriver();
         private int _portHandle = LinPortHandle;
         private ulong _channelMask;
+        private volatile bool _active;
         private volatile bool _running;
         private Thread _recvThread;
         private int _consecutiveErrors;
+        private readonly Dictionary<byte, byte[]> _frameData = new Dictionary<byte, byte[]>();
 
         public XlLinHardware(byte logicChannel, LinChannel cfg)
         {
@@ -30,7 +32,7 @@ namespace PCAN_Client.LIN_API
             _cfg = cfg;
         }
 
-        public bool IsConnected => _running;
+        public bool IsConnected => _active;
 
         // ==================== 枚举 ====================
 
@@ -122,26 +124,31 @@ namespace PCAN_Client.LIN_API
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "打开 Vector LIN 端口失败: " + status;
                 portOpened = true;
 
-                // 通道参数：模式（主/从）+ 波特率 + LIN 2.1（增强校验）
+                // 通道参数：模式（主/从）+ 波特率 + LDF 协议版本
+                var linVersion = GetLinVersion();
                 var linStat = new XLClass.xl_linStatPar
                 {
                     LINMode = _cfg.Mode == LinNodeMode.Master ? XLDefine.XL_LIN_Mode.XL_LIN_MASTER : XLDefine.XL_LIN_Mode.XL_LIN_SLAVE,
                     baudrate = (int)_cfg.Baudrate,
-                    LINVersion = XLDefine.XL_LIN_Version.XL_LIN_VERSION_2_1,
+                    LINVersion = linVersion,
                     reserved = 0,
                 };
                 status = _xlDriver.XL_LinSetChannelParams(_portHandle, _channelMask, linStat);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 通道参数失败: " + status;
 
-                // 逐 ID 配置 DLC 与校验和模型（须在激活前，LIN 2.x 节点增强校验：
-                // 不配置则硬件按 LIN 1.x 经典校验，增强校验帧会被误标 CRC 错误）
+                // 逐 ID 配置 DLC 与校验和模型（须在激活前）。XL_LinSetChecksum
+                // 仅适用于 LIN 2.x；LIN 1.3 固定使用经典校验且不调用该 API。
                 status = _xlDriver.XL_LinSetDLC(_portHandle, _channelMask, BuildDlcArray());
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN DLC 失败: " + status;
-                status = _xlDriver.XL_LinSetChecksum(_portHandle, _channelMask, BuildChecksumArray());
-                if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 校验和模型失败: " + status;
+                if (linVersion != XLDefine.XL_LIN_Version.XL_LIN_VERSION_1_3)
+                {
+                    status = _xlDriver.XL_LinSetChecksum(_portHandle, _channelMask, BuildChecksumArray());
+                    if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 校验和模型失败: " + status;
+                }
 
                 status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_NONE);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
+                _active = true;
 
                 // 从节点模式：按 LDF 配置硬件自动应答
                 if (_cfg.Mode == LinNodeMode.Slave && _cfg.LdfHelper != null)
@@ -149,7 +156,9 @@ namespace PCAN_Client.LIN_API
                     foreach (byte pid in _cfg.LdfHelper.SlaveRespIds)
                     {
                         var def = _cfg.LdfHelper.Frames[pid];
-                        ConfigureSlaveResponse(pid, new byte[def.Dlc], def.Dlc);
+                        byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                        if (!ConfigureSlaveResponse(pid, new byte[dlc], dlc))
+                            return "配置从节点响应失败: PID 0x" + pid.ToString("X2");
                     }
                 }
 
@@ -167,8 +176,10 @@ namespace PCAN_Client.LIN_API
                 // 失败路径集中清理（成功路径由 Disconnect 负责）
                 if (!_running)
                 {
+                    _active = false;
                     if (portOpened) { try { _xlDriver.XL_ClosePort(_portHandle); } catch { } }
                     if (driverOpened) { try { _xlDriver.XL_CloseDriver(); } catch { } }
+                    _channelMask = 0;
                 }
             }
         }
@@ -188,17 +199,38 @@ namespace PCAN_Client.LIN_API
             return arr;
         }
 
-        /// <summary>逐 ID 校验和模型数组（60 项全增强=2，LIN 2.x）</summary>
+        /// <summary>逐 ID 校验和模型数组（Vector API：经典=1，增强=2）</summary>
         private byte[] BuildChecksumArray()
         {
             var arr = new byte[60];
-            for (int i = 0; i < arr.Length; i++) arr[i] = 2; // XL_LINChecksum: 增强
+            for (int i = 0; i < arr.Length; i++) arr[i] = 2;
+            if (_cfg.LdfHelper != null)
+            {
+                foreach (var kv in _cfg.LdfHelper.Frames)
+                {
+                    if (kv.Key < arr.Length && LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, kv.Key) == LinChecksumKind.Classic)
+                        arr[kv.Key] = 1;
+                }
+            }
             return arr;
+        }
+
+        private XLDefine.XL_LIN_Version GetLinVersion()
+        {
+            double version;
+            if (_cfg.LdfHelper == null || !double.TryParse(_cfg.LdfHelper.ProtocolVersion,
+                System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out version))
+                return XLDefine.XL_LIN_Version.XL_LIN_VERSION_2_1;
+            if (version < 2.0) return XLDefine.XL_LIN_Version.XL_LIN_VERSION_1_3;
+            return version < 2.1
+                ? XLDefine.XL_LIN_Version.XL_LIN_VERSION_2_0
+                : XLDefine.XL_LIN_Version.XL_LIN_VERSION_2_1;
         }
 
         public void Disconnect()
         {
             _running = false;
+            _active = false;
             try { if (_recvThread != null && _recvThread.IsAlive) _recvThread.Join(500); } catch { }
             try
             {
@@ -226,22 +258,42 @@ namespace PCAN_Client.LIN_API
         /// <summary>配置本机对指定帧 ID 的响应数据（主节点发布数据 / 从节点自动应答共用）</summary>
         public bool ConfigureSlaveResponse(byte pid, byte[] data, byte dlc)
         {
-            if (!IsConnected) return false;
-            return _xlDriver.XL_LinSetSlave(_portHandle, _channelMask, pid, data, dlc,
-                XLDefine.XL_LIN_CalcChecksum.XL_LIN_CALC_CHECKSUM_ENHANCED) == XLDefine.XL_Status.XL_SUCCESS;
+            if (!IsConnected || data == null || dlc > 8 || data.Length < dlc) return false;
+            var checksum = LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid) == LinChecksumKind.Classic
+                ? XLDefine.XL_LIN_CalcChecksum.XL_LIN_CALC_CHECKSUM
+                : XLDefine.XL_LIN_CalcChecksum.XL_LIN_CALC_CHECKSUM_ENHANCED;
+            bool ok = _xlDriver.XL_LinSetSlave(_portHandle, _channelMask, pid, data, dlc,
+                checksum) == XLDefine.XL_Status.XL_SUCCESS;
+            if (ok)
+            {
+                lock (_frameData) { _frameData[pid] = (byte[])data.Clone(); }
+            }
+            return ok;
         }
 
         /// <summary>停用响应：硬件不再应答该 ID（XL_LIN_SLAVE_OFF）</summary>
         public bool DisableResponse(byte pid)
         {
             if (!IsConnected) return false;
-            return _xlDriver.XL_LinSwitchSlave(_portHandle, _channelMask, pid, XLDefine.XL_LIN_SlaveMode.XL_LIN_SLAVE_OFF) == XLDefine.XL_Status.XL_SUCCESS;
+            bool ok = _xlDriver.XL_LinSwitchSlave(_portHandle, _channelMask, pid, XLDefine.XL_LIN_SlaveMode.XL_LIN_SLAVE_OFF) == XLDefine.XL_Status.XL_SUCCESS;
+            if (ok) lock (_frameData) { _frameData.Remove(pid); }
+            return ok;
         }
 
         /// <summary>更新从节点/发布帧数据</summary>
         public bool UpdateSlaveData(byte pid, byte[] data, byte dlc)
         {
             return ConfigureSlaveResponse(pid, data, dlc);
+        }
+
+        /// <summary>软件调度回显用的本地帧数据缓存。</summary>
+        public byte[] GetFrameData(byte pid)
+        {
+            lock (_frameData)
+            {
+                byte[] data;
+                return _frameData.TryGetValue(pid, out data) ? (byte[])data.Clone() : null;
+            }
         }
 
         /// <summary>手动发送完整帧：预置响应数据 + 发 Header（硬件自动补数据与校验和）</summary>

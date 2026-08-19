@@ -15,6 +15,8 @@ namespace PCAN_Client.LIN_API
         public LinFrameType FrameType = LinFrameType.Unconditional;
         /// <summary>发布节点名（LDF 原样）</summary>
         public string Publisher = "";
+        /// <summary>帧校验和类型；诊断帧固定经典校验</summary>
+        public LinChecksumKind ChecksumType = LinChecksumKind.Enhanced;
     }
 
     /// <summary>LDF 信号定义（width/初始值/发布者；起始位来自帧内映射 offset）</summary>
@@ -66,6 +68,10 @@ namespace PCAN_Client.LIN_API
         public List<byte> SlaveRespIds = new List<byte>();
         /// <summary>主节点名（LDF 原样）</summary>
         public string MasterName = "";
+        /// <summary>LDF LIN 协议版本（缺失时按 LIN 2.x 处理）</summary>
+        public string ProtocolVersion = "2.0";
+        /// <summary>未单独声明的普通帧默认校验和类型</summary>
+        public LinChecksumKind DefaultChecksumType = LinChecksumKind.Enhanced;
     }
 
     /// <summary>LDF 解析异常（携带行号）</summary>
@@ -264,8 +270,12 @@ namespace PCAN_Client.LIN_API
                     throw new LinLdfException(lineNo, $"无法识别的块开始: {line}");
                 }
 
-                // ===== 块外行（头信息等）忽略 =====
-                if (stack.Count == 0) continue;
+                // ===== 块外行：读取协议版本，决定普通帧的默认校验和 =====
+                if (stack.Count == 0)
+                {
+                    ParseHeader(file, line);
+                    continue;
+                }
 
                 string ctx = top;
 
@@ -333,10 +343,14 @@ namespace PCAN_Client.LIN_API
             foreach (var kv in file.Frames)
             {
                 var def = kv.Value;
-                if (def.Pid == 0x3C || def.Pid == 0x3D) def.FrameType = LinFrameType.Diagnostic;
+                if (def.Pid == 0x3C || def.Pid == 0x3D)
+                {
+                    def.FrameType = LinFrameType.Diagnostic;
+                    def.ChecksumType = LinChecksumKind.Classic;
+                }
                 else if (sporadicFrames.Contains(def.Name)) def.FrameType = LinFrameType.Sporadic;
                 if (def.FrameType != LinFrameType.EventTriggered &&
-                    def.Publisher.Length > 0 && def.Publisher != file.MasterName)
+                    def.Publisher.Length > 0 && !string.Equals(def.Publisher, file.MasterName, StringComparison.OrdinalIgnoreCase))
                     file.SlaveRespIds.Add(def.Pid);
                 // LIN 1.3 旧格式帧定义无 DLC 字段（如 "Frm:0x30,CEM {"）：按信号位布局推导
                 if (def.Dlc == 0 && file.FrameSignals.ContainsKey(kv.Key))
@@ -367,6 +381,20 @@ namespace PCAN_Client.LIN_API
                 sig.LogicalValues = info.Item2 != null && info.Item2.Count > 0 ? info.Item2 : null;
             }
             return file;
+        }
+
+        private static void ParseHeader(LinLdfFile file, string line)
+        {
+            const string key = "LIN_protocol_version";
+            if (!line.StartsWith(key, StringComparison.OrdinalIgnoreCase)) return;
+            int eq = line.IndexOf('=');
+            if (eq < 0) return;
+            string value = line.Substring(eq + 1).Trim().TrimEnd(';').Trim().Trim('"');
+            if (value.Length == 0) return;
+            file.ProtocolVersion = value;
+            double version;
+            if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out version))
+                file.DefaultChecksumType = version < 2.0 ? LinChecksumKind.Classic : LinChecksumKind.Enhanced;
         }
 
         /// <summary>解析 Signal_representation 绑定行：ENC_NAME: SIG1, SIG2 ;</summary>
@@ -477,6 +505,7 @@ namespace PCAN_Client.LIN_API
                 Dlc = dlc,
                 Publisher = publisher,
                 FrameType = isDiagnostic ? LinFrameType.Diagnostic : LinFrameType.Unconditional,
+                ChecksumType = isDiagnostic ? LinChecksumKind.Classic : file.DefaultChecksumType,
             };
             return frameName;
         }
@@ -719,6 +748,16 @@ namespace PCAN_Client.LIN_API
             LinFrameDef def;
             if (ldf != null && ldf.Frames.TryGetValue(pid, out def)) return def.Dlc;
             return 0;
+        }
+
+        /// <summary>按 LDF 选择帧校验和；无定义时按 LIN 2.x 增强校验处理。</summary>
+        public static LinChecksumKind GetFrameChecksumType(LinLdfFile ldf, byte pid)
+        {
+            // LIN 诊断帧（MasterReq/SlaveResp）固定使用经典校验，不能被 LIN 2.x 默认增强覆盖。
+            if ((pid & 0x3F) == 0x3C || (pid & 0x3F) == 0x3D) return LinChecksumKind.Classic;
+            LinFrameDef def;
+            if (ldf != null && ldf.Frames.TryGetValue(pid, out def)) return def.ChecksumType;
+            return ldf == null ? LinChecksumKind.Enhanced : ldf.DefaultChecksumType;
         }
     }
 }
