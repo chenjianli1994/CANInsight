@@ -971,12 +971,7 @@ namespace PCAN_Client.LIN_UI
                     if (flat.Type != LinRowType.Frame) return;
                     if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
                     e.Handled = true;
-                    bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
-                    using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
-                        : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
-                    {
-                        e.Graphics.FillRectangle(bg, e.CellBounds);
-                    }
+                    PaintLinCellSurface(e);
                     bool isExpanded = flat.FixedIndex >= 0
                         ? _linExpandedKeys.Contains(LinMsgKey(flat.Pid, flat.Channel))
                         : _linExpandedFrames.Contains(flat.FrameIndex);
@@ -986,7 +981,6 @@ namespace PCAN_Client.LIN_UI
                     {
                         e.Graphics.DrawString(isExpanded ? "−" : "+", btnFont, brush, e.CellBounds, sf);
                     }
-                    e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
                     return;
                 }
 
@@ -1001,12 +995,7 @@ namespace PCAN_Client.LIN_UI
                     if (f.ErrorKind == LinErrorKind.None) return; // 正常帧：默认绘制
                     // 错误帧：红灯（中心高光，指示灯质感）
                     e.Handled = true;
-                    bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
-                    using (var bg = new SolidBrush(selected ? _dgvFrames.DefaultCellStyle.SelectionBackColor
-                        : e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor))
-                    {
-                        e.Graphics.FillRectangle(bg, e.CellBounds);
-                    }
+                    PaintLinCellSurface(e);
                     const int d = 12;
                     var rc = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d) / 2,
                         e.CellBounds.Y + (e.CellBounds.Height - d) / 2, d, d);
@@ -1015,11 +1004,24 @@ namespace PCAN_Client.LIN_UI
                         e.Graphics.FillEllipse(red, rc);
                     using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
                         e.Graphics.FillEllipse(hl, rc.X + rc.Width / 4, rc.Y + rc.Height / 4, rc.Width / 2, rc.Height / 2);
-                    e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
                     return;
                 }
             }
             catch { /* 防御：绘制异常不中断 */ }
+        }
+
+        /// <summary>自绘单元格使用与 DataGridView 相同的网格色，避免自绘格出现黑色边框</summary>
+        private void PaintLinCellSurface(DataGridViewCellPaintingEventArgs e)
+        {
+            bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
+            Color backColor = selected
+                ? (e.CellStyle.SelectionBackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.SelectionBackColor : e.CellStyle.SelectionBackColor)
+                : (e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor);
+            using (var background = new SolidBrush(backColor))
+                e.Graphics.FillRectangle(background, e.CellBounds);
+            using (var border = new Pen(_dgvFrames.GridColor))
+                e.Graphics.DrawRectangle(border, e.CellBounds.X, e.CellBounds.Y,
+                    Math.Max(0, e.CellBounds.Width - 1), Math.Max(0, e.CellBounds.Height - 1));
         }
 
         /// <summary>展开列单击：切换信号展开（对齐 CAN colFilter 交互）</summary>

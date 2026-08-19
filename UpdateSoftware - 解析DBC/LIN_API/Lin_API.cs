@@ -144,10 +144,9 @@ namespace PCAN_Client.LIN_API
             return false;
         }
 
-        /// <summary>调度表发 Header（软件调度；Vector 用 XL_SendRequest，PEAK 用 Write dirSubscriber）</summary>
+        /// <summary>调度表发 Header（软件调度；真实响应/无应答由硬件接收事件上报）</summary>
         public static bool LinSendHeader(byte logicChannel, byte pid)
         {
-            LinChecksumKind ck = GetFrameChecksumKind(logicChannel, pid);
             PcanLinHardware pcan;
             XlLinHardware xl;
             bool ok = false;
@@ -157,7 +156,6 @@ namespace PCAN_Client.LIN_API
                 else if (_xl.TryGetValue(logicChannel, out xl)) ok = xl.SendRequest(pid);
             }
             LinDebugLog.Write("[SCH] LinSendHeader ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
-            if (ok) EchoTx(logicChannel, pid, null, ck);
             return ok;
         }
 
@@ -174,17 +172,20 @@ namespace PCAN_Client.LIN_API
                     bool ok = pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
                     LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
                     // 回显必须对应实际发送：主节点发布帧无缓存时，硬件发送的是全零完整帧；
-                    // 从节点发布帧无缓存时，硬件只发送 Header，不应伪造数据/校验和。
+                    // 从节点发布帧只发送 Header，真实响应由接收线程上报，不伪造 Tx 帧。
                     if (ok)
                     {
                         bool localPublisher = IsMasterPublisherFrame(logicChannel, pid);
-                        byte[] data = localPublisher ? pcan.GetFrameData(pid) : null;
-                        if (data == null && localPublisher)
+                        if (localPublisher)
                         {
-                            byte dlc = GetFrameDlc(logicChannel, pid);
-                            data = new byte[dlc == 0 ? 8 : dlc];
+                            byte[] data = pcan.GetFrameData(pid);
+                            if (data == null)
+                            {
+                                byte dlc = GetFrameDlc(logicChannel, pid);
+                                data = new byte[dlc == 0 ? 8 : dlc];
+                            }
+                            EchoTx(logicChannel, pid, data, ck);
                         }
-                        EchoTx(logicChannel, pid, data, ck);
                     }
                     return ok;
                 }
@@ -195,7 +196,6 @@ namespace PCAN_Client.LIN_API
                     {
                         bool headerOk = xl.SendRequest(pid);
                         LinDebugLog.Write("[SCH] LinSendScheduleFrame Vector ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " Header → " + headerOk);
-                        if (headerOk) EchoTx(logicChannel, pid, null, ck);
                         return headerOk;
                     }
 
