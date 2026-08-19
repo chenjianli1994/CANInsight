@@ -45,6 +45,15 @@ namespace PCAN_Client.LIN_API
             }
         }
 
+        /// <summary>是否存在已连接的 PEAK LIN 通道；PCAN-CAN 探测期间不得再触碰同一设备。</summary>
+        internal static bool HasPcanConnection
+        {
+            get
+            {
+                lock (_hwLock) return _pcan.Count > 0;
+            }
+        }
+
         // ==================== 连接/断开 ====================
 
         /// <summary>按通道配置连接硬件；成功返回 ""，失败返回中文原因</summary>
@@ -90,19 +99,24 @@ namespace PCAN_Client.LIN_API
             LinDebugLog.Write("[CONN] LinDisconnect 入口 ch=" + logicChannel);
             PcanLinHardware pcan = null;
             XlLinHardware xl = null;
-            lock (_hwLock)
+            // 从注册表移除与释放底层句柄必须是一个原子区间；否则枚举线程可能在
+            // _pcan 已移除、PLIN 客户端尚未 Disconnect 的窗口内启动 PCAN 探测。
+            lock (PeakHardwareAccess.SyncRoot)
             {
-                if (_pcan.TryGetValue(logicChannel, out pcan))
+                lock (_hwLock)
                 {
-                    _pcan.Remove(logicChannel);
+                    if (_pcan.TryGetValue(logicChannel, out pcan))
+                    {
+                        _pcan.Remove(logicChannel);
+                    }
+                    else if (_xl.TryGetValue(logicChannel, out xl))
+                    {
+                        _xl.Remove(logicChannel);
+                    }
                 }
-                else if (_xl.TryGetValue(logicChannel, out xl))
-                {
-                    _xl.Remove(logicChannel);
-                }
+                if (pcan != null) pcan.Disconnect();
+                else if (xl != null) xl.Disconnect();
             }
-            if (pcan != null) pcan.Disconnect();
-            else if (xl != null) xl.Disconnect();
             if (logicChannel <= LinConfig.Channels.Count)
             {
                 LinConfig.Channels[logicChannel - 1].IsConnected = false;

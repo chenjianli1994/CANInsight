@@ -222,6 +222,12 @@ namespace PCAN_Client.LIN_API
 
     // ==================== P/Invoke 封装 ====================
 
+    /// <summary>串行化同一进程内对 PEAK CAN/LIN 驱动的枚举、初始化和释放。</summary>
+    internal static class PeakHardwareAccess
+    {
+        internal static readonly object SyncRoot = new object();
+    }
+
     /// <summary>
     /// PEAK PLinApi.dll 原生封装（导出表与签名经 PEAK 官方 PLIN-API 文档核实）
     /// </summary>
@@ -294,6 +300,9 @@ namespace PCAN_Client.LIN_API
 
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_ResetHardware")]
         internal static extern LinPlError ResetHardware(byte hClient, ushort hHw);
+
+        [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_ResetHardwareConfig")]
+        internal static extern LinPlError ResetHardwareConfig(byte hClient, ushort hHw);
 
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_IdentifyHardware")]
         internal static extern LinPlError IdentifyHardware(ushort hHw);

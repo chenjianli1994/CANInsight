@@ -79,7 +79,12 @@ namespace PCAN_Client
             LoadChannelRows();   // 从全局通道配置填充表格
             RefreshAllConnButtons();
             RefreshPreview();
-            this.Shown += (s, e) => RefreshHardwareAsync();
+            // 从 LIN 监控入口打开时，SelectLinTab 会在 ShowDialog 前选中 LIN 页签；
+            // 此时不启动 PCAN-CAN 探测，避免与 PLIN Manager 并发访问同一台 Pro FD。
+            this.Shown += (s, e) =>
+            {
+                if (_tabMain.SelectedIndex == 0) RefreshHardwareAsync();
+            };
         }
 
         private void BuildUi()
@@ -198,6 +203,10 @@ namespace PCAN_Client
             _tabMain.Selecting += (s, e) =>
             {
                 if (e.TabPageIndex == 1) EnsureLinPanel();
+            };
+            _tabMain.Selected += (s, e) =>
+            {
+                if (e.TabPageIndex == 0) RefreshHardwareAsync();
             };
 
             this.FormClosed += (s, e) => { AppLog.Write("[CAN-UI] 通道管理对话框关闭"); _statusTimer.Stop(); _statusTimer.Dispose(); };

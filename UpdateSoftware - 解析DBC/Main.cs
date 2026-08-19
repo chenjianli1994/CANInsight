@@ -2047,16 +2047,8 @@ namespace PCAN_Client
             timer1.Interval = 200;
 
             timer1.Start();
-            try
-            {
-                Task task = new Task(() =>
-                {
-                    try { GetPCAN_ComRefresh(); } catch { /* 单个设备枚举失败不影响另一个 */ }
-                    try { GetCanoe_ComRefresh(); } catch { }
-                });
-                task.Start();
-            }
-            catch { }
+            // 硬件识别按通道管理页签按需触发。启动时对 PCAN-CAN 槽位做 Initialize/Uninitialize
+            // 会与 LIN 页签通过 PLIN Manager 访问同一台 Pro FD 设备，导致首次 LIN 过滤器配置竞态。
             CAN_API.CAN_API.stopwatch.Restart();
 
             // 创建多消息调度器
@@ -2516,8 +2508,19 @@ namespace PCAN_Client
         internal void RefreshHardwareDetection(bool force = false)
         {
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-            GetPCAN_ComRefresh(force);
-            long pc = sw.ElapsedMilliseconds;
+            long pc = 0;
+            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            {
+                if (LIN_API.Lin_API.HasPcanConnection)
+                {
+                    AppLog.Write("[HW] LIN 已占用 PEAK 设备，跳过 PCAN 硬件探测");
+                }
+                else
+                {
+                    GetPCAN_ComRefresh(force);
+                    pc = sw.ElapsedMilliseconds;
+                }
+            }
             GetCanoe_ComRefresh();
             sw.Stop();
             try

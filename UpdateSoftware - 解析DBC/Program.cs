@@ -14,25 +14,27 @@ namespace PCAN_Client
         [STAThread]
         static void Main(string[] args)
         {
-            Byte[] assemblyData = new Byte[1];
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             //原创来自 www.luofenming.com
             //初始化时添加下面代码 
             AppDomain.CurrentDomain.AssemblyResolve += (sender, resolveArgs) =>
             {//注意WindowsFormsApplication1 这个是主程序的命名空间
-                string resourceName = "PCAN_Client.Lib." + new AssemblyName(resolveArgs.Name).Name + ".dll";
+                string assemblyName = new AssemblyName(resolveArgs.Name).Name;
+                // 资源管理器会为本地化资源探测 *.resources 卫星程序集；它们不是 Costura DLL，
+                // 交回默认解析流程，避免每次资源查找都输出误导性的“缺少 DLL”。
+                if (assemblyName.EndsWith(".resources", StringComparison.OrdinalIgnoreCase)) return null;
+                string resourceName = "PCAN_Client.Lib." + assemblyName + ".dll";
                 using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName))
                 {
                     if (stream == null)
                     {
-                        // 调试输出找不到的资源
                         Console.WriteLine($"Embedded resource not found: {resourceName}");
                         return null;
                     }
 
                     // 3. 安全读取流
-                    assemblyData = new Byte[stream.Length];
+                    byte[] assemblyData = new Byte[stream.Length];
                     stream.Read(assemblyData, 0, assemblyData.Length);
                     return Assembly.Load(assemblyData);
                 }
