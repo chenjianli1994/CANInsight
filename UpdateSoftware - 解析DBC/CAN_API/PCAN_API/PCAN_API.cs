@@ -35,17 +35,6 @@ namespace PCAN_Client.PCAN_API
         //[DllImport("winmm")]
         //static extern void timeEndPeriod(int t);
 
-        /// <summary>槽位识别结果缓存条目：Result=""表示空槽（无硬件）；"空闲"/"已占用"为在位状态。
-        /// 60 秒内复用结果，避免反复驱动探测。真实设备 Initialize 耗时 0.2~10 秒（USB 枚举），
-        /// 驱动 USB 缓存约 30 秒过期后重复变慢；本缓存让反复打开通道管理/刷新识别保持毫秒级。</summary>
-        private class SlotCacheEntry
-        {
-            public DateTime Stamp;
-            public string Result; // ""=空槽
-        }
-        private static readonly Dictionary<ushort, SlotCacheEntry> _slotCache = new Dictionary<ushort, SlotCacheEntry>();
-        private static readonly object _slotCacheLock = new object();
-
         /// <summary>识别串行锁：全部槽位探测与连接操作互斥。启动后台识别与通道管理窗口刷新并发时，
         /// 同句柄并发 Initialize 会互相拖慢至 7~12 秒并产生 INITIALIZE 假错误（已实测）。</summary>
         private static readonly object _detectLock = new object();
@@ -225,9 +214,9 @@ namespace PCAN_Client.PCAN_API
         /// <summary>已连接的（逻辑通道号,句柄）枚举，供接收轮询</summary>
         internal IEnumerable<KeyValuePair<byte, ushort>> ConnectedChannels => _connectedChannels;
         /// <summary>
-        /// 枚举全部16个USBBUS槽位硬件。force=true 时绕过60秒结果缓存（供"刷新识别"按钮显式重查）；
-        /// 无论 force 与否都先做毫秒级在位查询（PCAN_CHANNEL_CONDITION），只对在位槽位执行 Initialize 判定 空闲/已占用。
-        /// 全部探测经 _detectLock 串行化，杜绝并发探测互相拖慢。
+        /// 枚举 PCAN-Basic 报告的已连接通道。识别阶段只读 PCAN_ATTACHED_CHANNELS，
+        /// 不调用 Initialize/Uninitialize，避免重置 PCAN-USB Pro FD 的 CAN 状态并干扰 PLIN Manager。
+        /// force 参数保留用于兼容现有 UI，附着通道查询本身已是毫秒级，无需结果缓存。
         /// </summary>
         public List<string> GetPCAN_ChannelRefresh(bool force = false)
         {
@@ -235,82 +224,149 @@ namespace PCAN_Client.PCAN_API
             {
                 lock (_detectLock)
                 {
-                    return ProbePcanChannels(force);
+                    return ProbePcanChannels();
                 }
             }
         }
 
-        private List<string> ProbePcanChannels(bool force)
+        private List<string> ProbePcanChannels()
         {
             List<string> PCAN_Channel = new List<string>();
 
             System.Diagnostics.Stopwatch swTotal = System.Diagnostics.Stopwatch.StartNew();
-            System.Text.StringBuilder slotLog = new System.Text.StringBuilder();
-            // 直接探测全部16个USBBUS槽位：不依赖WMI计数（Description不一定含PCAN、驱动残留节点会虚报），
-            // 且USBBUS序号可能不连续（设备按插入顺序占用编号），空槽位跳过继续探测
-            for (int i = 0; i < PCAN_DeviceChannelBuf.Length; i++)
+            string mode = "附着通道";
+            uint attachedCount = 0;
+            TPCANStatus attachedStatus = PCANBasic.GetValue(
+                PCANBasic.PCAN_NONEBUS,
+                TPCANParameter.PCAN_ATTACHED_CHANNELS_COUNT,
+                out attachedCount,
+                sizeof(uint));
+
+            bool attachedApiOk = attachedStatus == TPCANStatus.PCAN_ERROR_OK;
+            if (attachedStatus == TPCANStatus.PCAN_ERROR_OK)
             {
-                ushort handle = PCAN_DeviceChannelBuf[i];
-                if (handle == PCAN_DeviceChannel || _connectedChannels.ContainsValue(handle))
+                mode = "附着通道";
+                int count = attachedCount > 256 ? 256 : (int)attachedCount;
+                if (count > 0)
                 {
-                    PCAN_Channel.Add("USB_" + (i + 1) + "(已连接)");
-                    continue;
-                }
-                // 结果缓存命中（60 秒内）→ 直接复用，不做任何驱动访问
-                if (!force)
-                {
-                    lock (_slotCacheLock)
+                    var channels = new TPCANChannelInformation[count];
+                    attachedStatus = PCANBasic.GetValue(
+                        PCANBasic.PCAN_NONEBUS,
+                        TPCANParameter.PCAN_ATTACHED_CHANNELS,
+                        channels);
+                    if (attachedStatus == TPCANStatus.PCAN_ERROR_OK)
                     {
-                        if (_slotCache.TryGetValue(handle, out SlotCacheEntry e) && (DateTime.Now - e.Stamp).TotalSeconds < 60)
-                        {
-                            if (e.Result.Length > 0) PCAN_Channel.Add("USB_" + (i + 1) + "(" + e.Result + ")");
-                            continue;
-                        }
+                        AddAttachedPcanChannels(PCAN_Channel, channels);
+                    }
+                    else
+                    {
+                        attachedApiOk = false;
                     }
                 }
-                // 快速在位查询（毫秒级，PEAK官方推荐）：无硬件直接跳过，不再逐槽 Initialize
-                uint cond = 0;
-                TPCANStatus st = PCANBasic.GetValue(handle, TPCANParameter.PCAN_CHANNEL_CONDITION, out cond, sizeof(uint));
-                if (st == TPCANStatus.PCAN_ERROR_OK && cond == 0)
-                {
-                    lock (_slotCacheLock) _slotCache[handle] = new SlotCacheEntry { Stamp = DateTime.Now, Result = "" };
-                    continue;
-                }
-                // 在位（或条件查询失败回退）：Initialize 判定 空闲/已占用
-                System.Diagnostics.Stopwatch swSlot = System.Diagnostics.Stopwatch.StartNew();
-                TPCANStatus result = PCANBasic.Initialize(handle, ConnectBaud, (TPCANType)0, 0, 0);
-                swSlot.Stop();
-                if (swSlot.ElapsedMilliseconds > 200)
-                    slotLog.Append("slot" + (i + 1) + "=" + swSlot.ElapsedMilliseconds + "ms(" + result + ") ");
-                if (TPCANStatus.PCAN_ERROR_OK == result)
-                {
-                    // 初始化成功：通道存在且空闲（还原释放）
-                    lock (_slotCacheLock) _slotCache[handle] = new SlotCacheEntry { Stamp = DateTime.Now, Result = "空闲" };
-                    PCAN_Channel.Add("USB_" + (i + 1) + "(空闲)");
-                    PCANBasic.Uninitialize(handle);
-                }
-                else if (TPCANStatus.PCAN_ERROR_HWINUSE == result)
-                {
-                    // 通道存在但被其他程序占用
-                    lock (_slotCacheLock) _slotCache[handle] = new SlotCacheEntry { Stamp = DateTime.Now, Result = "已占用" };
-                    PCAN_Channel.Add("USB_" + (i + 1) + "(已占用)");
-                }
-                else
-                {
-                    // ILLHW/INITIALIZE等：该槽位无硬件，记入缓存，跳过继续探测后续序号
-                    lock (_slotCacheLock) _slotCache[handle] = new SlotCacheEntry { Stamp = DateTime.Now, Result = "" };
-                }
+            }
+
+            if (!attachedApiOk)
+            {
+                // 旧版 PCAN-Basic 不支持附着通道列表时，退回逐句柄只读条件查询。
+                // 该路径仍绝不 Initialize/Uninitialize；未知条件按“已发现”保留，避免漏报硬件。
+                mode = "通道条件回退";
+                ProbePcanChannelsByCondition(PCAN_Channel);
             }
             swTotal.Stop();
             try
             {
-                string logLine = DateTime.Now.ToString("HH:mm:ss.fff") + " PCAN16槽=" + swTotal.ElapsedMilliseconds + "ms 结果[" + string.Join(",", PCAN_Channel.ToArray()) + "] 慢槽[" + slotLog.ToString() + "]";
+                string logLine = DateTime.Now.ToString("HH:mm:ss.fff")
+                    + " PCAN识别=" + swTotal.ElapsedMilliseconds + "ms"
+                    + " 模式=" + mode
+                    + " 附着数=" + attachedCount
+                    + " 结果[" + string.Join(",", PCAN_Channel.ToArray()) + "]"
+                    + " API=" + attachedStatus;
                 string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CANInsight");
                 System.IO.Directory.CreateDirectory(dir);
                 System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "detect_timing.log"), logLine + Environment.NewLine);
             }
             catch { }
             return PCAN_Channel;
+        }
+
+        private void AddAttachedPcanChannels(List<string> result, TPCANChannelInformation[] channels)
+        {
+            // PCAN_ATTACHED_CHANNELS 的返回顺序不是 UI 约定的 USB_1、USB_2 顺序，
+            // 先收集到槽位映射，再按固定句柄表输出，避免重插后下拉顺序跳变。
+            var bySlot = new Dictionary<int, string>();
+            foreach (TPCANChannelInformation channel in channels)
+            {
+                int slot = Array.IndexOf(PCAN_DeviceChannelBuf, channel.channel_handle);
+                if (slot < 0) continue; // 忽略 PCI/LAN/Virtual 等非 USB 槽位
+
+                string status;
+                if (channel.channel_handle == PCAN_DeviceChannel || _connectedChannels.ContainsValue(channel.channel_handle))
+                {
+                    status = "已连接";
+                }
+                else if (channel.channel_condition == PCANBasic.PCAN_CHANNEL_AVAILABLE)
+                {
+                    status = "空闲";
+                }
+                else if (channel.channel_condition == PCANBasic.PCAN_CHANNEL_OCCUPIED
+                    || channel.channel_condition == PCANBasic.PCAN_CHANNEL_PCANVIEW)
+                {
+                    status = "已占用";
+                }
+                else if (channel.channel_condition == PCANBasic.PCAN_CHANNEL_UNAVAILABLE)
+                {
+                    continue;
+                }
+                else
+                {
+                    status = "已发现";
+                }
+                bySlot[slot] = "USB_" + (slot + 1) + "(" + status + ")";
+            }
+
+            for (int slot = 0; slot < PCAN_DeviceChannelBuf.Length; slot++)
+            {
+                string item;
+                if (bySlot.TryGetValue(slot, out item)) result.Add(item);
+            }
+        }
+
+        private void ProbePcanChannelsByCondition(List<string> result)
+        {
+            for (int slot = 0; slot < PCAN_DeviceChannelBuf.Length; slot++)
+            {
+                ushort handle = PCAN_DeviceChannelBuf[slot];
+                if (handle == PCAN_DeviceChannel || _connectedChannels.ContainsValue(handle))
+                {
+                    result.Add("USB_" + (slot + 1) + "(已连接)");
+                    continue;
+                }
+
+                uint condition = PCANBasic.PCAN_CHANNEL_UNAVAILABLE;
+                TPCANStatus status = PCANBasic.GetValue(
+                    handle,
+                    TPCANParameter.PCAN_CHANNEL_CONDITION,
+                    out condition,
+                    sizeof(uint));
+                if (status != TPCANStatus.PCAN_ERROR_OK
+                    || condition == PCANBasic.PCAN_CHANNEL_UNAVAILABLE)
+                {
+                    continue;
+                }
+                if (condition == PCANBasic.PCAN_CHANNEL_AVAILABLE)
+                {
+                    result.Add("USB_" + (slot + 1) + "(空闲)");
+                }
+                else if (condition == PCANBasic.PCAN_CHANNEL_OCCUPIED
+                    || condition == PCANBasic.PCAN_CHANNEL_PCANVIEW)
+                {
+                    result.Add("USB_" + (slot + 1) + "(已占用)");
+                }
+                else
+                {
+                    result.Add("USB_" + (slot + 1) + "(已发现)");
+                }
+            }
         }
 
         public Boolean Connect(Boolean CanFDFlag)

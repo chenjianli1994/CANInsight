@@ -2504,7 +2504,7 @@ namespace PCAN_Client
         /// <summary>当前识别到的CANoe硬件通道（结构化副本，供通道管理窗口使用）</summary>
         internal List<HwChannelInfo> CanoeHwChannels => new List<HwChannelInfo>(_lastCanoeHwList);
 
-        /// <summary>主动刷新两类硬件识别（供通道管理窗口"刷新识别"按钮；force=true 时绕过60秒结果缓存显式重查）</summary>
+        /// <summary>主动刷新两类硬件识别（供通道管理窗口"刷新识别"按钮；PCAN 使用只读附着通道查询）</summary>
         internal void RefreshHardwareDetection(bool force = false)
         {
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();

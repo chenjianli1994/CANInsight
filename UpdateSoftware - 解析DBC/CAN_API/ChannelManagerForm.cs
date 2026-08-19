@@ -70,7 +70,7 @@ namespace PCAN_Client
             AppLog.Write("[CAN-UI] 通道管理对话框打开");
             _realTimeMode = Main.chartFromShow?.RealTimeDataSta ?? true;
             BuildUi();
-            // 先用Main现有识别缓存立即填充（窗口秒开）；硬件识别为耗时操作（PCAN试开16槽位约1-2秒），窗口显示后后台异步刷新
+            // 先用 Main 现有识别结果立即填充；窗口显示后后台异步刷新，避免识别异常时阻塞界面
             if (_main != null)
             {
                 _hwList = _main.PcanHwChannels.Concat(_main.CanoeHwChannels).ToList();
