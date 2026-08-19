@@ -398,7 +398,7 @@ namespace PCAN_Client.LIN_UI
             var colRspExpand = new DataGridViewTextBoxColumn { Name = "colRspExpand", HeaderText = "", Width = 30, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable };
             _dgvResp.Columns.Add(colRspExpand);
             // LDF 导入内容（ID/帧名/DLC）固定，仅「数据」列可编辑
-            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspId", HeaderText = "响应 ID", Width = 80, ReadOnly = true });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspId", HeaderText = "发布 ID", Width = 80, ReadOnly = true });
             _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspName", HeaderText = "帧名称", Width = 240, ReadOnly = true });
             _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspDlc", HeaderText = "DLC/位", Width = 50, ReadOnly = true });
             _dgvResp.Columns.Add("colRspData", "数据 (Hex)");
@@ -433,7 +433,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "作用：配置本机在总线上发布/应答的数据（LDF 导入后自动填充）。\n主节点模式 = 本机作为发送方发布帧数据（调度时发出）；从节点模式 = 本机按数据应答收到 Header 的帧。点「＋」或双击行展开信号（带单位）改物理值，调度表页签勾选决定哪些帧参与发送",
+                Text = "主节点模式显示本机主节点发布帧；从节点模式只显示「通道管理」中选定本机从节点发布的帧。未选择本机从节点时仅监听，不自动应答。点「＋」或双击行展开信号（带单位）改物理值。",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -587,8 +587,15 @@ namespace PCAN_Client.LIN_UI
                     var ch = LinConfig.Channels[_channel - 1];
                     try
                     {
-                        ch.LdfHelper = LinLdfHelper.Parse(dlg.FileName);
+                        var ldf = LinLdfHelper.Parse(dlg.FileName);
+                        ch.LdfHelper = ldf;
                         ch.LdfPath = dlg.FileName;
+                        ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ldf, ch.LocalNodeName);
+                        if (Lin_API.IsConnected(_channel))
+                        {
+                            Lin_API.LinDisconnect(_channel);
+                            ch.ConnectError = "LDF 已修改，请重新连接";
+                        }
                         LinConfig.SaveLinConfig();
                         RefreshSlotGrid();
                         RefreshRespGrid();
@@ -1368,28 +1375,29 @@ namespace PCAN_Client.LIN_UI
                 // 无 LDF：空表
                 return;
             }
-            foreach (byte pid in ldf.SlaveRespIds)
-            {
-                var def = ldf.Frames[pid];
-                int idx = _dgvResp.Rows.Add("＋", "0x" + pid.ToString("X2"), def.Name, def.Dlc, new string('0', def.Dlc * 2));
-                _dgvResp.Rows[idx].Tag = pid;
-            }
             if (IsMasterMode())
             {
-                // 主节点模式：额外列出主节点发布帧（本机发布数据可编辑）
+                // 主节点模式：只列出本机发布帧；从节点发布帧由调度发送 Header 后等待真实总线响应。
                 foreach (var kv in ldf.Frames)
                 {
-                    if (kv.Value.Publisher == ldf.MasterName)
+                    if (LinLdfHelper.IsMasterPublisherFrame(ldf, kv.Key))
                     {
-                        bool exists = false;
-                        foreach (DataGridViewRow r in _dgvResp.Rows)
-                            if (r.Tag is byte && (byte)r.Tag == kv.Key) { exists = true; break; }
-                        if (!exists)
-                        {
-                            int idx = _dgvResp.Rows.Add("＋", "0x" + kv.Key.ToString("X2"), kv.Value.Name, kv.Value.Dlc, new string('0', kv.Value.Dlc * 2));
-                            _dgvResp.Rows[idx].Tag = kv.Key;
-                        }
+                        var def = kv.Value;
+                        byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                        int idx = _dgvResp.Rows.Add("＋", "0x" + kv.Key.ToString("X2"), def.Name, dlc, new string('0', dlc * 2));
+                        _dgvResp.Rows[idx].Tag = kv.Key;
                     }
+                }
+            }
+            else
+            {
+                string localNode = GetLocalSlaveNodeName();
+                foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(ldf, localNode))
+                {
+                    var def = ldf.Frames[pid];
+                    byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                    int idx = _dgvResp.Rows.Add("＋", "0x" + pid.ToString("X2"), def.Name, dlc, new string('0', dlc * 2));
+                    _dgvResp.Rows[idx].Tag = pid;
                 }
             }
         }
@@ -1398,6 +1406,13 @@ namespace PCAN_Client.LIN_UI
         {
             return _channel >= 1 && _channel <= LinConfig.Channels.Count &&
                    LinConfig.Channels[_channel - 1].Mode == LinNodeMode.Master;
+        }
+
+        private string GetLocalSlaveNodeName()
+        {
+            if (_channel < 1 || _channel > LinConfig.Channels.Count) return "";
+            var ch = LinConfig.Channels[_channel - 1];
+            return LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, ch.LocalNodeName);
         }
 
         private void DgvResp_CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -1431,7 +1446,8 @@ namespace PCAN_Client.LIN_UI
             if (data == null) return;
             byte dlc = (byte)data.Length;
             if (dlc > 8) return;
-            Lin_API.UpdateSlaveData(_channel, pid, data, dlc);
+            if (!Lin_API.UpdateSlaveData(_channel, pid, data, dlc))
+                ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点响应数据下发失败（未连接或帧不属于本机节点）");
         }
 
         /// <summary>取帧行的当前数据（Hex 解析失败返回 null）</summary>
@@ -1468,7 +1484,8 @@ namespace PCAN_Client.LIN_UI
                 if (r.Tag is byte && (byte)r.Tag == pid) { r.Cells["colRspData"].Value = hex; break; }
             }
             RefreshSignalRows(pid);
-            Lin_API.UpdateSlaveData(_channel, pid, data, (byte)data.Length);
+            if (!Lin_API.UpdateSlaveData(_channel, pid, data, (byte)data.Length))
+                ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点响应数据下发失败（未连接或帧不属于本机节点）");
         }
 
         /// <summary>按帧行当前数据刷新该帧全部信号行的显示值</summary>
@@ -1756,7 +1773,8 @@ namespace PCAN_Client.LIN_UI
                     var data = ParseHexData((row.Cells["colSendData"].Value ?? "").ToString());
                     if (data == null) return;
                     row.Cells["colSendDlc"].Value = data.Length;
-                    Lin_API.UpdateSlaveData(_channel, slot.Pid, data, (byte)data.Length);
+                    if (!Lin_API.UpdateSlaveData(_channel, slot.Pid, data, (byte)data.Length))
+                        ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点不能为未选本机节点配置响应数据");
                     break;
             }
         }
@@ -1770,9 +1788,15 @@ namespace PCAN_Client.LIN_UI
             {
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
-                _lblSched.Text = IsMasterMode()
-                    ? (sc.IsRunning ? "调度: 运行中" : "调度: 停止")
-                    : "从节点: 等待外部主节点";
+                if (IsMasterMode())
+                    _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
+                else
+                {
+                    string localNode = GetLocalSlaveNodeName();
+                    _lblSched.Text = localNode.Length == 0
+                        ? "从节点: 仅监听（未选择本机节点）"
+                        : "从节点: " + localNode + " 等待外部主节点";
+                }
             }
             else
             {

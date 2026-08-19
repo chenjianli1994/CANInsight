@@ -34,6 +34,7 @@ namespace PCAN_Client.LIN_UI
         /// 静默清空用户配置（实测根因：重开页面触发重枚举→缓存清空→绑定被回退清空）。
         /// </summary>
         private bool _suppressBindWriteback;
+        private bool _suppressLocalNodeWriteback;
 
         /// <summary>绑定硬件下拉项（携带硬件类型+通道标识，选中即固化二元组；HwType=""表示不连接）</summary>
         private class LinHwBindItem
@@ -48,6 +49,16 @@ namespace PCAN_Client.LIN_UI
         }
 
         private static readonly LinHwBindItem NotConnectItem = new LinHwBindItem { HwType = "", HwHandle = "", Display = "不连接" };
+
+        /// <summary>从节点仿真下拉项：空名称表示只监听、不为任何 LDF 从节点自动应答。</summary>
+        private class LinNodeItem
+        {
+            public string Name { get; set; } = "";
+            public string Display { get; set; } = "";
+            public override string ToString() { return Display; }
+        }
+
+        private static readonly LinNodeItem ListenOnlyNodeItem = new LinNodeItem { Name = "", Display = "仅监听" };
 
         public LinChannelPanel()
         {
@@ -89,31 +100,41 @@ namespace PCAN_Client.LIN_UI
 
             // 列定义
             _dgv.Columns.Add("colName", "通道名");
-            _dgv.Columns["colName"].Width = 90;
+            _dgv.Columns["colName"].Width = 80;
             // 绑定硬件通道：不连接 + 已识别硬件单下拉（带类型前缀），选中即固化 HwType+HwHandle（对齐 CAN 页签）
             var colHwBind = new DataGridViewComboBoxColumn
             {
                 Name = "colHwBind",
                 HeaderText = "绑定硬件通道",
-                Width = 240,
+                Width = 190,
                 DisplayMember = "Display",
                 ValueMember = "Key",
                 FlatStyle = FlatStyle.Flat
             };
             _dgv.Columns.Add(colHwBind);
-            var colMode = new DataGridViewComboBoxColumn { Name = "colMode", HeaderText = "节点模式", Width = 90 };
+            var colMode = new DataGridViewComboBoxColumn { Name = "colMode", HeaderText = "节点模式", Width = 80 };
             colMode.Items.AddRange(new object[] { "主节点", "从节点" });
             _dgv.Columns.Add(colMode);
-            var colBaud = new DataGridViewComboBoxColumn { Name = "colBaud", HeaderText = "波特率", Width = 80 };
+            var colLocalNode = new DataGridViewComboBoxColumn
+            {
+                Name = "colLocalNode",
+                HeaderText = "本机从节点",
+                Width = 140,
+                DisplayMember = "Display",
+                ValueMember = "Name",
+                FlatStyle = FlatStyle.Flat,
+            };
+            _dgv.Columns.Add(colLocalNode);
+            var colBaud = new DataGridViewComboBoxColumn { Name = "colBaud", HeaderText = "波特率", Width = 70 };
             colBaud.Items.AddRange(new object[] { "1000", "2400", "9600", "19200" });
             _dgv.Columns.Add(colBaud);
             _dgv.Columns.Add("colLdf", "LDF 文件");
-            _dgv.Columns["colLdf"].Width = 300;
+            _dgv.Columns["colLdf"].Width = 210;
             _dgv.Columns["colLdf"].ReadOnly = true; // 路径只经浏览按钮选择（点击单元格触发）
             _dgv.Columns.Add("colStatus", "状态");
             _dgv.Columns["colStatus"].Width = 110;
             _dgv.Columns["colStatus"].ReadOnly = true;
-            var colOp = new DataGridViewButtonColumn { Name = "colOp", HeaderText = "操作", Width = 80, ReadOnly = true, Text = "连接" };
+            var colOp = new DataGridViewButtonColumn { Name = "colOp", HeaderText = "操作", Width = 75, ReadOnly = true, Text = "连接" };
             // 注意：不能用 UseColumnTextForButtonValue=true（会忽略单元格 Value，导致"连接/断开/-"切换不显示）
             _dgv.Columns.Add(colOp);
 
@@ -262,17 +283,21 @@ namespace PCAN_Client.LIN_UI
 
         private void AddChannelRow(LinChannel ch)
         {
+            if (ch.LdfHelper != null)
+                ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, ch.LocalNodeName);
             var row = new DataGridViewRow { Tag = ch };
             row.CreateCells(_dgv,
                 ch.Name,
                 "", // 绑定硬件通道：由 FindHwBindKey 赋值
                 ch.Mode == LinNodeMode.Master ? "主节点" : "从节点",
+                "", // 本机从节点：由 RebuildLocalNodeCellDataSource 赋值
                 ch.Baudrate.ToString(),
                 ch.LdfPath,
                 "", // 状态列：行加入后由 UpdateRowStatus 以权威状态填充
                 "连接");
             _dgv.Rows.Add(row);
             RebuildHwBindCellDataSource(row);
+            RebuildLocalNodeCellDataSource(row);
             _suppressBindWriteback = true;
             try { row.Cells["colHwBind"].Value = FindHwBindKey(row, ch); }
             finally { _suppressBindWriteback = false; }
@@ -281,6 +306,37 @@ namespace PCAN_Client.LIN_UI
         }
 
         private LinChannel RowChannel(DataGridViewRow row) => (LinChannel)row.Tag;
+
+        private static List<LinNodeItem> BuildLocalNodeItems(LinChannel ch)
+        {
+            var items = new List<LinNodeItem> { ListenOnlyNodeItem };
+            if (ch != null && ch.LdfHelper != null)
+            {
+                foreach (string name in ch.LdfHelper.SlaveNames)
+                    items.Add(new LinNodeItem { Name = name, Display = name });
+            }
+            if (ch != null && !string.IsNullOrWhiteSpace(ch.LocalNodeName) &&
+                !items.Any(x => string.Equals(x.Name, ch.LocalNodeName, StringComparison.OrdinalIgnoreCase)))
+            {
+                items.Add(new LinNodeItem { Name = ch.LocalNodeName, Display = ch.LocalNodeName + " (LDF 未加载)" });
+            }
+            return items;
+        }
+
+        /// <summary>根据当前行 LDF 重建本机从节点下拉；主节点模式固定显示仅监听，保留已选从节点供切换回从节点后继续使用。</summary>
+        private void RebuildLocalNodeCellDataSource(DataGridViewRow row)
+        {
+            var cell = (DataGridViewComboBoxCell)row.Cells["colLocalNode"];
+            var ch = RowChannel(row);
+            var items = BuildLocalNodeItems(ch);
+            cell.DataSource = items;
+            cell.ReadOnly = ch.Mode != LinNodeMode.Slave;
+            string selected = ch.Mode == LinNodeMode.Slave ? (ch.LocalNodeName ?? "") : "";
+            if (!items.Any(x => string.Equals(x.Name, selected, StringComparison.OrdinalIgnoreCase))) selected = "";
+            _suppressLocalNodeWriteback = true;
+            try { cell.Value = selected; }
+            finally { _suppressLocalNodeWriteback = false; }
+        }
 
         /// <summary>构建绑定下拉选项：不连接 + 已识别到的全部硬件通道（带类型前缀；冲突不限制选择，由标红提示+连接时拦截）。
         /// 通道已保存绑定不在本次枚举结果（枚举未完成/硬件未插/枚举失败）时追加 "(未在线)" 占位项——
@@ -528,9 +584,23 @@ namespace PCAN_Client.LIN_UI
                     if (dlg.ShowDialog(this) == DialogResult.OK)
                     {
                         var ch = RowChannel(row);
-                        ch.LdfPath = dlg.FileName;
-                        row.Cells["colLdf"].Value = dlg.FileName;
-                        try { ch.LdfHelper = LinLdfHelper.Parse(dlg.FileName); }
+                        try
+                        {
+                            var ldf = LinLdfHelper.Parse(dlg.FileName);
+                            ch.LdfPath = dlg.FileName;
+                            ch.LdfHelper = ldf;
+                            ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ldf, ch.LocalNodeName);
+                            row.Cells["colLdf"].Value = dlg.FileName;
+                            RebuildLocalNodeCellDataSource(row);
+                            byte logicChannel = (byte)(e.RowIndex + 1);
+                            if (Lin_API.IsConnected(logicChannel))
+                            {
+                                Lin_API.LinDisconnect(logicChannel);
+                                ch.ConnectError = "LDF 已修改，请重新连接";
+                            }
+                            else ch.ConnectError = "";
+                            UpdateRowStatus(row);
+                        }
                         catch (Exception ex) { MessageBox.Show(this, "LDF 加载失败: " + ex.Message, "LIN 通道管理", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
                     }
                 }
@@ -578,6 +648,23 @@ namespace PCAN_Client.LIN_UI
                             ch.ConnectError = "";
                             UpdateRowStatus(row);
                         }
+                        RebuildLocalNodeCellDataSource(row);
+                    }
+                    break;
+                case "colLocalNode":
+                    if (_suppressLocalNodeWriteback || ch.Mode != LinNodeMode.Slave) return;
+                    string localNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, (v ?? "").ToString());
+                    if (ch.LocalNodeName != localNodeName)
+                    {
+                        ch.LocalNodeName = localNodeName;
+                        byte logicChannel = (byte)(e.RowIndex + 1);
+                        if (Lin_API.IsConnected(logicChannel))
+                        {
+                            Lin_API.LinDisconnect(logicChannel);
+                            ch.ConnectError = "本机从节点已修改，请重新连接";
+                        }
+                        else ch.ConnectError = "";
+                        UpdateRowStatus(row);
                     }
                     break;
                 case "colBaud":
@@ -599,7 +686,7 @@ namespace PCAN_Client.LIN_UI
             }
             LinConfig.Channels = channels;
             LinConfig.SaveLinConfig();
-            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + "]").ToArray()) + "）");
+            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + ",节点=" + (c.LocalNodeName.Length > 0 ? c.LocalNodeName : "仅监听") + "]").ToArray()) + "）");
         }
     }
 }

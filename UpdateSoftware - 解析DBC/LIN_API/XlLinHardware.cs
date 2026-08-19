@@ -150,10 +150,10 @@ namespace PCAN_Client.LIN_API
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
                 _active = true;
 
-                // 从节点模式：按 LDF 配置硬件自动应答
+                // 从节点模式：只按选定本机节点配置硬件自动应答。
                 if (_cfg.Mode == LinNodeMode.Slave && _cfg.LdfHelper != null)
                 {
-                    foreach (byte pid in _cfg.LdfHelper.SlaveRespIds)
+                    foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(_cfg.LdfHelper, _cfg.LocalNodeName))
                     {
                         var def = _cfg.LdfHelper.Frames[pid];
                         byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
@@ -283,6 +283,9 @@ namespace PCAN_Client.LIN_API
         /// <summary>更新从节点/发布帧数据</summary>
         public bool UpdateSlaveData(byte pid, byte[] data, byte dlc)
         {
+            if (_cfg.Mode == LinNodeMode.Slave &&
+                !LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName))
+                return false;
             return ConfigureSlaveResponse(pid, data, dlc);
         }
 

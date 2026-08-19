@@ -23,6 +23,9 @@ namespace PCAN_Client.LIN_API
         /// <summary>节点模式：主节点（调度表驱动）/ 从节点（硬件自动应答）</summary>
         public LinNodeMode Mode = LinNodeMode.Master;
 
+        /// <summary>本机仿真的 LDF 从节点名；空表示从节点模式仅监听，不自动应答。</summary>
+        public string LocalNodeName = "";
+
         /// <summary>波特率（1000/2400/9600/19200，默认 19200）</summary>
         public uint Baudrate = 19200;
 

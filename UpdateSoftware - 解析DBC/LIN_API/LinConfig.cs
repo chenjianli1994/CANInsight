@@ -26,6 +26,7 @@ namespace PCAN_Client.LIN_API
             public string HwType;
             public string HwHandle;
             public LinNodeMode Mode;
+            public string LocalNodeName;
             public uint Baudrate;
             public string LdfPath;
 
@@ -33,7 +34,8 @@ namespace PCAN_Client.LIN_API
             public LinChannelConfig(LinChannel ch)
             {
                 Name = ch.Name; HwType = ch.HwType ?? ""; HwHandle = ch.HwHandle ?? "";
-                Mode = ch.Mode; Baudrate = ch.Baudrate; LdfPath = ch.LdfPath ?? "";
+                Mode = ch.Mode; LocalNodeName = ch.LocalNodeName ?? "";
+                Baudrate = ch.Baudrate; LdfPath = ch.LdfPath ?? "";
             }
         }
 
@@ -70,6 +72,7 @@ namespace PCAN_Client.LIN_API
                     ch.HwType = cfg.HwType ?? "";
                     ch.HwHandle = cfg.HwHandle ?? "";
                     ch.Mode = cfg.Mode;
+                    ch.LocalNodeName = cfg.LocalNodeName ?? "";
                     if (cfg.Baudrate > 0) ch.Baudrate = cfg.Baudrate;
                     ch.LdfPath = cfg.LdfPath ?? "";
                     if (!string.IsNullOrWhiteSpace(ch.LdfPath) && File.Exists(ch.LdfPath))
@@ -77,6 +80,7 @@ namespace PCAN_Client.LIN_API
                         try
                         {
                             ch.LdfHelper = LinLdfHelper.Parse(ch.LdfPath);
+                            ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, ch.LocalNodeName);
                         }
                         catch (Exception ex)
                         {

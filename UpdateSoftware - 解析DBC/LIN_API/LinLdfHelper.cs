@@ -66,6 +66,8 @@ namespace PCAN_Client.LIN_API
         public Dictionary<string, List<LinScheduleSlotDef>> ScheduleTables = new Dictionary<string, List<LinScheduleSlotDef>>();
         /// <summary>从节点发布的帧 ID 集合（响应 ID，从节点仿真用）</summary>
         public List<byte> SlaveRespIds = new List<byte>();
+        /// <summary>LDF 中声明的从节点名（NODES/Slaves，保留声明顺序）</summary>
+        public List<string> SlaveNames = new List<string>();
         /// <summary>主节点名（LDF 原样）</summary>
         public string MasterName = "";
         /// <summary>LDF LIN 协议版本（缺失时按 LIN 2.x 处理）</summary>
@@ -185,7 +187,7 @@ namespace PCAN_Client.LIN_API
             var file = new LinLdfFile();
             var stack = new List<string>();     // 块上下文栈
             string curTable = null;             // 当前调度表名
-            var slaveNames = new HashSet<string>();
+            var slaveNames = new List<string>();
             var sporadicFrames = new HashSet<string>();
             // Signal_encoding_types / Signal_representation 解析数据（收尾统一赋给信号）
             var encData = new Dictionary<string, Tuple<string, Dictionary<byte, string>>>(); // 编码名 → (单位, 逻辑值枚举)
@@ -291,6 +293,10 @@ namespace PCAN_Client.LIN_API
                     case "Nodes":
                         ParseNodes(line, file, slaveNames, lineNo);
                         break;
+                    case "Frames":
+                        // 兼容无嵌套信号列表的帧定义：NAME: ID, PUBLISHER, DLC;
+                        ParseFrameDef(file, line, lineNo, false);
+                        break;
                     case "Signals":
                     case "Diagnostic_signals":
                         ParseSignal(file, line, lineNo);
@@ -339,7 +345,8 @@ namespace PCAN_Client.LIN_API
                 }
             }
 
-            // ===== 收尾：帧类型归类 + 从节点响应 ID 集合 =====
+            // ===== 收尾：节点 + 帧类型归类 + 从节点响应 ID 集合 =====
+            file.SlaveNames.AddRange(slaveNames);
             foreach (var kv in file.Frames)
             {
                 var def = kv.Value;
@@ -449,7 +456,7 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        private static void ParseNodes(string line, LinLdfFile file, HashSet<string> slaveNames, int lineNo)
+        private static void ParseNodes(string line, LinLdfFile file, List<string> slaveNames, int lineNo)
         {
             int colon = line.IndexOf(':');
             if (colon <= 0) return;
@@ -465,9 +472,54 @@ namespace PCAN_Client.LIN_API
                 foreach (string p in parts)
                 {
                     string n = p.Trim();
-                    if (n.Length > 0) slaveNames.Add(n);
+                    if (n.Length > 0 && !slaveNames.Exists(x => string.Equals(x, n, StringComparison.OrdinalIgnoreCase)))
+                        slaveNames.Add(n);
                 }
             }
+        }
+
+        /// <summary>将已保存的本机从节点名映射为 LDF 中的规范名称；空值始终表示仅监听。</summary>
+        public static string NormalizeLocalSlaveName(LinLdfFile ldf, string localSlaveName)
+        {
+            if (ldf == null || ldf.SlaveNames == null || ldf.SlaveNames.Count == 0) return "";
+            string name = (localSlaveName ?? "").Trim();
+            if (name.Length == 0) return "";
+            foreach (string candidate in ldf.SlaveNames)
+                if (string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)) return candidate;
+            return "";
+        }
+
+        /// <summary>指定帧是否由 LDF 主节点发布（0x3C 为固定主节点诊断请求）。</summary>
+        public static bool IsMasterPublisherFrame(LinLdfFile ldf, byte pid)
+        {
+            if (pid == 0x3C) return true;
+            LinFrameDef def;
+            return ldf != null && ldf.Frames.TryGetValue(pid, out def)
+                && !string.IsNullOrEmpty(ldf.MasterName)
+                && string.Equals(def.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// 指定帧是否是本机模拟从节点可自动应答的帧。
+        /// 未选择本机从节点时只监听；诊断 0x3D 不按裸 ID 自动应答，避免多个从节点对同一诊断请求抢答。
+        /// </summary>
+        public static bool IsLocalSlaveResponseFrame(LinLdfFile ldf, byte pid, string localSlaveName)
+        {
+            string local = NormalizeLocalSlaveName(ldf, localSlaveName);
+            if (local.Length == 0 || pid == 0x3D || ldf == null || !ldf.SlaveRespIds.Contains(pid)) return false;
+            LinFrameDef def;
+            return ldf.Frames.TryGetValue(pid, out def)
+                && string.Equals(def.Publisher, local, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>返回本机模拟从节点可自动应答的 LDF 帧 ID。</summary>
+        public static List<byte> GetLocalSlaveResponseIds(LinLdfFile ldf, string localSlaveName)
+        {
+            var result = new List<byte>();
+            if (ldf == null) return result;
+            foreach (byte pid in ldf.SlaveRespIds)
+                if (IsLocalSlaveResponseFrame(ldf, pid, localSlaveName)) result.Add(pid);
+            return result;
         }
 
         /// <summary>

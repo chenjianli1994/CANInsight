@@ -133,7 +133,7 @@ namespace PCAN_Client.LIN_API
 
         private string TryConnect()
         {
-            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " Baud=" + _cfg.Baudrate);
+            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " LocalNode=" + _cfg.LocalNodeName + " Baud=" + _cfg.Baudrate);
             try
             {
                 LinPlError err = LinPlApi.RegisterClient("CANInsight_LIN", IntPtr.Zero, out _client);
@@ -310,8 +310,8 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 按 LDF 配置硬件帧条目：主节点只配置自己的发布帧；从节点只配置自己的响应帧。
-        /// LIN 诊断帧遵循固定角色：0x3C 由主节点发布，0x3D 由从节点响应。
+        /// 按 LDF 配置硬件帧条目：主节点只配置自己的发布帧；从节点只配置选定本机节点的响应帧。
+        /// 0x3C 由主节点发布；0x3D 需要按 NAD/诊断状态机匹配，不能仅按 ID 对所有从节点自动应答。
         /// </summary>
         private void ConfigureFrameEntries()
         {
@@ -326,22 +326,25 @@ namespace PCAN_Client.LIN_API
                 var def = kv.Value;
                 bool masterPublisher = _cfg.Mode == LinNodeMode.Master && IsMasterPublisherFrame(pid);
                 bool slaveResp = _cfg.Mode == LinNodeMode.Slave && IsSlaveResponseFrame(pid);
-                if (masterPublisher || slaveResp)
-                {
-                    byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
-                    bool ok = SetFrameEntry(pid, dlc, slaveResp, def.Publisher.Length == 0 ? null : def.Publisher);
-                    LinDebugLog.Write("[LIN] SetFrameEntry pid=" + pid + " dlc=" + dlc + " publisher=" + def.Publisher + " masterPublisher=" + masterPublisher + " slaveResp=" + slaveResp + " → " + (ok ? "OK" : "FAIL"));
-                }
+                // PLIN 的帧表同时决定发送角色和接收过滤：本机发布帧为 Publisher，
+                // 其余帧必须显式设为 Subscriber，主节点才能看到从节点响应，
+                // 从节点也才能接收主节点 Header。未选本机节点的从节点帧不会启用响应。
+                byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                LinPlDirection direction = (masterPublisher || slaveResp)
+                    ? LinPlDirection.dirPublisher
+                    : LinPlDirection.dirSubscriber;
+                bool ok = SetFrameEntry(pid, dlc, direction, slaveResp, def.Publisher.Length == 0 ? null : def.Publisher);
+                LinDebugLog.Write("[LIN] SetFrameEntry pid=" + pid + " dlc=" + dlc + " publisher=" + def.Publisher + " direction=" + direction + " masterPublisher=" + masterPublisher + " slaveResp=" + slaveResp + " → " + (ok ? "OK" : "FAIL"));
             }
         }
 
-        private bool SetFrameEntry(byte pid, byte len, bool responseEnable, string publisher)
+        private bool SetFrameEntry(byte pid, byte len, LinPlDirection direction, bool responseEnable, string publisher)
         {
             var entry = new LinPlFrameEntry
             {
                 FrameId = pid,
                 Length = len,
-                Direction = LinPlDirection.dirPublisher,
+                Direction = direction,
                 ChecksumType = ToPlChecksum(LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid)),
                 Flags = (ushort)(responseEnable ? LinPlApi.FRAME_FLAG_RESPONSE_ENABLE : 0),
                 InitialData = new byte[8],
@@ -358,19 +361,12 @@ namespace PCAN_Client.LIN_API
 
         private bool IsMasterPublisherFrame(byte pid)
         {
-            if (pid == 0x3C) return true;
-            var ldf = _cfg.LdfHelper;
-            LinFrameDef def;
-            return ldf != null && ldf.Frames.TryGetValue(pid, out def)
-                && !string.IsNullOrEmpty(ldf.MasterName)
-                && string.Equals(def.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase);
+            return LinLdfHelper.IsMasterPublisherFrame(_cfg.LdfHelper, pid);
         }
 
         private bool IsSlaveResponseFrame(byte pid)
         {
-            if (pid == 0x3D) return true;
-            var ldf = _cfg.LdfHelper;
-            return ldf != null && ldf.SlaveRespIds.Contains(pid);
+            return LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName);
         }
 
         // ==================== 发送 ====================
@@ -463,6 +459,11 @@ namespace PCAN_Client.LIN_API
         public bool UpdateSlaveData(byte pid, byte[] data)
         {
             if (!IsConnected || data == null || data.Length > 8) { LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " 未连接或数据非法 len=" + (data == null ? -1 : data.Length)); return false; }
+            if (_cfg.Mode == LinNodeMode.Slave && !IsSlaveResponseFrame(pid))
+            {
+                LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " 不属于本机节点 " + (_cfg.LocalNodeName ?? "") + "，拒绝配置自动应答");
+                return false;
+            }
             // 主节点只更新发送缓存；从节点更新硬件自动应答条目。
             var entry = new LinPlFrameEntry
             {
@@ -644,11 +645,19 @@ namespace PCAN_Client.LIN_API
                 return;
             }
 
+            // PLIN 返回的是 LDF 角色方向（Publisher/Subscriber），而不是本机 Tx/Rx。
+            // 结合当前选定节点转换为监控页语义：本机 Publisher 才是 Tx，
+            // 其余 Subscriber/外部节点数据均为 Rx。这样主节点收到从节点响应时不会被误标为 Tx。
+            bool localPublisher = (_cfg.Mode == LinNodeMode.Master && IsMasterPublisherFrame(m.FrameId))
+                || (_cfg.Mode == LinNodeMode.Slave && IsSlaveResponseFrame(m.FrameId));
+            LinFrameDir frameDirection = localPublisher && m.Direction == LinPlDirection.dirPublisher
+                ? LinFrameDir.Tx
+                : LinFrameDir.Rx;
             var frame = new LinFrameRecord
             {
                 LogicChannel = _logicChannel,
                 Pid = m.FrameId,
-                Direction = LinFrameDir.Rx,
+                Direction = frameDirection,
                 Dlc = m.Length,
                 Data = new byte[m.Length],
                 ChecksumType = m.ChecksumType == LinPlChecksumType.cstClassic ? LinChecksumKind.Classic : LinChecksumKind.Enhanced,

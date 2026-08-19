@@ -15,6 +15,12 @@ namespace PCAN_Client.LIN_API
         private static readonly Stopwatch _sw = Stopwatch.StartNew();
         private static ulong _epochUs;
 
+        // ==================== 从节点响应活动（调度超时兜底） ====================
+        // 只记录真实硬件/Vector Rx，不记录软件 Tx 回显。按通道+PID保存最后一次总线活动，
+        // 供主节点调度判断 Header 后是否出现从节点响应或硬件错误事件。
+        private static readonly Dictionary<long, long> _lastRxMs = new Dictionary<long, long>();
+        private static readonly object _rxActivityLock = new object();
+
         // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
         private static readonly Dictionary<byte, PcanLinHardware> _pcan = new Dictionary<byte, PcanLinHardware>();
         private static readonly Dictionary<byte, XlLinHardware> _xl = new Dictionary<byte, XlLinHardware>();
@@ -278,6 +284,50 @@ namespace PCAN_Client.LIN_API
             return null;
         }
 
+        private static long FrameKey(byte logicChannel, byte pid)
+        {
+            return ((long)logicChannel << 8) | pid;
+        }
+
+        /// <summary>会话毫秒（首次连接归零）</summary>
+        internal static long SessionMs
+        {
+            get { return (long)_sw.ElapsedMilliseconds - (long)(_epochUs / 1000); }
+        }
+
+        /// <summary>判断 Header 发送后是否收到该 PID 的真实 Rx（含硬件错误帧）</summary>
+        internal static bool HasRxSince(byte logicChannel, byte pid, long sinceMs)
+        {
+            lock (_rxActivityLock)
+            {
+                long last;
+                return _lastRxMs.TryGetValue(FrameKey(logicChannel, pid), out last) && last >= sinceMs;
+            }
+        }
+
+        /// <summary>
+        /// 注入从节点响应超时错误。仅由主节点调度器对非本机发布帧调用；
+        /// 这表示 Header 已按调度发出但驱动没有返回可显示的 Rx/NoResponse 事件。
+        /// </summary>
+        internal static void InjectNoResponse(byte logicChannel, byte pid)
+        {
+            var ldf = GetLdf(logicChannel);
+            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
+            var frame = new LinFrameRecord
+            {
+                LogicChannel = logicChannel,
+                Pid = pid,
+                Direction = LinFrameDir.Rx,
+                Dlc = dlc,
+                Data = new byte[0],
+                ChecksumType = GetFrameChecksumKind(logicChannel, pid),
+                ErrorKind = LinErrorKind.NoResponse,
+                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
+            };
+            LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2"));
+            LinReceive(logicChannel, frame);
+        }
+
         // ==================== 接收汇聚 ====================
 
         /// <summary>接收汇聚：统一时间戳 → 帧类型/名称映射（LDF）→ 事件派发
@@ -288,6 +338,13 @@ namespace PCAN_Client.LIN_API
             {
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
+
+                // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显不能证明总线上出现了响应。
+                if (frame.Direction == LinFrameDir.Rx)
+                {
+                    lock (_rxActivityLock)
+                        _lastRxMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
+                }
 
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
                 var ldf = GetLdf(logicChannel);
