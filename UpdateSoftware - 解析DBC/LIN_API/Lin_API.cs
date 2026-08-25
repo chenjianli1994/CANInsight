@@ -19,10 +19,6 @@ namespace PCAN_Client.LIN_API
         // 只记录真实硬件/Vector Rx，不记录软件 Tx 回显。按通道+PID保存最后一次总线活动，
         // 供主节点调度判断 Header 后是否出现从节点响应或硬件错误事件。
         private static readonly Dictionary<long, long> _lastRxMs = new Dictionary<long, long>();
-        // 该 PID 任意方向帧活动（含本机 Tx 回显与硬件错误帧）：从机监控模式用它判断
-        // 外部 Master 是否发出了对应帧头——modSlave 下本机自动应答帧按 dirPublisher 上报，
-        // 方向可能是 Tx，不能只依赖 _lastRxMs。
-        private static readonly Dictionary<long, long> _lastFrameMs = new Dictionary<long, long>();
         private static readonly object _rxActivityLock = new object();
 
         // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
@@ -124,7 +120,7 @@ namespace PCAN_Client.LIN_API
             if (logicChannel <= LinConfig.Channels.Count)
             {
                 LinConfig.Channels[logicChannel - 1].IsConnected = false;
-                // 断开连接 = 本次“主从一体驱动”会话结束；下次连接回到按发送计划推导。
+                // 兼容清理：旧运行期开关在断开时复位；周期发送模型下推导不再依赖它。
                 LinConfig.Channels[logicChannel - 1].ForceMasterDriven = false;
                 ChannelStateChanged?.Invoke(logicChannel, false, "");
             }
@@ -183,8 +179,7 @@ namespace PCAN_Client.LIN_API
             return LinSendScheduleSlot(logicChannel, slot);
         }
 
-        /// <summary>按调度槽发送 Master/HeaderOnly/BreakOnly；Slave 槽默认只等待外部 Header，
-        /// 主从一体驱动（ForceMasterDriven）下改为本机发 Header 驱动响应帧。</summary>
+        /// <summary>按调度槽周期发送：Master 附本机响应，Slave/HeaderOnly 发 Header 等待总线响应。</summary>
         public static bool LinSendScheduleSlot(byte logicChannel, LinScheduleSlot slot)
         {
             if (slot == null) return false;
@@ -193,15 +188,11 @@ namespace PCAN_Client.LIN_API
                 type = GetTransmitType(logicChannel, slot.Pid, type);
             if (type == LinTransmitType.Slave)
             {
-                // 主从一体驱动（单设备自测）：本机主动发 Header，响应由硬件自动应答
-                // （硬件调度表路径）或软件仿真注入（软件调度回退路径）完成。
-                if (IsMasterDriven(logicChannel))
-                {
-                    LinDebugLog.Write("[SCH] LinSendScheduleSlot(主从一体) ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 发 Header 驱动响应帧");
-                    return LinSendHeader(logicChannel, slot.Pid);
-                }
-                LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 被动响应，不产生调度报文");
-                return true;
+                // 周期发送模型：Slave 帧勾选周期发送同样由本机发 Header，响应由
+                // RESPONSE_ENABLE 自动应答（本机即该帧从机）或外部从机提供；
+                // 无响应时由调度器超时注入无应答错误帧（报文窗口报错）。
+                LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 发 Header 等待响应");
+                return LinSendHeader(logicChannel, slot.Pid);
             }
             PcanLinHardware pcan;
             XlLinHardware xl;
@@ -328,18 +319,6 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>该 PID 自 sinceMs 以来是否有任意方向帧活动（Tx 回显/Rx/硬件错误帧）。
-        /// 从机监控模式：本机从机应答帧只可能由外部 Master 的 Header 触发，
-        /// 因此任意方向活动都证明帧头已出现在总线上。</summary>
-        internal static bool HasFrameActivitySince(byte logicChannel, byte pid, long sinceMs)
-        {
-            lock (_rxActivityLock)
-            {
-                long last;
-                return _lastFrameMs.TryGetValue(FrameKey(logicChannel, pid), out last) && last >= sinceMs;
-            }
-        }
-
         /// <summary>
         /// 注入从节点响应超时错误。仅由主节点调度器对非本机发布帧调用；
         /// 这表示 Header 已按调度发出但驱动没有返回可显示的 Rx/NoResponse 事件。
@@ -362,44 +341,6 @@ namespace PCAN_Client.LIN_API
             LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2"));
             LinReceive(logicChannel, frame);
         }
-        /// <summary>通道是否处于单设备主从一体驱动（ForceMasterDriven 运行期标志）。</summary>
-        internal static bool IsMasterDriven(byte logicChannel)
-        {
-            return logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
-                LinConfig.Channels[logicChannel - 1].ForceMasterDriven;
-        }
-
-        /// <summary>
-        /// 主从一体软件调度回退：Header 已发出但硬件没有返回真实响应（无外部从机、硬件
-        /// 自动应答在软件调度下不生效）时，注入一条带发送页数据的仿真响应帧。
-        /// 仅主从一体驱动模式使用；真实网络模式仍注入无数据错误帧（InjectNoResponse）。
-        /// </summary>
-        internal static void SimulateSlaveResponse(byte logicChannel, byte pid)
-        {
-            var ldf = GetLdf(logicChannel);
-            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
-            var configured = GetTransmitEntry(logicChannel, pid);
-            byte[] data = new byte[dlc];
-            if (configured != null && configured.Data != null && configured.Data.Length > 0)
-            {
-                data = new byte[configured.Data.Length];
-                Array.Copy(configured.Data, data, configured.Data.Length);
-            }
-            var frame = new LinFrameRecord
-            {
-                LogicChannel = logicChannel,
-                Pid = pid,
-                Direction = LinFrameDir.Rx,
-                Dlc = (byte)data.Length,
-                Data = data,
-                ChecksumType = GetFrameChecksumKind(logicChannel, pid),
-                ChecksumRx = LinChecksum.Calculate(data, pid, GetFrameChecksumKind(logicChannel, pid) == LinChecksumKind.Enhanced),
-                ChecksumOk = true,
-                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
-            };
-            LinDebugLog.Write("[SCH] SimulateSlaveResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + "（主从一体软件仿真响应）");
-            LinReceive(logicChannel, frame);
-        }
 
         // ==================== 接收汇聚 ====================
 
@@ -411,9 +352,6 @@ namespace PCAN_Client.LIN_API
             {
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
-
-                lock (_rxActivityLock)
-                    _lastFrameMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
 
                 // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显不能证明总线上出现了响应。
                 if (frame.Direction == LinFrameDir.Rx)

@@ -48,6 +48,8 @@ namespace PCAN_Client.LIN_API
         public bool IsConnected;
         /// <summary>运行期：单设备主从一体驱动（UI 引导选择，不持久化）。
         /// 置位后硬件以 modMaster 连接，纯 Slave 计划也能由本机发 Header 驱动响应帧。</summary>
+        /// <summary>已废弃：旧“主从一体驱动”运行期开关。周期发送模型下任何启用项都推导为
+        /// modMaster，本字段不再参与推导；保留字段仅为旧运行实例连接断开时兼容清理。</summary>
         [JsonIgnore]
         public bool ForceMasterDriven;
 
@@ -93,26 +95,17 @@ namespace PCAN_Client.LIN_API
         /// <summary>
         /// 返回驱动连接所需的基础模式。通道面板不再提供主从选择（发送模式定义在报文级）；
         /// PLIN/XL 硬件是通道级主从二选一，这里按发送计划透明推导：
-        /// - 计划含 Master/HeaderOnly（本机主动驱动）→ modMaster：主从一体，能发 Header、能在硬件调度表激活时自动应答、能纯监听
-        /// - 计划纯 Slave（本机仅响应外部 Header）→ modSlave：真实网络从机仿真
-        /// - 空计划 → modMaster：纯监听/手动发送（调度表挂起时硬件不产生流量）
+        /// - 有启用发送项（Master/Slave/HeaderOnly 任意类型）→ modMaster：周期发送需要
+        ///   本机发 Header；Slave 项的响应由 RESPONSE_ENABLE 自动应答或外部从机提供
+        /// - 无启用发送项 → modSlave：纯监听，仅应答外部 Master 发出的 Header
         /// </summary>
         public LinNodeMode GetHardwareMode()
         {
-            // 运行期“主从一体驱动”优先：单设备自测时纯 Slave 计划也以 modMaster 打开，
-            // 由本机调度表发 Header 驱动响应帧。
-            if (ForceMasterDriven) return LinNodeMode.Master;
-            bool hasSlave = false;
-            bool hasMasterCapability = false;
+            // 周期发送模型：勾选启用即由本机发 Header，因此任何启用项都要求 modMaster。
+            // 纯被动（无启用项）才以 modSlave 打开，只应答外部主节点。
             foreach (var entry in TransmitEntries ?? new List<LinTransmitEntry>())
-            {
-                if (entry == null || !entry.Enabled) continue;
-                if (entry.Type == LinTransmitType.Slave) hasSlave = true;
-                else if (entry.Type == LinTransmitType.Master || entry.Type == LinTransmitType.HeaderOnly)
-                    hasMasterCapability = true;
-            }
-
-            return hasSlave && !hasMasterCapability ? LinNodeMode.Slave : LinNodeMode.Master;
+                if (entry != null && entry.Enabled) return LinNodeMode.Master;
+            return LinNodeMode.Slave;
         }
 
         public bool HasEnabledSlaveEntries
@@ -141,8 +134,10 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public string GetHardwareModeNotice()
         {
+            // 周期发送模型下混合角色可行（modMaster 统一发 Header，Slave 项响应由
+            // RESPONSE_ENABLE/外部从机提供），但保留提示便于排查响应判定差异。
             return HasEnabledSlaveEntries && HasEnabledMasterEntries
-                ? "当前发送计划是混合角色，同时包含 Master/HeaderOnly 与 Slave；PCAN/PLIN 单通道只能使用一种硬件模式，Slave 项在 Master 模式下不会自动应答"
+                ? "当前发送计划是混合角色，同时包含 Master/HeaderOnly 与 Slave；Slave 项的响应由 RESPONSE_ENABLE 自动应答或外部从机提供，无响应时会在报文窗口报错"
                 : "";
         }
 
