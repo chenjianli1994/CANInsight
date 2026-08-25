@@ -25,10 +25,6 @@ namespace PCAN_Client.LIN_UI
         private StatusStrip _statusStrip;
         private ToolStripStatusLabel _lblBus, _lblSched, _lblCount, _lblError, _lblBaud;
 
-        // 调度表页签
-        private DataGridView _dgvSlots;
-        private ToolStrip _slotToolbar;
-
         // 从节点页签
         private DataGridView _dgvResp;
         /// <summary>从节点页签已展开（信号解析）的帧 PID 集合</summary>
@@ -329,86 +325,86 @@ namespace PCAN_Client.LIN_UI
         private void BuildTabs()
         {
             _tabLin = new TabControl { Dock = DockStyle.Fill };
-            _tabLin.TabPages.Add("调度表");
+
             _tabLin.TabPages.Add("从节点 / 发布");
             _tabLin.TabPages.Add("信号 (LDF)");
             _tabLin.TabPages.Add("发送");
 
-            // ---- 调度表页签 ----
-            var slotPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
-            _slotToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "Master/HeaderOnly 槽由本机发送；Slave 槽由硬件自动应答，单设备自测时可切换主从一体驱动" });
-            _slotToolbar.Items.Add(new ToolStripButton("暂停", ToolbarIcons.Get("stop")) { Tag = "suspend", ToolTipText = "暂停调度" });
-            _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step", ToolTipText = "主节点发送选中槽一次；从节点不能主动发送 Header" });
-            _slotToolbar.Items.Add(new ToolStripSeparator());
-            _slotToolbar.Items.Add(new ToolStripButton("从 LDF 导入", ToolbarIcons.Get("dbc")) { Tag = "import", ToolTipText = "按 LDF 调度表自动填充报文（帧ID/名称/时隙），默认全部勾选" });
-            _slotToolbar.Items.Add(new ToolStripButton("添加帧槽", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "手动添加一条空帧槽（默认 PID 0x00、时隙 15ms）" });
-            _slotToolbar.Items.Add(new ToolStripButton("删除", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中帧槽" });
-            _slotToolbar.Items.Add(new ToolStripButton("上移", ToolbarIcons.Get("scroll")) { Tag = "up", ToolTipText = "选中帧上移（调度顺序提前）" });
-            _slotToolbar.Items.Add(new ToolStripButton("下移", ToolbarIcons.Get("scroll")) { Tag = "down", ToolTipText = "选中帧下移（调度顺序延后）" });
-            _slotToolbar.ItemClicked += SlotToolbar_ItemClicked;
 
-            _dgvSlots = new DataGridView
-            {
-                Dock = DockStyle.Fill,
-                AllowUserToAddRows = false,
-                AllowUserToDeleteRows = false,
-                RowHeadersVisible = false,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
-            };
-            UiTheme.StyleGrid(_dgvSlots);
-            var colEn = new DataGridViewCheckBoxColumn { Name = "colEn", HeaderText = "启用", Width = 46, ThreeState = false };
-            _dgvSlots.Columns.Add(colEn);
-            _dgvSlots.Columns.Add("colSlotId", "帧 ID");
-            _dgvSlots.Columns["colSlotId"].Width = 80;
-            _dgvSlots.Columns.Add("colSlotName", "帧名称");
-            _dgvSlots.Columns["colSlotName"].Width = 240;
-            var colSlotType = new DataGridViewComboBoxColumn
-            {
-                Name = "colSlotType",
-                HeaderText = "发送类型",
-                Width = 130,
-                FlatStyle = FlatStyle.Flat,
-            };
-            colSlotType.Items.AddRange(new object[]
-            {
-                TransmitTypeText(LinTransmitType.Master),
-                TransmitTypeText(LinTransmitType.Slave),
-                TransmitTypeText(LinTransmitType.HeaderOnly),
-                TransmitTypeText(LinTransmitType.BreakOnly),
-            });
-            _dgvSlots.Columns.Add(colSlotType);
-            _dgvSlots.Columns.Add("colSlotMs", "时隙 (ms)");
-            _dgvSlots.Columns["colSlotMs"].Width = 90;
-            _dgvSlots.Columns.Add("colSlotCnt", "周期数");
-            _dgvSlots.Columns["colSlotCnt"].Width = 80;
-            _dgvSlots.Columns["colSlotCnt"].ReadOnly = true;
-            _dgvSlots.CellValueChanged += DgvSlots_CellValueChanged;
-            _dgvSlots.CellFormatting += DgvSlots_CellFormatting;
-            // 单元格值格式化/转换失败时静默跳过，不弹 DataGridView 默认错误对话框
-            // （如 CheckBox 列被旧数据赋了非 bool 值）。
-            _dgvSlots.DataError += (s, e) => { e.ThrowException = false; };
-            _dgvSlots.CurrentCellDirtyStateChanged += (s, e) =>
-            {
-                if (_dgvSlots.IsCurrentCellDirty) _dgvSlots.CommitEdit(DataGridViewDataErrorContexts.Commit);
-            };
-            slotPanel.Controls.Add(_dgvSlots);
-            var slotHint = new Label
-            {
-                Dock = DockStyle.Bottom,
-                AutoSize = false,
-                Height = 24,
-                Text = "勾选 = 该槽参与循环；Slave 只配置自动响应，Master/HeaderOnly 才主动发送；BreakOnly 需硬件支持；时隙 = 两帧间隔(ms)",
-                ForeColor = Color.Gray,
-                Font = UiTheme.UiFont,
-            };
-            slotPanel.Controls.Add(slotHint);
-            // 注意：Add 顺序决定 Dock 布局（逆 z-order 处理）——toolbar 必须最后 Add，
-            // 否则 Dock=Top 布局在 Fill 之后处理会被压成 0 高（表头被挤到页面顶部）
-            slotPanel.Controls.Add(_slotToolbar);
-            _slotToolbar.Dock = DockStyle.Top;
-            _tabLin.TabPages[0].Controls.Add(slotPanel);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
             // ---- 从节点/发布页签：LDF 全量报文目录 ----
             var respPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
@@ -471,7 +467,7 @@ namespace PCAN_Client.LIN_UI
                 Font = UiTheme.UiFont,
             };
             respPanel.Controls.Add(respHint);
-            _tabLin.TabPages[1].Controls.Add(respPanel);
+            _tabLin.TabPages[0].Controls.Add(respPanel);
 
             // ---- 信号页签 ----
             var sigPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
@@ -509,13 +505,15 @@ namespace PCAN_Client.LIN_UI
                 Font = UiTheme.UiFont,
             };
             sigPanel.Controls.Add(sigHint);
-            _tabLin.TabPages[2].Controls.Add(sigPanel);
+            _tabLin.TabPages[1].Controls.Add(sigPanel);
 
             // ---- 发送页签：每条报文一个发送项（类型同时用于硬件配置和调度）----
             var sendPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _sendToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
             _sendToolbar.Items.Add(new ToolStripButton("添加报文", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "新增发送项（默认 Master、PID 0x00、数据全 0）" });
-            _sendToolbar.Items.Add(new ToolStripButton("删除报文", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中发送项及其调度槽" });
+            _sendToolbar.Items.Add(new ToolStripButton("删除报文", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中发送项" });
+            _sendToolbar.Items.Add(new ToolStripSeparator());
+            _sendToolbar.Items.Add(new ToolStripButton("从 LDF 导入", ToolbarIcons.Get("dbc")) { Tag = "import", ToolTipText = "按 LDF 调度表自动填充发送项（帧ID/名称/时隙），默认全部勾选启用" });
             _sendToolbar.ItemClicked += SendToolbar_ItemClicked;
             _dgvSend = new DataGridView
             {
@@ -587,7 +585,7 @@ namespace PCAN_Client.LIN_UI
             // toolbar 最后 Add（Dock=Top 布局须在 Fill 之后处理）
             sendPanel.Controls.Add(_sendToolbar);
             _sendToolbar.Dock = DockStyle.Top;
-            _tabLin.TabPages[3].Controls.Add(sendPanel);
+            _tabLin.TabPages[2].Controls.Add(sendPanel);
             Controls.Add(_tabLin);
         }
 
@@ -738,13 +736,13 @@ namespace PCAN_Client.LIN_UI
             }
         }
 
-        private LinTransmitEntry EntryAtSlotIndex(int index)
-        {
-            var ch = CurrentChannel;
-            return ch != null && ch.TransmitEntries != null && index >= 0 && index < ch.TransmitEntries.Count
-                ? ch.TransmitEntries[index]
-                : null;
-        }
+
+
+
+
+
+
+
 
         /// <summary>初始化页签操作通道（报文表显示全部通道，按「通道」列区分；页签操作第一个已配置通道）</summary>
         private void InitChannelView()
@@ -753,7 +751,7 @@ namespace PCAN_Client.LIN_UI
             _lblBaud.Text = LinConfig.Channels.Count > 0
                 ? "LIN 通道 " + LinConfig.Channels.Count + " 路 · 波特率 " + LinConfig.Channels[0].Baudrate
                 : "未配置 LIN 通道";
-            RefreshSlotGrid();
+            SyncSchedulerSlots();
             RefreshRespGrid();
             RefreshSignalGrid();
             RefreshSendGrid();
@@ -778,7 +776,7 @@ namespace PCAN_Client.LIN_UI
                             ch.ConnectError = "LDF 已修改，请重新连接";
                         }
                         LinConfig.SaveLinConfig();
-                        RefreshSlotGrid();
+                        SyncSchedulerSlots();
                         RefreshRespGrid();
                         RefreshSignalGrid();
                         RefreshSendGrid();
@@ -1345,194 +1343,206 @@ namespace PCAN_Client.LIN_UI
                 // PEAK 硬件调度表（SetSchedule/StartSchedule）在当前 PLIN Manager/Pro FD 环境全部
                 // errUnknown（官方签名实测），统一走软件调度（定时器 + LIN_Write），Vector 本就软件
                 sc = new LinScheduler(_channel, false);
-                sc.SlotChanged += i => { try { BeginInvoke(new Action(() => UpdateSlotRow(i))); } catch { } };
+
                 sc.RunningChanged += r => { try { BeginInvoke(new Action(() => RefreshStatusBar())); } catch { } };
                 _schedulers[_channel] = sc;
             }
             return sc;
         }
 
-        private void RefreshSlotGrid()
+        /// <summary>同步发送项到调度器槽，并按启用勾选自动启停周期发送（勾选即发，取消即停）。</summary>
+        private void SyncSchedulerSlots()
         {
             if (_disposed) return;
-            if (CurrentChannel == null)
-            {
-                _dgvSlots.Rows.Clear();
-                return;
-            }
             SyncSchedulerFromConfig();
             var sc = GetScheduler();
-            _dgvSlots.Rows.Clear();
-            var ldf = GetLdf();
-            foreach (var slot in sc.Slots)
+            if (!Lin_API.IsConnected(_channel)) { sc.Suspend(); return; }
+            bool hasEnabled = false;
+            foreach (var s in sc.Slots)
+                if (s != null && s.Enabled) { hasEnabled = true; break; }
+            if (hasEnabled)
             {
-                // 当前模型保证一个 PID 只有一个发送项；槽与发送项按顺序一一对应。
-                // 不按 PID 反查，避免重复槽修改了另一条发送项。
-                int idx = _dgvSlots.Rows.Add(slot.Enabled, "0x" + slot.Pid.ToString("X2"),
-                    LinLdfHelper.GetFrameName(ldf, slot.Pid), TransmitTypeText(slot.TransmitType), slot.SlotMs, slot.Counter);
-                _dgvSlots.Rows[idx].Tag = slot;
-            }
-        }
-
-        /// <summary>槽跳变轻量刷新：仅更新对应行周期数与高亮（避免 10ms 槽位下整表重建闪烁/打断编辑）</summary>
-        private void UpdateSlotRow(int slotIndex)
-        {
-            if (_disposed) return;
-            if (slotIndex >= 0 && slotIndex < _dgvSlots.Rows.Count)
-            {
-                var row = _dgvSlots.Rows[slotIndex];
-                if (row.Tag is LinScheduleSlot slot)
-                    row.Cells["colSlotCnt"].Value = slot.Counter;
-                _dgvSlots.InvalidateRow(slotIndex);
-            }
-        }
-
-        private void DgvSlots_CellValueChanged(object sender, DataGridViewCellEventArgs e)
-        {
-            if (e.RowIndex < 0) return;
-            var row = _dgvSlots.Rows[e.RowIndex];
-            var slot = (LinScheduleSlot)row.Tag;
-            if (slot == null) return;
-            var entry = EntryAtSlotIndex(e.RowIndex);
-            switch (_dgvSlots.Columns[e.ColumnIndex].Name)
-            {
-                case "colEn":
-                    slot.Enabled = (bool)(row.Cells["colEn"].Value ?? false);
-                    if (entry != null) entry.Enabled = slot.Enabled;
-                    break;
-                case "colSlotId":
-                    byte oldPid = slot.Pid;
-                    try { slot.Pid = ParsePid((row.Cells["colSlotId"].Value ?? "").ToString()); }
-                    catch { }
-                    if (slot.Pid > 0x3F) { slot.Pid = oldPid; break; }
-                    if (CurrentChannel != null && CurrentChannel.TransmitEntries.Any(x => x != null && x != entry && x.Pid == slot.Pid))
-                    {
-                        slot.Pid = oldPid;
-                        ShowError("该 PID 已存在发送项，调度槽必须引用唯一发送项");
-                        RefreshSlotGrid();
-                        break;
-                    }
-                    if (entry != null) entry.Pid = slot.Pid;
-                    row.Cells["colSlotName"].Value = LinLdfHelper.GetFrameName(GetLdf(), slot.Pid);
-                    if (entry != null) row.Cells["colSlotType"].Value = TransmitTypeText(entry.Type);
-                    break;
-                case "colSlotType":
-                    slot.TransmitType = ParseTransmitType(row.Cells["colSlotType"].Value);
-                    if (entry != null) entry.Type = slot.TransmitType;
-                    if (Lin_API.IsConnected(_channel))
-                    {
-                        Lin_API.LinDisconnect(_channel);
-                        if (CurrentChannel != null) CurrentChannel.ConnectError = "发送类型已修改，请重新连接";
-                    }
-                    RefreshSendGrid();
-                    break;
-                case "colSlotMs":
-                    int ms;
-                    if (int.TryParse((row.Cells["colSlotMs"].Value ?? "").ToString(), out ms) && ms > 0)
-                    {
-                        slot.SlotMs = ms;
-                        if (entry != null) entry.SlotMs = ms;
-                    }
-                    break;
-            }
-            if (CurrentChannel != null) LinConfig.SaveLinConfig();
-            RefreshStatusBar();
-        }
-
-        private void DgvSlots_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
-        {
-            if (e.RowIndex < 0) return;
-            var row = _dgvSlots.Rows[e.RowIndex];
-            if (row.Tag is LinScheduleSlot && GetScheduler().CurrentSlotIndex == e.RowIndex && GetScheduler().IsRunning)
-            {
-                e.CellStyle.BackColor = UiTheme.SelectionBack; // 当前槽高亮
-            }
-        }
-
-        private void SlotToolbar_ItemClicked(object sender, ToolStripItemClickedEventArgs e)
-        {
-            if (!(e.ClickedItem.Tag is string op)) return;
-            var sc = GetScheduler();
-            switch (op)
-            {
-                case "start":
-                    // 周期发送模型：发送列表勾选启用即按各自时隙周期发送（与 CAN 发送一致）。
-                    // GetHardwareMode 已按启用项推导为 modMaster；Slave/HeaderOnly 项发 Header
-                    // 后等待响应，无响应由调度器注入无应答错误帧在报文窗口报错。
+                if (!sc.IsRunning)
+                {
                     string err = sc.ValidateSlots(GetBaudrate());
-                    if (err.Length > 0)
-                    {
-                        MessageBox.Show(this, err, "调度表", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-                    if (!sc.Start()) ShowError(sc.LastError.Length > 0 ? "调度启动失败: " + sc.LastError : "调度启动失败（无槽或未连接）");
-                    break;
-                case "suspend":
-                    sc.Suspend();
-                    break;
-                case "step":
-                    // 单步：按发送原语单发一次（Master 附响应，Slave/HeaderOnly 发 Header）。
-                    if (_dgvSlots.SelectedRows.Count > 0)
-                    {
-                        var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
-                        if (slot != null && !Lin_API.LinSendScheduleSlot(_channel, slot))
-                            ShowError("单步发送失败（未连接）");
-                    }
-                    break;
-                case "add":
-                    if (CurrentChannel != null)
-                    {
-                        byte pid = 0;
-                        while (FindSendEntry(pid) != null && pid < 0x3F) pid++;
-                        var entry = CreateTransmitEntry(pid);
-                        entry.Type = LinTransmitType.Master;
-                        CurrentChannel.TransmitEntries.Add(entry);
-                        LinConfig.SaveLinConfig();
-                    }
-                    RefreshSlotGrid();
-                    RefreshSendGrid();
-                    RefreshRespGrid();
-                    break;
-                case "import":
-                    ImportSlotsFromLdf();
-                    break;
-                case "del":
-                    if (_dgvSlots.SelectedRows.Count > 0)
-                    {
-                        int rowIndex = _dgvSlots.SelectedRows[0].Index;
-                        if (CurrentChannel != null && rowIndex >= 0 && rowIndex < CurrentChannel.TransmitEntries.Count)
-                            CurrentChannel.TransmitEntries.RemoveAt(rowIndex);
-                        LinConfig.SaveLinConfig();
-                        RefreshSlotGrid();
-                        RefreshSendGrid();
-                        RefreshRespGrid();
-                    }
-                    break;
-                case "up":
-                    MoveSlot(sc, -1);
-                    break;
-                case "down":
-                    MoveSlot(sc, 1);
-                    break;
+                    if (err.Length > 0) { ShowError(err); return; }
+                    if (!sc.Start()) ShowError(sc.LastError.Length > 0 ? "周期发送启动失败: " + sc.LastError : "周期发送启动失败");
+                }
             }
-            RefreshStatusBar();
+            else if (sc.IsRunning) sc.Suspend();
         }
 
-        private void MoveSlot(LinScheduler sc, int dir)
-        {
-            if (_dgvSlots.SelectedRows.Count == 0) return;
-            int i = _dgvSlots.SelectedRows[0].Index;
-            int j = i + dir;
-            var ch = CurrentChannel;
-            if (ch == null || j < 0 || j >= ch.TransmitEntries.Count) return;
-            var t = ch.TransmitEntries[i];
-            ch.TransmitEntries[i] = ch.TransmitEntries[j];
-            ch.TransmitEntries[j] = t;
-            LinConfig.SaveLinConfig();
-            RefreshSlotGrid();
-            RefreshSendGrid();
-            if (j >= 0 && j < _dgvSlots.Rows.Count) _dgvSlots.Rows[j].Selected = true;
-        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         private string SelectScheduleTable(LinLdfFile ldf)
         {
@@ -1618,10 +1628,10 @@ namespace PCAN_Client.LIN_UI
             }
             CurrentChannel.TransmitEntries = imported;
             LinConfig.SaveLinConfig();
-            RefreshSlotGrid();
+            SyncSchedulerSlots();
             RefreshSendGrid();
             RefreshRespGrid();
-            MessageBox.Show(this, $"已从 LDF 调度表 {tableName ?? "全部帧"} 导入 {imported.Count} 个发送项；重复 PID 已合并。发送类型可在发送页或调度表中调整。", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, $"已从 LDF 调度表 {tableName ?? "全部帧"} 导入 {imported.Count} 个发送项；重复 PID 已合并。勾选启用即开始周期发送，发送类型可在发送页调整。", "发送列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private LinLdfFile GetLdf()
@@ -1733,7 +1743,7 @@ namespace PCAN_Client.LIN_UI
             SyncSchedulerFromConfig();
             RefreshRespGrid();
             RefreshSendGrid();
-            RefreshSlotGrid();
+            SyncSchedulerSlots();
         }
 
         private void DgvResp_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -1956,7 +1966,7 @@ namespace PCAN_Client.LIN_UI
                     CurrentChannel.TransmitEntries.Add(newEntry);
                     LinConfig.SaveLinConfig();
                     RefreshSendGrid();
-                    RefreshSlotGrid();
+                    SyncSchedulerSlots();
                     RefreshRespGrid();
                     int idx = _dgvSend.Rows.Count - 1;
                     if (idx < 0) return;
@@ -1973,11 +1983,14 @@ namespace PCAN_Client.LIN_UI
                             if (entryIndex >= 0) CurrentChannel.TransmitEntries.RemoveAt(entryIndex);
                             if (Lin_API.IsConnected(_channel)) Lin_API.DisableSlaveResponse(_channel, entry.Pid, entry.Dlc);
                             LinConfig.SaveLinConfig();
-                            RefreshSlotGrid();
+                            SyncSchedulerSlots();
                             RefreshRespGrid();
                         }
                         RefreshSendGrid();
                     }
+                    break;
+                case "import":
+                    ImportSlotsFromLdf();
                     break;
             }
         }
@@ -2151,6 +2164,7 @@ namespace PCAN_Client.LIN_UI
                             ShowError("发送项启用失败，请检查硬件能力");
                     }
                     LinConfig.SaveLinConfig();
+                    SyncSchedulerSlots(); // 勾选即发、取消即停（连接时自动启停调度器）
                     RefreshRespGrid();
                     break;
                 case "colSendPid":
@@ -2176,7 +2190,7 @@ namespace PCAN_Client.LIN_UI
                         CurrentChannel.ConnectError = "发送项 PID 已修改，请重新连接";
                     }
                     LinConfig.SaveLinConfig();
-                    RefreshSlotGrid();
+                    SyncSchedulerSlots();
                     RefreshRespGrid();
                     break;
                 case "colSendType":
@@ -2195,7 +2209,7 @@ namespace PCAN_Client.LIN_UI
                     else if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, entry.Dlc, newType))
                         ShowError("发送类型下发失败");
                     LinConfig.SaveLinConfig();
-                    RefreshSlotGrid();
+                    SyncSchedulerSlots();
                     RefreshRespGrid();
                     break;
                 case "colSendDlc":
@@ -2227,7 +2241,7 @@ namespace PCAN_Client.LIN_UI
                     if (entryIndex >= 0 && entryIndex < GetScheduler().Slots.Count)
                         GetScheduler().Slots[entryIndex].SlotMs = slotMs;
                     LinConfig.SaveLinConfig();
-                    RefreshSlotGrid();
+                    SyncSchedulerSlots();
                     break;
                 case "colSendData":
                     var data = ParseHexData((row.Cells["colSendData"].Value ?? "").ToString());
