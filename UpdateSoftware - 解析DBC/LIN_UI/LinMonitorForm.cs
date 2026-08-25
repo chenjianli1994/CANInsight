@@ -40,6 +40,15 @@ namespace PCAN_Client.LIN_UI
         // 发送页签（自定义报文定义表）
         private DataGridView _dgvSend;
         private ToolStrip _sendToolbar;
+        private bool _suppressSendWriteback;
+        private readonly HashSet<LinTransmitEntry> _expandedSend = new HashSet<LinTransmitEntry>();
+
+        private sealed class SendSignalRow
+        {
+            public LinTransmitEntry Entry;
+            public string SignalName;
+            public ushort Offset;
+        }
 
         // ==================== 数据 ====================
         // 帧日志（Scroll 数据源）：接收线程 O(1) 追加，UI 线程按 100ms 节流重建（与 CAN 报文窗口同架构）
@@ -278,7 +287,7 @@ namespace PCAN_Client.LIN_UI
                 area.Height -= _dgvFrames.ColumnHeadersHeight;
                 if (area.Height <= 0) return;
                 TextRenderer.DrawText(e.Graphics,
-                    "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）",
+                    EmptyFrameHint(),
                     UiTheme.UiFont, area, Color.Gray,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             };
@@ -355,6 +364,21 @@ namespace PCAN_Client.LIN_UI
             _dgvSlots.Columns["colSlotId"].Width = 80;
             _dgvSlots.Columns.Add("colSlotName", "帧名称");
             _dgvSlots.Columns["colSlotName"].Width = 240;
+            var colSlotType = new DataGridViewComboBoxColumn
+            {
+                Name = "colSlotType",
+                HeaderText = "发送类型",
+                Width = 130,
+                FlatStyle = FlatStyle.Flat,
+            };
+            colSlotType.Items.AddRange(new object[]
+            {
+                TransmitTypeText(LinTransmitType.Master),
+                TransmitTypeText(LinTransmitType.Slave),
+                TransmitTypeText(LinTransmitType.HeaderOnly),
+                TransmitTypeText(LinTransmitType.BreakOnly),
+            });
+            _dgvSlots.Columns.Add(colSlotType);
             _dgvSlots.Columns.Add("colSlotMs", "时隙 (ms)");
             _dgvSlots.Columns["colSlotMs"].Width = 90;
             _dgvSlots.Columns.Add("colSlotCnt", "周期数");
@@ -372,7 +396,7 @@ namespace PCAN_Client.LIN_UI
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 24,
-                Text = "勾选 = 该帧参与循环调度（默认全勾）；帧 ID = 报文 PID；时隙 = 两帧发送间隔(ms)；周期数 = 已发送次数(只读)。「从 LDF 导入」按 LDF 调度表自动填充",
+                Text = "勾选 = 该槽参与循环；Slave 只配置自动响应，Master/HeaderOnly 才主动发送；BreakOnly 需硬件支持；时隙 = 两帧间隔(ms)",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -383,7 +407,7 @@ namespace PCAN_Client.LIN_UI
             _slotToolbar.Dock = DockStyle.Top;
             _tabLin.TabPages[0].Controls.Add(slotPanel);
 
-            // ---- 从节点/发布页签 ----
+            // ---- 从节点/发布页签：LDF 全量报文目录 ----
             var respPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _dgvResp = new DataGridView
             {
@@ -391,49 +415,55 @@ namespace PCAN_Client.LIN_UI
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 RowHeadersVisible = false,
+                ReadOnly = true,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
             };
             UiTheme.StyleGrid(_dgvResp);
-            var colRspExpand = new DataGridViewTextBoxColumn { Name = "colRspExpand", HeaderText = "", Width = 30, ReadOnly = true, SortMode = DataGridViewColumnSortMode.NotSortable };
-            _dgvResp.Columns.Add(colRspExpand);
-            // LDF 导入内容（ID/帧名/DLC）固定，仅「数据」列可编辑
-            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspId", HeaderText = "发布 ID", Width = 80, ReadOnly = true });
-            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspName", HeaderText = "帧名称", Width = 240, ReadOnly = true });
-            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn { Name = "colRspDlc", HeaderText = "DLC/位", Width = 50, ReadOnly = true });
-            _dgvResp.Columns.Add("colRspData", "数据 (Hex)");
-            _dgvResp.Columns["colRspData"].Width = 250;
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspExpand", HeaderText = "", Width = 30, ReadOnly = true,
+                SortMode = DataGridViewColumnSortMode.NotSortable
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspId", HeaderText = "帧 ID", Width = 70, ReadOnly = true
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspName", HeaderText = "帧名称", Width = 230, ReadOnly = true
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspPublisher", HeaderText = "发布节点", Width = 150, ReadOnly = true
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspType", HeaderText = "帧类型", Width = 110, ReadOnly = true
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspDlc", HeaderText = "DLC", Width = 50, ReadOnly = true
+            });
+            _dgvResp.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colRspAdded", HeaderText = "发送页", Width = 80, ReadOnly = true
+            });
+            var colRspAdd = new DataGridViewButtonColumn
+            {
+                Name = "colRspAdd", HeaderText = "操作", Width = 80, ReadOnly = true,
+                FlatStyle = FlatStyle.Flat, UseColumnTextForButtonValue = false
+            };
+            _dgvResp.Columns.Add(colRspAdd);
             _dgvResp.CellContentClick += DgvResp_CellContentClick;
-            _dgvResp.CellValueChanged += DgvResp_CellValueChanged;
             _dgvResp.CellDoubleClick += DgvResp_CellDoubleClick;
-            _dgvResp.CurrentCellDirtyStateChanged += (s, e) =>
-            {
-                if (_dgvResp.IsCurrentCellDirty) _dgvResp.CommitEdit(DataGridViewDataErrorContexts.Commit);
-            };
-            // 信号行编辑时编辑框只显示数值（去掉单位后缀），单位不可编辑
-            _dgvResp.EditingControlShowing += (s, e) =>
-            {
-                if (!(e.Control is DataGridViewTextBoxEditingControl ed)) return;
-                var cur = _dgvResp.CurrentCell;
-                if (cur == null) return;
-                var row = _dgvResp.Rows[cur.RowIndex];
-                if (!(row.Tag is Tuple<byte, string>)) return;
-                var ldf2 = GetLdf();
-                if (ldf2 == null) return;
-                var sig = FindSignalDef(ldf2, ((Tuple<byte, string>)row.Tag).Item2);
-                if (sig == null || sig.Unit.Length == 0) return;
-                string txt = (cur.Value ?? "").ToString();
-                if (txt.EndsWith(sig.Unit, StringComparison.OrdinalIgnoreCase))
-                    txt = txt.Substring(0, txt.Length - sig.Unit.Length).Trim();
-                ed.Text = txt;
-            };
             respPanel.Controls.Add(_dgvResp);
             var respHint = new Label
             {
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "主节点模式显示本机主节点发布帧；从节点模式只显示「通道管理」中选定本机从节点发布的帧。未选择本机从节点时仅监听，不自动应答。点「＋」或双击行展开信号（带单位）改物理值。",
+                Text = "这里显示当前 LDF 的全部报文。点击“添加”把报文加入发送页并自动生成调度槽；“＋”或双击行可展开 LDF 信号定义。Slave 报文只有在外部 Master 发 Header 时才会出现在报文流中。",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -478,11 +508,11 @@ namespace PCAN_Client.LIN_UI
             sigPanel.Controls.Add(sigHint);
             _tabLin.TabPages[2].Controls.Add(sigPanel);
 
-            // ---- 发送页签：自定义报文定义表（一条一行，是否发送由调度表勾选）----
+            // ---- 发送页签：每条报文一个发送项（类型同时用于硬件配置和调度）----
             var sendPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _sendToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-            _sendToolbar.Items.Add(new ToolStripButton("添加报文", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "新增一条报文定义（默认 PID 0x00、数据全 0），自动加入「调度表」页签并默认勾选" });
-            _sendToolbar.Items.Add(new ToolStripButton("删除报文", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中报文（同步从「调度表」移除）" });
+            _sendToolbar.Items.Add(new ToolStripButton("添加报文", ToolbarIcons.Get("plus")) { Tag = "add", ToolTipText = "新增发送项（默认 Master、PID 0x00、数据全 0）" });
+            _sendToolbar.Items.Add(new ToolStripButton("删除报文", ToolbarIcons.Get("clear")) { Tag = "del", ToolTipText = "删除选中发送项及其调度槽" });
             _sendToolbar.ItemClicked += SendToolbar_ItemClicked;
             _dgvSend = new DataGridView
             {
@@ -494,28 +524,56 @@ namespace PCAN_Client.LIN_UI
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
             };
             UiTheme.StyleGrid(_dgvSend);
+            _dgvSend.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                Name = "colSendExpand", HeaderText = "", Width = 30, ReadOnly = true,
+                SortMode = DataGridViewColumnSortMode.NotSortable
+            });
+            var colSendEn = new DataGridViewCheckBoxColumn { Name = "colSendEn", HeaderText = "启用", Width = 46, ThreeState = false };
+            _dgvSend.Columns.Add(colSendEn);
             _dgvSend.Columns.Add("colSendPid", "帧 ID");
             _dgvSend.Columns["colSendPid"].Width = 80;
             _dgvSend.Columns.Add("colSendName", "帧名称");
             _dgvSend.Columns["colSendName"].Width = 240;
             _dgvSend.Columns["colSendName"].ReadOnly = true;
+            var colSendType = new DataGridViewComboBoxColumn
+            {
+                Name = "colSendType",
+                HeaderText = "发送类型",
+                Width = 130,
+                FlatStyle = FlatStyle.Flat,
+            };
+            colSendType.Items.AddRange(new object[]
+            {
+                TransmitTypeText(LinTransmitType.Master),
+                TransmitTypeText(LinTransmitType.Slave),
+                TransmitTypeText(LinTransmitType.HeaderOnly),
+                TransmitTypeText(LinTransmitType.BreakOnly),
+            });
+            _dgvSend.Columns.Add(colSendType);
             _dgvSend.Columns.Add("colSendDlc", "DLC");
             _dgvSend.Columns["colSendDlc"].Width = 50;
-            _dgvSend.Columns["colSendDlc"].ReadOnly = true;
+            _dgvSend.Columns["colSendDlc"].ReadOnly = false;
+            _dgvSend.Columns.Add("colSendSlotMs", "时隙 (ms)");
+            _dgvSend.Columns["colSendSlotMs"].Width = 85;
+            _dgvSend.Columns["colSendSlotMs"].ReadOnly = false;
             _dgvSend.Columns.Add("colSendData", "数据 (Hex)");
             _dgvSend.Columns["colSendData"].Width = 250;
+            _dgvSend.CellContentClick += DgvSend_CellContentClick;
+            _dgvSend.CellDoubleClick += DgvSend_CellDoubleClick;
             _dgvSend.CellValueChanged += DgvSend_CellValueChanged;
             _dgvSend.CurrentCellDirtyStateChanged += (s, e) =>
             {
                 if (_dgvSend.IsCurrentCellDirty) _dgvSend.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
+            _dgvSend.EditingControlShowing += DgvSend_EditingControlShowing;
             sendPanel.Controls.Add(_dgvSend);
             var sendHint = new Label
             {
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
                 Height = 40,
-                Text = "作用：定义本机要发送的报文（一条一行，可多条）。「添加报文」自动把该报文加入「调度表」页签并默认勾选——调度表勾选决定是否参与循环发送。\n帧 ID/数据可直接编辑（帧名称按 LDF 自动显示，DLC 随数据长度），编辑后自动同步硬件；发送动作统一在「调度表」页签进行",
+                Text = "发送项独立选择 Master / Slave / HeaderOnly / BreakOnly；Slave 只等待外部 Master Header，不会自行产生报文。添加 LDF 报文默认按 Master/HeaderOnly 处理，需明确选择 Slave 才配置本机响应；“＋”或双击可编辑信号。",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -565,6 +623,127 @@ namespace PCAN_Client.LIN_UI
 
         // ==================== 通道选择/连接 ====================
 
+        private LinChannel CurrentChannel
+        {
+            get
+            {
+                return _channel >= 1 && _channel <= LinConfig.Channels.Count
+                    ? LinConfig.Channels[_channel - 1]
+                    : null;
+            }
+        }
+
+        private static string TransmitTypeText(LinTransmitType type)
+        {
+            switch (type)
+            {
+                case LinTransmitType.Master: return "Master（发布）";
+                case LinTransmitType.Slave: return "Slave（响应）";
+                case LinTransmitType.HeaderOnly: return "HeaderOnly（仅头）";
+                case LinTransmitType.BreakOnly: return "BreakOnly（不支持）";
+                default: return type.ToString();
+            }
+        }
+
+        private static LinTransmitType ParseTransmitType(object value)
+        {
+            string text = (value ?? "").ToString();
+            if (text.StartsWith("Slave", StringComparison.OrdinalIgnoreCase)) return LinTransmitType.Slave;
+            if (text.StartsWith("HeaderOnly", StringComparison.OrdinalIgnoreCase)) return LinTransmitType.HeaderOnly;
+            if (text.StartsWith("BreakOnly", StringComparison.OrdinalIgnoreCase)) return LinTransmitType.BreakOnly;
+            return LinTransmitType.Master;
+        }
+
+        private static byte EntryDlc(LinTransmitEntry entry, LinLdfFile ldf)
+        {
+            if (entry != null && entry.Dlc <= 8 && entry.Dlc > 0) return entry.Dlc;
+            if (entry != null && ldf != null && ldf.Frames.ContainsKey(entry.Pid))
+            {
+                byte dlc = ldf.Frames[entry.Pid].Dlc;
+                if (dlc > 0 && dlc <= 8) return dlc;
+            }
+            return 8;
+        }
+
+        private static byte[] EntryData(LinTransmitEntry entry, byte dlc)
+        {
+            byte[] data = entry == null || entry.Data == null ? new byte[dlc] : (byte[])entry.Data.Clone();
+            if (data.Length != dlc) Array.Resize(ref data, dlc);
+            return data;
+        }
+
+        private static LinTransmitType DefaultTransmitType(LinLdfFile ldf, byte pid)
+        {
+            if (LinLdfHelper.IsMasterPublisherFrame(ldf, pid)) return LinTransmitType.Master;
+            // LDF 只描述总线上的发布者，不代表该发布者就是本工具。
+            // 添加一个从节点发布帧时，默认应由本机 Master 发送 Header 请求响应；
+            // 只有用户在发送页明确改成 Slave，才把该帧配置为本机自动响应。
+            return LinTransmitType.HeaderOnly;
+        }
+
+        private LinTransmitEntry CreateTransmitEntry(byte pid)
+        {
+            var ldf = GetLdf();
+            byte dlc = 8;
+            LinFrameDef def;
+            if (ldf != null && ldf.Frames.TryGetValue(pid, out def) && def.Dlc > 0 && def.Dlc <= 8)
+                dlc = def.Dlc;
+            LinTransmitType type = DefaultTransmitType(ldf, pid);
+            var ch = CurrentChannel;
+            if (ch != null && ch.Mode == LinNodeMode.Slave &&
+                LinLdfHelper.IsLocalSlaveResponseFrame(ldf, pid, ch.LocalNodeName))
+                type = LinTransmitType.Slave;
+            return new LinTransmitEntry
+            {
+                Pid = pid,
+                Type = type,
+                Enabled = true,
+                Dlc = dlc,
+                Data = new byte[dlc],
+                SlotMs = 15,
+            };
+        }
+
+        private LinTransmitEntry FindSendEntry(byte pid)
+        {
+            var ch = CurrentChannel;
+            if (ch == null || ch.TransmitEntries == null) return null;
+            return ch.FindTransmitEntry(pid);
+        }
+
+        private void SyncSchedulerFromConfig()
+        {
+            var ch = CurrentChannel;
+            if (ch == null) return;
+            if (ch.TransmitEntries == null) ch.TransmitEntries = new List<LinTransmitEntry>();
+            var sc = GetScheduler();
+            while (sc.Slots.Count > ch.TransmitEntries.Count) sc.Slots.RemoveAt(sc.Slots.Count - 1);
+            while (sc.Slots.Count < ch.TransmitEntries.Count) sc.Slots.Add(new LinScheduleSlot());
+            for (int i = 0; i < ch.TransmitEntries.Count; i++)
+            {
+                var entry = ch.TransmitEntries[i];
+                if (entry == null)
+                {
+                    entry = new LinTransmitEntry { Pid = 0, Dlc = 8, Data = new byte[8], SlotMs = 15 };
+                    ch.TransmitEntries[i] = entry;
+                }
+                if (entry.SlotMs <= 0) entry.SlotMs = 15;
+                var slot = sc.Slots[i];
+                slot.Enabled = entry.Enabled;
+                slot.Pid = entry.Pid;
+                slot.TransmitType = entry.Type;
+                slot.SlotMs = entry.SlotMs;
+            }
+        }
+
+        private LinTransmitEntry EntryAtSlotIndex(int index)
+        {
+            var ch = CurrentChannel;
+            return ch != null && ch.TransmitEntries != null && index >= 0 && index < ch.TransmitEntries.Count
+                ? ch.TransmitEntries[index]
+                : null;
+        }
+
         /// <summary>初始化页签操作通道（报文表显示全部通道，按「通道」列区分；页签操作第一个已配置通道）</summary>
         private void InitChannelView()
         {
@@ -575,6 +754,7 @@ namespace PCAN_Client.LIN_UI
             RefreshSlotGrid();
             RefreshRespGrid();
             RefreshSignalGrid();
+            RefreshSendGrid();
         }
 
         private void LoadLdf()
@@ -590,7 +770,6 @@ namespace PCAN_Client.LIN_UI
                         var ldf = LinLdfHelper.Parse(dlg.FileName);
                         ch.LdfHelper = ldf;
                         ch.LdfPath = dlg.FileName;
-                        ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ldf, ch.LocalNodeName);
                         if (Lin_API.IsConnected(_channel))
                         {
                             Lin_API.LinDisconnect(_channel);
@@ -600,6 +779,7 @@ namespace PCAN_Client.LIN_UI
                         RefreshSlotGrid();
                         RefreshRespGrid();
                         RefreshSignalGrid();
+                        RefreshSendGrid();
                     }
                     catch (Exception ex)
                     {
@@ -1173,13 +1353,21 @@ namespace PCAN_Client.LIN_UI
         private void RefreshSlotGrid()
         {
             if (_disposed) return;
+            if (CurrentChannel == null)
+            {
+                _dgvSlots.Rows.Clear();
+                return;
+            }
+            SyncSchedulerFromConfig();
             var sc = GetScheduler();
             _dgvSlots.Rows.Clear();
             var ldf = GetLdf();
             foreach (var slot in sc.Slots)
             {
+                // 当前模型保证一个 PID 只有一个发送项；槽与发送项按顺序一一对应。
+                // 不按 PID 反查，避免重复槽修改了另一条发送项。
                 int idx = _dgvSlots.Rows.Add(slot.Enabled, "0x" + slot.Pid.ToString("X2"),
-                    LinLdfHelper.GetFrameName(ldf, slot.Pid), slot.SlotMs, slot.Counter);
+                    LinLdfHelper.GetFrameName(ldf, slot.Pid), TransmitTypeText(slot.TransmitType), slot.SlotMs, slot.Counter);
                 _dgvSlots.Rows[idx].Tag = slot;
             }
         }
@@ -1203,19 +1391,50 @@ namespace PCAN_Client.LIN_UI
             var row = _dgvSlots.Rows[e.RowIndex];
             var slot = (LinScheduleSlot)row.Tag;
             if (slot == null) return;
+            var entry = EntryAtSlotIndex(e.RowIndex);
             switch (_dgvSlots.Columns[e.ColumnIndex].Name)
             {
-                case "colEn": slot.Enabled = (bool)(row.Cells["colEn"].Value ?? false); break;
+                case "colEn":
+                    slot.Enabled = (bool)(row.Cells["colEn"].Value ?? false);
+                    if (entry != null) entry.Enabled = slot.Enabled;
+                    break;
                 case "colSlotId":
+                    byte oldPid = slot.Pid;
                     try { slot.Pid = ParsePid((row.Cells["colSlotId"].Value ?? "").ToString()); }
                     catch { }
+                    if (slot.Pid > 0x3F) { slot.Pid = oldPid; break; }
+                    if (CurrentChannel != null && CurrentChannel.TransmitEntries.Any(x => x != null && x != entry && x.Pid == slot.Pid))
+                    {
+                        slot.Pid = oldPid;
+                        ShowError("该 PID 已存在发送项，调度槽必须引用唯一发送项");
+                        RefreshSlotGrid();
+                        break;
+                    }
+                    if (entry != null) entry.Pid = slot.Pid;
                     row.Cells["colSlotName"].Value = LinLdfHelper.GetFrameName(GetLdf(), slot.Pid);
+                    if (entry != null) row.Cells["colSlotType"].Value = TransmitTypeText(entry.Type);
+                    break;
+                case "colSlotType":
+                    slot.TransmitType = ParseTransmitType(row.Cells["colSlotType"].Value);
+                    if (entry != null) entry.Type = slot.TransmitType;
+                    if (Lin_API.IsConnected(_channel))
+                    {
+                        Lin_API.LinDisconnect(_channel);
+                        if (CurrentChannel != null) CurrentChannel.ConnectError = "发送类型已修改，请重新连接";
+                    }
+                    RefreshSendGrid();
                     break;
                 case "colSlotMs":
                     int ms;
-                    if (int.TryParse((row.Cells["colSlotMs"].Value ?? "").ToString(), out ms) && ms > 0) slot.SlotMs = ms;
+                    if (int.TryParse((row.Cells["colSlotMs"].Value ?? "").ToString(), out ms) && ms > 0)
+                    {
+                        slot.SlotMs = ms;
+                        if (entry != null) entry.SlotMs = ms;
+                    }
                     break;
             }
+            if (CurrentChannel != null) LinConfig.SaveLinConfig();
+            RefreshStatusBar();
         }
 
         private void DgvSlots_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
@@ -1235,10 +1454,11 @@ namespace PCAN_Client.LIN_UI
             switch (op)
             {
                 case "start":
-                    if (!IsMasterMode())
+                    if (CurrentChannel != null && CurrentChannel.GetHardwareMode() == LinNodeMode.Slave)
                     {
-                        sc.Stop();
-                        ShowError("从节点不能启动调度表；请等待外部主节点发送 Header");
+                        if (!sc.Start())
+                            ShowError(sc.LastError.Length > 0 ? "从节点监听启动失败: " + sc.LastError : "从节点监听启动失败");
+                        RefreshStatusBar();
                         break;
                     }
                     string err = sc.ValidateSlots(GetBaudrate());
@@ -1253,22 +1473,31 @@ namespace PCAN_Client.LIN_UI
                     sc.Suspend();
                     break;
                 case "step":
-                    if (!IsMasterMode())
-                    {
-                        ShowError("从节点不能单步发送 Header；请等待外部主节点");
-                        break;
-                    }
-                    // 单步：按调度槽语义发送完整帧或 Header（PEAK/Vector 均走软件发送原语）
+                    // 单步：按调度槽发送原语；Slave 槽是被动响应，不产生 Header。
                     if (_dgvSlots.SelectedRows.Count > 0)
                     {
                         var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
-                        if (slot != null && !Lin_API.LinSendScheduleFrame(_channel, slot.Pid))
+                        if (slot != null && slot.TransmitType == LinTransmitType.Slave)
+                        {
+                            ShowError("Slave 槽只配置自动响应，不会主动发送 Header；请等待外部主节点。");
+                        }
+                        else if (slot != null && !Lin_API.LinSendScheduleSlot(_channel, slot))
                             ShowError("单步发送失败（未连接）");
                     }
                     break;
                 case "add":
-                    sc.Slots.Add(new LinScheduleSlot { Pid = 0x00, SlotMs = 15 });
+                    if (CurrentChannel != null)
+                    {
+                        byte pid = 0;
+                        while (FindSendEntry(pid) != null && pid < 0x3F) pid++;
+                        var entry = CreateTransmitEntry(pid);
+                        entry.Type = LinTransmitType.Master;
+                        CurrentChannel.TransmitEntries.Add(entry);
+                        LinConfig.SaveLinConfig();
+                    }
                     RefreshSlotGrid();
+                    RefreshSendGrid();
+                    RefreshRespGrid();
                     break;
                 case "import":
                     ImportSlotsFromLdf();
@@ -1276,8 +1505,13 @@ namespace PCAN_Client.LIN_UI
                 case "del":
                     if (_dgvSlots.SelectedRows.Count > 0)
                     {
-                        sc.Slots.Remove((LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag);
+                        int rowIndex = _dgvSlots.SelectedRows[0].Index;
+                        if (CurrentChannel != null && rowIndex >= 0 && rowIndex < CurrentChannel.TransmitEntries.Count)
+                            CurrentChannel.TransmitEntries.RemoveAt(rowIndex);
+                        LinConfig.SaveLinConfig();
                         RefreshSlotGrid();
+                        RefreshSendGrid();
+                        RefreshRespGrid();
                     }
                     break;
                 case "up":
@@ -1295,17 +1529,40 @@ namespace PCAN_Client.LIN_UI
             if (_dgvSlots.SelectedRows.Count == 0) return;
             int i = _dgvSlots.SelectedRows[0].Index;
             int j = i + dir;
-            if (j < 0 || j >= sc.Slots.Count) return;
-            var t = sc.Slots[i];
-            sc.Slots[i] = sc.Slots[j];
-            sc.Slots[j] = t;
+            var ch = CurrentChannel;
+            if (ch == null || j < 0 || j >= ch.TransmitEntries.Count) return;
+            var t = ch.TransmitEntries[i];
+            ch.TransmitEntries[i] = ch.TransmitEntries[j];
+            ch.TransmitEntries[j] = t;
+            LinConfig.SaveLinConfig();
             RefreshSlotGrid();
+            RefreshSendGrid();
             if (j >= 0 && j < _dgvSlots.Rows.Count) _dgvSlots.Rows[j].Selected = true;
         }
 
+        private string SelectScheduleTable(LinLdfFile ldf)
+        {
+            if (ldf == null || ldf.ScheduleTables.Count == 0) return null;
+            if (ldf.ScheduleTables.Count == 1) return ldf.ScheduleTables.Keys.First();
+            using (var dlg = new Form { Text = "选择 LDF 调度表", Width = 360, Height = 130, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false })
+            {
+                var combo = new ComboBox { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList };
+                combo.Items.AddRange(ldf.ScheduleTables.Keys.ToArray());
+                combo.SelectedIndex = 0;
+                var ok = new Button { Text = "确定", DialogResult = DialogResult.OK, Dock = DockStyle.Right, Width = 80 };
+                var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Dock = DockStyle.Right, Width = 80 };
+                dlg.Controls.Add(combo);
+                dlg.Controls.Add(cancel);
+                dlg.Controls.Add(ok);
+                dlg.AcceptButton = ok;
+                dlg.CancelButton = cancel;
+                return dlg.ShowDialog(this) == DialogResult.OK ? combo.SelectedItem.ToString() : null;
+            }
+        }
+
         /// <summary>
-        /// 从 LDF 导入调度表：优先按 LDF 官方调度表（帧名+时隙）填充，无调度表时回退全部帧（时隙默认 15ms）。
-        /// 追加到现有调度表并按 PID 去重（不破坏已手动配置的帧槽）；导入的帧默认勾选（Enabled=true）。
+        /// 从 LDF 导入调度表：优先按 LDF 官方调度表（帧名+时隙）填充，无调度表时回退全部帧。
+        /// 当前发送模型按 PID 唯一；LDF 调度表中重复出现的同一 PID 合并为一个发送项，采用首次出现的时隙。
         /// </summary>
         private void ImportSlotsFromLdf()
         {
@@ -1315,37 +1572,68 @@ namespace PCAN_Client.LIN_UI
                 MessageBox.Show(this, "请先加载 LDF 文件（顶部工具栏「加载 LDF」）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            var sc = GetScheduler();
-            var toAdd = new List<LinScheduleSlot>();
+            var tableName = SelectScheduleTable(ldf);
+            if (ldf.ScheduleTables.Count > 0 && string.IsNullOrEmpty(tableName)) return;
+            var source = CurrentChannel.TransmitEntries ?? new List<LinTransmitEntry>();
+            var prototypes = new Dictionary<byte, LinTransmitEntry>();
+            foreach (var old in source)
+                if (old != null && !prototypes.ContainsKey(old.Pid)) prototypes[old.Pid] = old;
+            var imported = new List<LinTransmitEntry>();
+            var importedPids = new HashSet<byte>();
             if (ldf.ScheduleTables.Count > 0)
             {
-                // 取第一个调度表（通常为 NormalTable，含每帧官方时隙）
-                var table = ldf.ScheduleTables.First().Value;
+                var table = ldf.ScheduleTables[tableName];
                 foreach (var def in table)
                 {
                     var frame = ldf.Frames.Values.FirstOrDefault(f => f.Name == def.FrameName);
                     if (frame == null) continue;
-                    toAdd.Add(new LinScheduleSlot { Enabled = true, Pid = frame.Pid, SlotMs = def.SlotMs > 0 ? def.SlotMs : 15 });
+                    if (!importedPids.Add(frame.Pid)) continue;
+                    LinTransmitEntry prototype;
+                    prototypes.TryGetValue(frame.Pid, out prototype);
+                    var entry = prototype == null
+                        ? CreateTransmitEntry(frame.Pid)
+                        : prototype.Clone();
+                    entry.Pid = frame.Pid;
+                    if (CurrentChannel.Mode == LinNodeMode.Slave &&
+                        LinLdfHelper.IsLocalSlaveResponseFrame(ldf, frame.Pid, CurrentChannel.LocalNodeName))
+                        entry.Type = LinTransmitType.Slave;
+                    entry.SlotMs = def.SlotMs > 0 ? def.SlotMs : (entry.SlotMs > 0 ? entry.SlotMs : 15);
+                    entry.Dlc = EntryDlc(entry, ldf);
+                    entry.Data = EntryData(entry, entry.Dlc);
+                    imported.Add(entry);
                 }
             }
             else
             {
                 foreach (var kv in ldf.Frames)
-                    toAdd.Add(new LinScheduleSlot { Enabled = true, Pid = kv.Key, SlotMs = 15 });
+                {
+                    LinTransmitEntry prototype;
+                    prototypes.TryGetValue(kv.Key, out prototype);
+                    byte dlc = kv.Value.Dlc == 0 ? (byte)8 : kv.Value.Dlc;
+                    var entry = prototype == null
+                        ? CreateTransmitEntry(kv.Key)
+                        : prototype.Clone();
+                    entry.Pid = kv.Key;
+                    if (CurrentChannel.Mode == LinNodeMode.Slave &&
+                        LinLdfHelper.IsLocalSlaveResponseFrame(ldf, kv.Key, CurrentChannel.LocalNodeName))
+                        entry.Type = LinTransmitType.Slave;
+                    entry.SlotMs = entry.SlotMs > 0 ? entry.SlotMs : 15;
+                    entry.Dlc = EntryDlc(entry, ldf);
+                    entry.Data = EntryData(entry, entry.Dlc);
+                    imported.Add(entry);
+                }
             }
-            if (toAdd.Count == 0)
+            if (imported.Count == 0)
             {
                 MessageBox.Show(this, "LDF 中无可用帧（调度表为空）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
-            int added = 0;
-            var existing = new HashSet<byte>(sc.Slots.Select(s => s.Pid));
-            foreach (var s in toAdd)
-            {
-                if (existing.Add(s.Pid)) { sc.Slots.Add(s); added++; }
-            }
+            CurrentChannel.TransmitEntries = imported;
+            LinConfig.SaveLinConfig();
             RefreshSlotGrid();
-            MessageBox.Show(this, $"已从 LDF 导入 {added} 条报文到调度表（勾选=参与调度，默认全勾）\n时隙按 LDF 调度表自动填充，可自行调整", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            RefreshSendGrid();
+            RefreshRespGrid();
+            MessageBox.Show(this, $"已从 LDF 调度表 {tableName ?? "全部帧"} 导入 {imported.Count} 个发送项；重复 PID 已合并。发送类型可在发送页或调度表中调整。", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private LinLdfFile GetLdf()
@@ -1362,6 +1650,42 @@ namespace PCAN_Client.LIN_UI
             return 19200;
         }
 
+        private string EmptyFrameHint()
+        {
+            var ch = CurrentChannel;
+            if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave)
+                return "暂无报文 — 当前从节点只在外部主节点 Header 到达后响应；请确认总线已有主节点调度和接线/波特率一致";
+            return "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）";
+        }
+
+        private void RefreshSendGrid()
+        {
+            if (_disposed || _dgvSend == null) return;
+            _suppressSendWriteback = true;
+            try
+            {
+                _dgvSend.Rows.Clear();
+                _expandedSend.Clear();
+                var ch = CurrentChannel;
+                if (ch == null) return;
+                var entries = ch.TransmitEntries ?? new List<LinTransmitEntry>();
+                var ldf = GetLdf();
+                foreach (var entry in entries)
+                {
+                    if (entry == null) continue;
+                    byte dlc = EntryDlc(entry, ldf);
+                    byte[] data = EntryData(entry, dlc);
+                    entry.Dlc = dlc;
+                    entry.Data = data;
+                    int idx = _dgvSend.Rows.Add("＋", entry.Enabled, "0x" + entry.Pid.ToString("X2"),
+                        LinLdfHelper.GetFrameName(ldf, entry.Pid), TransmitTypeText(entry.Type), dlc, entry.SlotMs,
+                        BitConverter.ToString(data).Replace("-", " "));
+                    _dgvSend.Rows[idx].Tag = entry;
+                }
+            }
+            finally { _suppressSendWriteback = false; }
+        }
+
         // ==================== 从节点/发布页签 ====================
 
         private void RefreshRespGrid()
@@ -1370,142 +1694,25 @@ namespace PCAN_Client.LIN_UI
             _dgvResp.Rows.Clear();
             _expandedResp.Clear();
             var ldf = GetLdf();
-            if (ldf == null)
+            var ch = CurrentChannel;
+            if (ldf == null) return;
+            foreach (var kv in ldf.Frames.OrderBy(x => x.Key))
             {
-                // 无 LDF：空表
-                return;
-            }
-            if (IsMasterMode())
-            {
-                // 主节点模式：只列出本机发布帧；从节点发布帧由调度发送 Header 后等待真实总线响应。
-                foreach (var kv in ldf.Frames)
-                {
-                    if (LinLdfHelper.IsMasterPublisherFrame(ldf, kv.Key))
-                    {
-                        var def = kv.Value;
-                        byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
-                        int idx = _dgvResp.Rows.Add("＋", "0x" + kv.Key.ToString("X2"), def.Name, dlc, new string('0', dlc * 2));
-                        _dgvResp.Rows[idx].Tag = kv.Key;
-                    }
-                }
-            }
-            else
-            {
-                string localNode = GetLocalSlaveNodeName();
-                foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(ldf, localNode))
-                {
-                    var def = ldf.Frames[pid];
-                    byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
-                    int idx = _dgvResp.Rows.Add("＋", "0x" + pid.ToString("X2"), def.Name, dlc, new string('0', dlc * 2));
-                    _dgvResp.Rows[idx].Tag = pid;
-                }
-            }
-        }
-
-        private bool IsMasterMode()
-        {
-            return _channel >= 1 && _channel <= LinConfig.Channels.Count &&
-                   LinConfig.Channels[_channel - 1].Mode == LinNodeMode.Master;
-        }
-
-        private string GetLocalSlaveNodeName()
-        {
-            if (_channel < 1 || _channel > LinConfig.Channels.Count) return "";
-            var ch = LinConfig.Channels[_channel - 1];
-            return LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, ch.LocalNodeName);
-        }
-
-        private void DgvResp_CellValueChanged(object sender, DataGridViewCellEventArgs e)
-        {
-            if (e.RowIndex < 0) return;
-            var row = _dgvResp.Rows[e.RowIndex];
-            // 信号解析行：编辑物理值/枚举 → 编码写回帧数据列并同步硬件
-            if (row.Tag is Tuple<byte, string>)
-            {
-                if (_dgvResp.Columns[e.ColumnIndex].Name != "colRspData") return;
-                var t = (Tuple<byte, string>)row.Tag;
-                var ldf = GetLdf();
-                if (ldf == null) return;
-                var sig = FindSignalDef(ldf, t.Item2);
-                if (sig == null) return;
-                ulong raw;
-                if (!TryParseSigValue((row.Cells["colRspData"].Value ?? "").ToString(), sig, out raw))
-                {
-                    // 非法输入：还原为该信号当前值
-                    if (GetRespFrameData(t.Item1) != null) RefreshSignalRows(t.Item1);
-                    return;
-                }
-                ApplySignalToFrame(t.Item1, sig, raw);
-                return;
-            }
-            if (!(row.Tag is byte)) return;
-            byte pid = (byte)row.Tag;
-            if (_dgvResp.Columns[e.ColumnIndex].Name != "colRspData") return;
-            // 数据 Hex 输入（空格分隔）→ 下发硬件
-            var data = ParseHexData((row.Cells["colRspData"].Value ?? "").ToString());
-            if (data == null) return;
-            byte dlc = (byte)data.Length;
-            if (dlc > 8) return;
-            if (!Lin_API.UpdateSlaveData(_channel, pid, data, dlc))
-                ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点响应数据下发失败（未连接或帧不属于本机节点）");
-        }
-
-        /// <summary>取帧行的当前数据（Hex 解析失败返回 null）</summary>
-        private byte[] GetRespFrameData(byte pid)
-        {
-            for (int i = 0; i < _dgvResp.Rows.Count; i++)
-            {
-                var r = _dgvResp.Rows[i];
-                if (r.Tag is byte && (byte)r.Tag == pid)
-                    return ParseHexData((r.Cells["colRspData"].Value ?? "").ToString());
-            }
-            return null;
-        }
-
-        /// <summary>把信号新值编码进帧数据，写回帧行并同步硬件，刷新该帧全部信号行显示</summary>
-        private void ApplySignalToFrame(byte pid, LinSignalDef sig, ulong raw)
-        {
-            var ldf = GetLdf();
-            byte[] data = GetRespFrameData(pid);
-            if (data == null || data.Length == 0)
-            {
-                byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
-                data = new byte[dlc];
-            }
-            LinFrameSignal fs = null;
-            if (ldf != null && ldf.FrameSignals.ContainsKey(pid))
-                foreach (var x in ldf.FrameSignals[pid]) if (x.SignalName == sig.Name) { fs = x; break; }
-            if (fs == null) return;
-            LinLdfHelper.WriteSignalBits(data, fs.Offset, sig.Width, raw);
-            string hex = BitConverter.ToString(data).Replace("-", " ");
-            for (int i = 0; i < _dgvResp.Rows.Count; i++)
-            {
-                var r = _dgvResp.Rows[i];
-                if (r.Tag is byte && (byte)r.Tag == pid) { r.Cells["colRspData"].Value = hex; break; }
-            }
-            RefreshSignalRows(pid);
-            if (!Lin_API.UpdateSlaveData(_channel, pid, data, (byte)data.Length))
-                ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点响应数据下发失败（未连接或帧不属于本机节点）");
-        }
-
-        /// <summary>按帧行当前数据刷新该帧全部信号行的显示值</summary>
-        private void RefreshSignalRows(byte pid)
-        {
-            var ldf = GetLdf();
-            byte[] data = GetRespFrameData(pid);
-            if (ldf == null || data == null) return;
-            for (int i = 0; i < _dgvResp.Rows.Count; i++)
-            {
-                var r = _dgvResp.Rows[i];
-                if (!(r.Tag is Tuple<byte, string>)) continue;
-                var t = (Tuple<byte, string>)r.Tag;
-                if (t.Item1 != pid) continue;
-                var s2 = FindSignalDef(ldf, t.Item2);
-                LinFrameSignal fs2 = null;
-                if (s2 != null && ldf.FrameSignals.ContainsKey(pid))
-                    foreach (var x in ldf.FrameSignals[pid]) if (x.SignalName == s2.Name) { fs2 = x; break; }
-                if (s2 != null && fs2 != null)
-                    r.Cells["colRspData"].Value = FormatSigValue(s2, LinLdfHelper.ReadSignalBits(data, fs2.Offset, s2.Width));
+                byte pid = kv.Key;
+                LinFrameDef def = kv.Value;
+                byte dlc = def == null || def.Dlc == 0 ? (byte)8 : def.Dlc;
+                bool added = ch != null && ch.TransmitEntries != null &&
+                    ch.TransmitEntries.Any(x => x != null && x.Pid == pid);
+                int idx = _dgvResp.Rows.Add(
+                    LinFrameHasSignals(pid, _channel) ? "＋" : "",
+                    "0x" + pid.ToString("X2"),
+                    def == null ? LinLdfHelper.GetFrameName(ldf, pid) : def.Name,
+                    def == null ? "" : def.Publisher,
+                    def == null ? "" : FrameTypeText(def.FrameType),
+                    dlc,
+                    added ? "已添加" : "未添加",
+                    added ? "已添加" : "添加");
+                _dgvResp.Rows[idx].Tag = pid;
             }
         }
 
@@ -1524,22 +1731,44 @@ namespace PCAN_Client.LIN_UI
             return data;
         }
 
+        private void AddLdfFrameToSend(byte pid)
+        {
+            var ch = CurrentChannel;
+            if (ch == null || FindSendEntry(pid) != null) return;
+            ch.TransmitEntries.Add(CreateTransmitEntry(pid));
+            if (Lin_API.IsConnected(_channel))
+            {
+                Lin_API.LinDisconnect(_channel);
+                ch.ConnectError = "发送项已增加，请重新连接以应用帧方向和 DLC";
+            }
+            LinConfig.SaveLinConfig();
+            SyncSchedulerFromConfig();
+            RefreshRespGrid();
+            RefreshSendGrid();
+            RefreshSlotGrid();
+        }
+
         private void DgvResp_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
-            if (e.ColumnIndex != _dgvResp.Columns["colRspExpand"].Index) return;
             var row = _dgvResp.Rows[e.RowIndex];
             if (!(row.Tag is byte)) return;
-            ToggleRespExpand((byte)row.Tag);
+            byte pid = (byte)row.Tag;
+            if (e.ColumnIndex == _dgvResp.Columns["colRspAdd"].Index)
+            {
+                AddLdfFrameToSend(pid);
+                return;
+            }
+            if (e.ColumnIndex == _dgvResp.Columns["colRspExpand"].Index)
+                ToggleRespExpand(pid);
         }
 
         private void DgvResp_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
             if (e.RowIndex < 0) return;
-            // 数据列双击进入编辑，不参与展开/折叠
-            if (e.ColumnIndex == _dgvResp.Columns["colRspData"].Index) return;
             var row = _dgvResp.Rows[e.RowIndex];
             if (!(row.Tag is byte)) return;
+            if (e.ColumnIndex == _dgvResp.Columns["colRspAdd"].Index) return;
             ToggleRespExpand((byte)row.Tag);
         }
 
@@ -1547,11 +1776,7 @@ namespace PCAN_Client.LIN_UI
         private void ToggleRespExpand(byte pid)
         {
             var ldf = GetLdf();
-            if (ldf == null || !ldf.FrameSignals.ContainsKey(pid) || ldf.FrameSignals[pid].Count == 0)
-            {
-                MessageBox.Show(this, "该帧在 LDF 中没有信号定义，无法展开解析\n可直接编辑「数据 (Hex)」列，或加载包含该帧信号的 LDF", "展开信号", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            if (ldf == null || !ldf.FrameSignals.ContainsKey(pid) || ldf.FrameSignals[pid].Count == 0) return;
             if (_expandedResp.Contains(pid)) CollapseRespFrame(pid);
             else ExpandRespFrame(pid, ldf);
         }
@@ -1565,12 +1790,6 @@ namespace PCAN_Client.LIN_UI
             if (rowIdx < 0) return;
 
             var frameRow = _dgvResp.Rows[rowIdx];
-            var data = ParseHexData((frameRow.Cells["colRspData"].Value ?? "").ToString());
-            if (data == null || data.Length == 0)
-            {
-                byte dlc = ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
-                data = new byte[dlc];
-            }
             int insertAt = rowIdx + 1;
             int maxNameLen = 0;
             foreach (var fs in ldf.FrameSignals[pid])
@@ -1578,15 +1797,16 @@ namespace PCAN_Client.LIN_UI
             foreach (var fs in ldf.FrameSignals[pid])
             {
                 var sig = FindSignalDef(ldf, fs.SignalName);
-                ulong raw = sig != null ? LinLdfHelper.ReadSignalBits(data, fs.Offset, sig.Width) : 0;
-                string valText = sig != null ? FormatSigValue(sig, raw) : "—";
                 _dgvResp.Rows.Insert(insertAt, 1);
                 var srow = _dgvResp.Rows[insertAt];
                 srow.Cells["colRspExpand"].Value = "";
                 srow.Cells["colRspId"].Value = null;
                 srow.Cells["colRspName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
+                srow.Cells["colRspPublisher"].Value = sig == null ? "" : sig.Publisher;
+                srow.Cells["colRspType"].Value = "信号";
                 srow.Cells["colRspDlc"].Value = "bit " + fs.Offset;
-                srow.Cells["colRspData"].Value = valText;
+                srow.Cells["colRspAdded"].Value = sig == null ? "" : "初值 " + sig.InitValue.ToString("0.###", CultureInfo.InvariantCulture);
+                srow.Cells["colRspAdd"].Value = "";
                 srow.Tag = new Tuple<byte, string>(pid, fs.SignalName);
                 srow.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 248);
                 insertAt++;
@@ -1725,16 +1945,33 @@ namespace PCAN_Client.LIN_UI
         private void SendToolbar_ItemClicked(object sender, ToolStripItemClickedEventArgs e)
         {
             if (!(e.ClickedItem.Tag is string op)) return;
+            if (op == "add" && CurrentChannel == null)
+            {
+                // 发送页首次使用时允许在尚未打开通道管理的空配置中建立默认逻辑通道；
+                // 连接硬件仍需用户随后在通道管理中绑定。
+                LinConfig.Channels.Add(new LinChannel { Name = "LIN1" });
+                _channel = 1;
+            }
             var sc = GetScheduler();
             switch (op)
             {
                 case "add":
-                    // 新增报文定义：加入调度表（默认勾选）并显示一行
-                    var slot = new LinScheduleSlot { Pid = 0x00, SlotMs = 15, Enabled = true };
-                    sc.Slots.Add(slot);
+                    byte pid = 0;
+                    while (FindSendEntry(pid) != null && pid < 0x3F) pid++;
+                    if (FindSendEntry(pid) != null)
+                    {
+                        ShowError("已没有可用的 PID（0x00-0x3F）");
+                        return;
+                    }
+                    var newEntry = CreateTransmitEntry(pid);
+                    newEntry.Type = LinTransmitType.Master;
+                    CurrentChannel.TransmitEntries.Add(newEntry);
+                    LinConfig.SaveLinConfig();
+                    RefreshSendGrid();
                     RefreshSlotGrid();
-                    int idx = _dgvSend.Rows.Add("0x00", LinLdfHelper.GetFrameName(GetLdf(), 0x00), 0, "");
-                    _dgvSend.Rows[idx].Tag = slot;
+                    RefreshRespGrid();
+                    int idx = _dgvSend.Rows.Count - 1;
+                    if (idx < 0) return;
                     _dgvSend.CurrentCell = _dgvSend.Rows[idx].Cells["colSendPid"];
                     _dgvSend.BeginEdit(true);
                     break;
@@ -1742,14 +1979,160 @@ namespace PCAN_Client.LIN_UI
                     if (_dgvSend.SelectedRows.Count > 0)
                     {
                         var sel = _dgvSend.SelectedRows[0];
-                        if (sel.Tag is LinScheduleSlot s)
+                        if (sel.Tag is LinTransmitEntry entry && CurrentChannel != null)
                         {
-                            sc.Slots.Remove(s);
+                            int entryIndex = CurrentChannel.TransmitEntries.IndexOf(entry);
+                            if (entryIndex >= 0) CurrentChannel.TransmitEntries.RemoveAt(entryIndex);
+                            if (Lin_API.IsConnected(_channel)) Lin_API.DisableSlaveResponse(_channel, entry.Pid, entry.Dlc);
+                            LinConfig.SaveLinConfig();
                             RefreshSlotGrid();
+                            RefreshRespGrid();
                         }
-                        _dgvSend.Rows.Remove(sel);
+                        RefreshSendGrid();
                     }
                     break;
+            }
+        }
+
+        private void DgvSend_CellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != _dgvSend.Columns["colSendExpand"].Index) return;
+            var row = _dgvSend.Rows[e.RowIndex];
+            var entry = row.Tag as LinTransmitEntry;
+            if (entry != null) ToggleSendExpand(entry);
+        }
+
+        private void DgvSend_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            var row = _dgvSend.Rows[e.RowIndex];
+            var entry = row.Tag as LinTransmitEntry;
+            if (entry == null) return;
+            if (e.ColumnIndex == _dgvSend.Columns["colSendData"].Index ||
+                e.ColumnIndex == _dgvSend.Columns["colSendSlotMs"].Index ||
+                e.ColumnIndex == _dgvSend.Columns["colSendDlc"].Index ||
+                e.ColumnIndex == _dgvSend.Columns["colSendType"].Index)
+                return;
+            ToggleSendExpand(entry);
+        }
+
+        private void ToggleSendExpand(LinTransmitEntry entry)
+        {
+            var ldf = GetLdf();
+            if (entry == null || ldf == null || !ldf.FrameSignals.ContainsKey(entry.Pid) ||
+                ldf.FrameSignals[entry.Pid].Count == 0) return;
+            if (_expandedSend.Contains(entry)) CollapseSendFrame(entry);
+            else ExpandSendFrame(entry, ldf);
+        }
+
+        private int FindSendRow(LinTransmitEntry entry)
+        {
+            for (int i = 0; i < _dgvSend.Rows.Count; i++)
+                if (ReferenceEquals(_dgvSend.Rows[i].Tag, entry)) return i;
+            return -1;
+        }
+
+        private void ExpandSendFrame(LinTransmitEntry entry, LinLdfFile ldf)
+        {
+            int rowIdx = FindSendRow(entry);
+            if (rowIdx < 0) return;
+            int insertAt = rowIdx + 1;
+            int maxNameLen = ldf.FrameSignals[entry.Pid].Max(x => x.SignalName.Length);
+            byte dlc = EntryDlc(entry, ldf);
+            byte[] data = EntryData(entry, dlc);
+            foreach (var fs in ldf.FrameSignals[entry.Pid])
+            {
+                var sig = FindSignalDef(ldf, fs.SignalName);
+                ulong raw = sig == null ? 0 : LinLdfHelper.ReadSignalBits(data, fs.Offset, sig.Width);
+                _dgvSend.Rows.Insert(insertAt, 1);
+                var srow = _dgvSend.Rows[insertAt];
+                srow.Cells["colSendExpand"].Value = "";
+                srow.Cells["colSendEn"].Value = "";
+                srow.Cells["colSendPid"].Value = "";
+                srow.Cells["colSendName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
+                srow.Cells["colSendType"].Value = "信号";
+                srow.Cells["colSendDlc"].Value = "bit " + fs.Offset;
+                srow.Cells["colSendSlotMs"].Value = "";
+                srow.Cells["colSendData"].Value = sig == null ? "—" : FormatSigValue(sig, raw);
+                srow.Tag = new SendSignalRow { Entry = entry, SignalName = fs.SignalName, Offset = fs.Offset };
+                srow.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 248);
+                insertAt++;
+            }
+            _expandedSend.Add(entry);
+            _dgvSend.Rows[rowIdx].Cells["colSendExpand"].Value = "－";
+        }
+
+        private void CollapseSendFrame(LinTransmitEntry entry)
+        {
+            for (int i = _dgvSend.Rows.Count - 1; i >= 0; i--)
+            {
+                var signal = _dgvSend.Rows[i].Tag as SendSignalRow;
+                if (signal != null && ReferenceEquals(signal.Entry, entry)) _dgvSend.Rows.RemoveAt(i);
+            }
+            _expandedSend.Remove(entry);
+            int rowIdx = FindSendRow(entry);
+            if (rowIdx >= 0) _dgvSend.Rows[rowIdx].Cells["colSendExpand"].Value = "＋";
+        }
+
+        private void DgvSend_EditingControlShowing(object sender, DataGridViewEditingControlShowingEventArgs e)
+        {
+            var cur = _dgvSend.CurrentCell;
+            if (cur == null || !(e.Control is DataGridViewTextBoxEditingControl ed)) return;
+            var signal = _dgvSend.Rows[cur.RowIndex].Tag as SendSignalRow;
+            if (signal == null || cur.ColumnIndex != _dgvSend.Columns["colSendData"].Index) return;
+            var sig = FindSignalDef(GetLdf(), signal.SignalName);
+            if (sig == null || sig.Unit.Length == 0) return;
+            string text = (cur.Value ?? "").ToString();
+            if (text.EndsWith(sig.Unit, StringComparison.OrdinalIgnoreCase))
+                ed.Text = text.Substring(0, text.Length - sig.Unit.Length).Trim();
+        }
+
+        private void ApplySignalToSendEntry(SendSignalRow signalRow, string text)
+        {
+            var ldf = GetLdf();
+            var sig = FindSignalDef(ldf, signalRow.SignalName);
+            if (sig == null) return;
+            ulong raw;
+            if (!TryParseSigValue(text, sig, out raw))
+            {
+                RefreshSendSignalRows(signalRow.Entry);
+                return;
+            }
+            byte dlc = EntryDlc(signalRow.Entry, ldf);
+            byte[] data = EntryData(signalRow.Entry, dlc);
+            LinLdfHelper.WriteSignalBits(data, signalRow.Offset, sig.Width, raw);
+            signalRow.Entry.Dlc = dlc;
+            signalRow.Entry.Data = data;
+            LinConfig.SaveLinConfig();
+            if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(
+                _channel, signalRow.Entry.Pid, data, dlc, signalRow.Entry.Type))
+                ShowError("发送项信号下发失败");
+            RefreshSendFrameData(signalRow.Entry);
+            RefreshSendSignalRows(signalRow.Entry);
+        }
+
+        private void RefreshSendFrameData(LinTransmitEntry entry)
+        {
+            int rowIdx = FindSendRow(entry);
+            if (rowIdx < 0) return;
+            _dgvSend.Rows[rowIdx].Cells["colSendData"].Value =
+                BitConverter.ToString(entry.Data ?? new byte[0]).Replace("-", " ");
+            _dgvSend.Rows[rowIdx].Cells["colSendDlc"].Value = entry.Dlc;
+        }
+
+        private void RefreshSendSignalRows(LinTransmitEntry entry)
+        {
+            var ldf = GetLdf();
+            if (ldf == null || entry == null || !ldf.FrameSignals.ContainsKey(entry.Pid)) return;
+            byte[] data = EntryData(entry, EntryDlc(entry, ldf));
+            for (int i = 0; i < _dgvSend.Rows.Count; i++)
+            {
+                var signalRow = _dgvSend.Rows[i].Tag as SendSignalRow;
+                if (signalRow == null || !ReferenceEquals(signalRow.Entry, entry)) continue;
+                var sig = FindSignalDef(ldf, signalRow.SignalName);
+                if (sig != null)
+                    _dgvSend.Rows[i].Cells["colSendData"].Value = FormatSigValue(
+                        sig, LinLdfHelper.ReadSignalBits(data, signalRow.Offset, sig.Width));
             }
         }
 
@@ -1757,24 +2140,118 @@ namespace PCAN_Client.LIN_UI
         {
             if (e.RowIndex < 0) return;
             var row = _dgvSend.Rows[e.RowIndex];
-            if (!(row.Tag is LinScheduleSlot slot)) return;
+            if (_suppressSendWriteback) return;
+            var signalRow = row.Tag as SendSignalRow;
+            if (signalRow != null)
+            {
+                if (_dgvSend.Columns[e.ColumnIndex].Name == "colSendData")
+                    ApplySignalToSendEntry(signalRow, (row.Cells["colSendData"].Value ?? "").ToString());
+                return;
+            }
+            var entry = row.Tag as LinTransmitEntry;
+            if (entry == null) return;
+            var oldPid = entry.Pid;
             switch (_dgvSend.Columns[e.ColumnIndex].Name)
             {
+                case "colSendEn":
+                    entry.Enabled = (bool)(row.Cells["colSendEn"].Value ?? false);
+                    if (Lin_API.IsConnected(_channel))
+                    {
+                        if (!entry.Enabled && entry.Type == LinTransmitType.Slave)
+                            Lin_API.DisableSlaveResponse(_channel, entry.Pid, entry.Dlc);
+                        else if (entry.Enabled && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, entry.Dlc, entry.Type))
+                            ShowError("发送项启用失败，请检查硬件能力");
+                    }
+                    LinConfig.SaveLinConfig();
+                    RefreshRespGrid();
+                    break;
                 case "colSendPid":
                     byte newPid;
                     try { newPid = ParsePid((row.Cells["colSendPid"].Value ?? "").ToString()); }
                     catch { return; }
                     if (newPid > 0x3F) { ShowError("PID 须 0x00-0x3F"); return; }
-                    slot.Pid = newPid;
+                    if (newPid != oldPid && FindSendEntry(newPid) != null)
+                    {
+                        ShowError("该 PID 已存在发送项");
+                        RefreshSendGrid();
+                        return;
+                    }
+                    if (_expandedSend.Contains(entry)) CollapseSendFrame(entry);
+                    entry.Pid = newPid;
                     row.Cells["colSendName"].Value = LinLdfHelper.GetFrameName(GetLdf(), newPid);
+                    int pidEntryIndex = CurrentChannel == null ? -1 : CurrentChannel.TransmitEntries.IndexOf(entry);
+                    if (pidEntryIndex >= 0 && pidEntryIndex < GetScheduler().Slots.Count)
+                        GetScheduler().Slots[pidEntryIndex].Pid = newPid;
+                    if (Lin_API.IsConnected(_channel))
+                    {
+                        Lin_API.LinDisconnect(_channel);
+                        CurrentChannel.ConnectError = "发送项 PID 已修改，请重新连接";
+                    }
+                    LinConfig.SaveLinConfig();
+                    RefreshSlotGrid();
+                    RefreshRespGrid();
+                    break;
+                case "colSendType":
+                    var newType = ParseTransmitType(row.Cells["colSendType"].Value);
+                    if (newType != entry.Type && Lin_API.IsConnected(_channel))
+                    {
+                        Lin_API.LinDisconnect(_channel);
+                        CurrentChannel.ConnectError = "发送类型已修改，请重新连接";
+                    }
+                    entry.Type = newType;
+                    int typeEntryIndex = CurrentChannel == null ? -1 : CurrentChannel.TransmitEntries.IndexOf(entry);
+                    if (typeEntryIndex >= 0 && typeEntryIndex < GetScheduler().Slots.Count)
+                        GetScheduler().Slots[typeEntryIndex].TransmitType = newType;
+                    if (newType == LinTransmitType.BreakOnly)
+                        ShowError("当前 PCAN/Vector 适配器不支持独立 BreakOnly 原语");
+                    else if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, entry.Dlc, newType))
+                        ShowError("发送类型下发失败");
+                    LinConfig.SaveLinConfig();
+                    RefreshSlotGrid();
+                    RefreshRespGrid();
+                    break;
+                case "colSendDlc":
+                    byte newDlc;
+                    if (!byte.TryParse((row.Cells["colSendDlc"].Value ?? "").ToString(), out newDlc) || newDlc > 8)
+                    {
+                        ShowError("DLC 须为 0-8");
+                        RefreshSendGrid();
+                        return;
+                    }
+                    entry.Dlc = newDlc;
+                    entry.Data = EntryData(entry, newDlc);
+                    row.Cells["colSendData"].Value = BitConverter.ToString(entry.Data).Replace("-", " ");
+                    if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, newDlc, entry.Type))
+                        ShowError("DLC 下发失败");
+                    LinConfig.SaveLinConfig();
+                    RefreshRespGrid();
+                    break;
+                case "colSendSlotMs":
+                    int slotMs;
+                    if (!int.TryParse((row.Cells["colSendSlotMs"].Value ?? "").ToString(), out slotMs) || slotMs <= 0)
+                    {
+                        ShowError("时隙必须是大于 0 的整数毫秒");
+                        RefreshSendGrid();
+                        return;
+                    }
+                    entry.SlotMs = slotMs;
+                    int entryIndex = CurrentChannel == null ? -1 : CurrentChannel.TransmitEntries.IndexOf(entry);
+                    if (entryIndex >= 0 && entryIndex < GetScheduler().Slots.Count)
+                        GetScheduler().Slots[entryIndex].SlotMs = slotMs;
+                    LinConfig.SaveLinConfig();
                     RefreshSlotGrid();
                     break;
                 case "colSendData":
                     var data = ParseHexData((row.Cells["colSendData"].Value ?? "").ToString());
                     if (data == null) return;
                     row.Cells["colSendDlc"].Value = data.Length;
-                    if (!Lin_API.UpdateSlaveData(_channel, slot.Pid, data, (byte)data.Length))
-                        ShowError(IsMasterMode() ? "发布数据下发失败（未连接）" : "从节点不能为未选本机节点配置响应数据");
+                    entry.Dlc = (byte)data.Length;
+                    entry.Data = (byte[])data.Clone();
+                    if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, data, (byte)data.Length, entry.Type))
+                        ShowError("发送项数据下发失败");
+                    LinConfig.SaveLinConfig();
+                    RefreshRespGrid();
+                    RefreshSendSignalRows(entry);
                     break;
             }
         }
@@ -1788,15 +2265,13 @@ namespace PCAN_Client.LIN_UI
             {
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
-                if (IsMasterMode())
-                    _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
+                var ch = CurrentChannel;
+                if (sc.IsPassiveListening || (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave))
+                    _lblSched.Text = "从节点: 等待外部主节点 Header";
+                else if (ch != null && ch.GetHardwareModeNotice().Length > 0)
+                    _lblSched.Text = "调度: 混合角色（Slave 不自动应答）";
                 else
-                {
-                    string localNode = GetLocalSlaveNodeName();
-                    _lblSched.Text = localNode.Length == 0
-                        ? "从节点: 仅监听（未选择本机节点）"
-                        : "从节点: " + localNode + " 等待外部主节点";
-                }
+                    _lblSched.Text = sc.IsRunning ? "调度: 运行中" : "调度: 停止";
             }
             else
             {
@@ -1833,6 +2308,8 @@ namespace PCAN_Client.LIN_UI
             {
                 BeginInvoke(new Action(() =>
                 {
+                    if (!connected && _schedulers.TryGetValue(ch, out var scheduler))
+                        scheduler.Stop();
                     InitChannelView();
                     RefreshStatusBar();
                     if (connected) _lblBus.Text = "总线: 已连接";

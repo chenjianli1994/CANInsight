@@ -133,7 +133,13 @@ namespace PCAN_Client.LIN_API
 
         private string TryConnect()
         {
-            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " Mode=" + _cfg.Mode + " LocalNode=" + _cfg.LocalNodeName + " Baud=" + _cfg.Baudrate);
+            LinDebugLog.Write("[CONN] Connect 开始: HwHandle=" + _cfg.HwHandle + " TransmitEntries=" + (_cfg.TransmitEntries == null ? 0 : _cfg.TransmitEntries.Count) + " Baud=" + _cfg.Baudrate);
+            string planError = _cfg.ValidateTransmitPlan();
+            if (planError.Length > 0)
+            {
+                LinDebugLog.Write("[CONN] 发送计划拒绝: " + planError);
+                return planError;
+            }
             try
             {
                 LinPlError err = LinPlApi.RegisterClient("CANInsight_LIN", IntPtr.Zero, out _client);
@@ -193,10 +199,16 @@ namespace PCAN_Client.LIN_API
                     }
                 }
 
-                // 初始化：模式 + 波特率（PLIN 硬件波特率直接传值 1000-20000）
-                LinPlHardwareMode mode = _cfg.Mode == LinNodeMode.Master ? LinPlHardwareMode.modMaster : LinPlHardwareMode.modSlave;
+                // 界面不再单独保存通道主从，但 PLIN 驱动仍要求连接时选择硬件模式。
+                // 纯 Slave 发送计划必须以 modSlave 打开，否则 RESPONSE_ENABLE 不会参与总线应答。
+                LinNodeMode hardwareMode = _cfg.GetHardwareMode();
+                LinPlHardwareMode mode = hardwareMode == LinNodeMode.Slave
+                    ? LinPlHardwareMode.modSlave
+                    : LinPlHardwareMode.modMaster;
+                string modeNotice = _cfg.GetHardwareModeNotice();
+                if (modeNotice.Length > 0) LinDebugLog.Write("[CONN] 警告: " + modeNotice);
                 err = LinPlApi.InitializeHardware(_client, _hw, mode, (ushort)_cfg.Baudrate);
-                LinDebugLog.Write("[CONN] InitializeHardware mode=" + mode + " baud=" + _cfg.Baudrate + " → err=" + err);
+                LinDebugLog.Write("[CONN] InitializeHardware mode=" + mode + " derived=" + hardwareMode + " baud=" + _cfg.Baudrate + " → err=" + err);
                 if (err != LinPlError.errOK) { CleanupClient(); return "初始化 LIN 硬件失败（模式/波特率）: " + LinPlErrorCodes.ToChinese(err); }
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；官方签名为 3 参无 filterType）
@@ -240,7 +252,12 @@ namespace PCAN_Client.LIN_API
                 LinDebugLog.Write("[CONN] RegisterFrameId 0..63 → err=" + err);
                 if (err != LinPlError.errOK && err != LinPlError.errIllegalFrameID) { CleanupClient(); return "注册帧 ID 失败: " + LinPlErrorCodes.ToChinese(err); }
 
-                ConfigureFrameEntries();
+                string frameConfigError = ConfigureFrameEntries();
+                if (frameConfigError.Length > 0)
+                {
+                    CleanupClient();
+                    return frameConfigError;
+                }
 
                 _running = true;
                 _recvThread = new Thread(ReceiveLoop) { IsBackground = true, Name = $"PLIN_Rx_CH{_logicChannel}" };
@@ -310,35 +327,63 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 按 LDF 配置硬件帧条目：主节点只配置自己的发布帧；从节点只配置选定本机节点的响应帧。
-        /// 0x3C 由主节点发布；0x3D 需要按 NAD/诊断状态机匹配，不能仅按 ID 对所有从节点自动应答。
+        /// 按发送页签配置硬件帧条目。未加入发送页的报文一律 Subscriber，
+        /// 这样监控不会因为 LDF Publisher 字段而抢答；Slave 项才启用 RESPONSE_ENABLE。
         /// </summary>
-        private void ConfigureFrameEntries()
+        private string ConfigureFrameEntries()
         {
-            if (_cfg.LdfHelper == null || _cfg.LdfHelper.Frames.Count == 0)
+            var frameIds = new HashSet<byte>();
+            if (_cfg.LdfHelper != null)
+                foreach (var kv in _cfg.LdfHelper.Frames) frameIds.Add(kv.Key);
+            foreach (var configuredEntry in _cfg.TransmitEntries ?? new List<LinTransmitEntry>())
+                if (configuredEntry != null) frameIds.Add(configuredEntry.Pid);
+            if (frameIds.Count == 0)
             {
-                LinDebugLog.Write("[SLAVE] ConfigureFrameEntries: 无 LDF，跳过帧条目配置");
-                return;
+                LinDebugLog.Write("[LIN] ConfigureFrameEntries: 无 LDF/发送项，保持默认接收配置");
+                return "";
             }
-            foreach (var kv in _cfg.LdfHelper.Frames)
+            foreach (byte pid in frameIds)
             {
-                byte pid = kv.Key;
-                var def = kv.Value;
-                bool masterPublisher = _cfg.Mode == LinNodeMode.Master && IsMasterPublisherFrame(pid);
-                bool slaveResp = _cfg.Mode == LinNodeMode.Slave && IsSlaveResponseFrame(pid);
+                LinFrameDef def = null;
+                if (_cfg.LdfHelper != null) _cfg.LdfHelper.Frames.TryGetValue(pid, out def);
+                var configured = _cfg.FindTransmitEntry(pid);
+                LinTransmitType transmitType = configured == null ? LinTransmitType.HeaderOnly : configured.Type;
+                // 保留通道面板的显式从节点语义：旧配置可能只有 Mode/LocalNodeName，
+                // 尚未把响应帧迁移成发送项。此时按 LDF 归属补上 Slave 响应。
+                if (_cfg.Mode == LinNodeMode.Slave &&
+                    LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName))
+                    transmitType = LinTransmitType.Slave;
+                if (pid > 0x3F) return "发送项 PID 超出 LIN 范围: 0x" + pid.ToString("X2");
+                if (transmitType == LinTransmitType.BreakOnly)
+                    return "发送项 PID 0x" + pid.ToString("X2") + " 使用 BreakOnly，但当前 PLIN 适配器不支持独立 Break 原语";
+                // PLIN 的 Master 通道同样支持通过 RESPONSE_ENABLE 配置本机 Slave 响应。
+                // 因此响应归属必须按发送项判断，不能再由通道初始化模式屏蔽混合计划。
+                bool masterPublisher = configured != null && configured.Enabled && transmitType == LinTransmitType.Master;
+                // 选择了从节点但尚未在发送页建立条目时，LDF 仍然定义了本机
+                // Publisher 响应帧。此类帧也必须打开 RESPONSE_ENABLE，否则
+                // “从节点仅监听/空发送页”虽然不再启动调度器，却永远不会应答。
+                bool slaveResp = transmitType == LinTransmitType.Slave &&
+                    (configured == null ? _cfg.Mode == LinNodeMode.Slave : configured.Enabled);
                 // PLIN 的帧表同时决定发送角色和接收过滤：本机发布帧为 Publisher，
                 // 其余帧必须显式设为 Subscriber，主节点才能看到从节点响应，
                 // 从节点也才能接收主节点 Header。未选本机节点的从节点帧不会启用响应。
-                byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                byte dlc = configured != null && configured.Dlc > 0
+                    ? configured.Dlc
+                    : (def == null || def.Dlc == 0 ? (byte)8 : def.Dlc);
+                if (dlc > 8) return "发送项 PID 0x" + pid.ToString("X2") + " 的 DLC 超出 8";
                 LinPlDirection direction = (masterPublisher || slaveResp)
                     ? LinPlDirection.dirPublisher
                     : LinPlDirection.dirSubscriber;
-                bool ok = SetFrameEntry(pid, dlc, direction, slaveResp, def.Publisher.Length == 0 ? null : def.Publisher);
-                LinDebugLog.Write("[LIN] SetFrameEntry pid=" + pid + " dlc=" + dlc + " publisher=" + def.Publisher + " direction=" + direction + " masterPublisher=" + masterPublisher + " slaveResp=" + slaveResp + " → " + (ok ? "OK" : "FAIL"));
+                byte[] initial = configured == null || configured.Data == null ? new byte[0] : configured.Data;
+                string publisher = def == null ? null : def.Publisher;
+                bool ok = SetFrameEntry(pid, dlc, direction, slaveResp, publisher, initial);
+                LinDebugLog.Write("[LIN] SetFrameEntry pid=" + pid + " dlc=" + dlc + " publisher=" + (publisher ?? "") + " direction=" + direction + " transmitType=" + transmitType + " → " + (ok ? "OK" : "FAIL"));
+                if (!ok) return "配置 LIN 帧条目失败: PID 0x" + pid.ToString("X2") + "（方向=" + direction + ", 类型=" + transmitType + "）";
             }
+            return "";
         }
 
-        private bool SetFrameEntry(byte pid, byte len, LinPlDirection direction, bool responseEnable, string publisher)
+        private bool SetFrameEntry(byte pid, byte len, LinPlDirection direction, bool responseEnable, string publisher, byte[] initialData)
         {
             var entry = new LinPlFrameEntry
             {
@@ -349,9 +394,22 @@ namespace PCAN_Client.LIN_API
                 Flags = (ushort)(responseEnable ? LinPlApi.FRAME_FLAG_RESPONSE_ENABLE : 0),
                 InitialData = new byte[8],
             };
+            if (initialData != null) Array.Copy(initialData, entry.InitialData, Math.Min(initialData.Length, entry.InitialData.Length));
             LinPlError err = LinPlApi.SetFrameEntry(_client, _hw, ref entry);
             LinDebugLog.Write("[LIN] SetFrameEntry pid=" + pid + " len=" + len + " respEnable=" + responseEnable + " publisher=" + (publisher == null ? "" : publisher) + " checksum=" + entry.ChecksumType + " → err=" + err);
-            return err == LinPlError.errOK;
+            if (err != LinPlError.errOK) return false;
+            if (direction != LinPlDirection.dirPublisher) return true;
+
+            // PLIN 的 InitialData 在不同固件版本上并不总是立即刷新发布缓存；
+            // 用官方 UpdateByteArray 再写一次，确保从节点收到 Header 后有可发送的数据。
+            byte updateLength = len == 0 ? (byte)8 : len;
+            byte[] payload = new byte[updateLength];
+            if (initialData != null) Array.Copy(initialData, payload, Math.Min(initialData.Length, payload.Length));
+            LinPlError updateErr = LinPlApi.UpdateByteArray(_client, _hw, pid, 0, updateLength, payload);
+            LinDebugLog.Write("[LIN] UpdateByteArray pid=" + pid + " len=" + updateLength + " → err=" + updateErr);
+            if (updateErr != LinPlError.errOK) return false;
+            lock (_frameData) _frameData[pid] = payload;
+            return true;
         }
 
         private static LinPlChecksumType ToPlChecksum(LinChecksumKind checksum)
@@ -359,19 +417,18 @@ namespace PCAN_Client.LIN_API
             return checksum == LinChecksumKind.Classic ? LinPlChecksumType.cstClassic : LinPlChecksumType.cstEnhanced;
         }
 
-        private bool IsMasterPublisherFrame(byte pid)
-        {
-            return LinLdfHelper.IsMasterPublisherFrame(_cfg.LdfHelper, pid);
-        }
+        private LinTransmitEntry GetTransmitEntry(byte pid) => _cfg.FindTransmitEntry(pid);
 
-        private bool IsSlaveResponseFrame(byte pid)
+        private bool IsConfiguredPublisher(byte pid)
         {
-            return LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName);
+            var entry = GetTransmitEntry(pid);
+            return entry != null && entry.Enabled &&
+                (entry.Type == LinTransmitType.Master || entry.Type == LinTransmitType.Slave);
         }
 
         // ==================== 发送 ====================
 
-        /// <summary>发送一帧（Master 模式发 Header+数据；从节点模式发布响应数据）</summary>
+        /// <summary>发送一帧完整的 Master 报文（Header + Data + 校验和）。</summary>
         /// <summary>LIN PID 补奇偶校验位（FrameId 字段须带奇偶；裸 ID 会导致 Write 失败）</summary>
         private static byte ToPid(byte pid)
         {
@@ -419,30 +476,38 @@ namespace PCAN_Client.LIN_API
             return err == LinPlError.errOK;
         }
 
-        /// <summary>软件调度发一帧：有缓存数据发完整帧（dirPublisher），无数据时——
-        /// 主节点发布帧（LDF Publisher==MasterName）发全零完整帧（LIN 协议要求主节点发布帧必须带数据槽，
-        /// Header-only 会让从节点判错误帧）；从节点发布帧发 Header-only 等从节点应答。</summary>
+        /// <summary>当前 PLIN API 没有只发 Break 的合法原语。</summary>
+        public bool SendBreakOnly(byte pid)
+        {
+            LinDebugLog.Write("[TX] BreakOnly pid=" + pid + " → 当前 PLIN API 不支持独立 Break 原语");
+            return false;
+        }
+
+        /// <summary>按发送项类型执行一次调度原语。</summary>
+        public bool SendScheduleFrame(byte pid, byte dlc, LinTransmitType transmitType)
+        {
+            if (transmitType == LinTransmitType.Slave)
+            {
+                // Slave 项的响应由 PLIN 在外部 Header 到达时自动完成，调度器不应主动发 Header。
+                LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " type=Slave → 等待外部 Header");
+                return true;
+            }
+            if (transmitType == LinTransmitType.HeaderOnly) return SendHeader(pid, dlc);
+            if (transmitType == LinTransmitType.BreakOnly) return SendBreakOnly(pid);
+
+            byte[] data;
+            lock (_frameData) _frameData.TryGetValue(pid, out data);
+            byte len = dlc == 0 ? (byte)8 : dlc;
+            if (data == null || data.Length != len) data = new byte[len];
+            LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " type=Master len=" + len + " → 完整帧");
+            return Transmit(pid, data, LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid));
+        }
+
+        /// <summary>旧调用兼容：发送项存在时使用其类型，否则按 Master 处理。</summary>
         public bool SendScheduleFrame(byte pid, byte dlc)
         {
-            // 调度槽的帧角色由 LDF 决定：主节点只发布自己的响应数据，
-            // 从节点发布帧必须只发 Header，等待总线上的从节点应答。
-            if (!IsMasterPublisherFrame(pid))
-            {
-                LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 非本机发布帧 → Header-only");
-                return SendHeader(pid, dlc);
-            }
-            byte[] data;
-            lock (_frameData)
-            {
-                if (_frameData.TryGetValue(pid, out data) && data != null && data.Length > 0)
-                {
-                    LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 有缓存数据 " + data.Length + " 字节 → 完整帧");
-                    return Transmit(pid, data, LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid));
-                }
-            }
-            byte zeroLength = dlc == 0 ? (byte)8 : dlc;
-            LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " 无缓存数据但为主节点发布帧 → 发全零 " + zeroLength + " 字节帧");
-            return Transmit(pid, new byte[zeroLength], LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid));
+            var entry = GetTransmitEntry(pid);
+            return SendScheduleFrame(pid, dlc, entry == null ? LinTransmitType.Master : entry.Type);
         }
 
         /// <summary>软件调度帧数据（回显用；无缓存返回 null）</summary>
@@ -455,33 +520,53 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>更新从节点发布帧数据（硬件自动应答内容）；帧条目缺失或被禁用时先重建 RESPONSE_ENABLE 条目</summary>
-        public bool UpdateSlaveData(byte pid, byte[] data)
+        /// <summary>按发送类型配置数据槽；Slave 才启用 RESPONSE_ENABLE。</summary>
+        public bool ConfigureTransmitEntry(byte pid, LinTransmitType transmitType, byte[] data, byte dlc)
         {
-            if (!IsConnected || data == null || data.Length > 8) { LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " 未连接或数据非法 len=" + (data == null ? -1 : data.Length)); return false; }
-            if (_cfg.Mode == LinNodeMode.Slave && !IsSlaveResponseFrame(pid))
-            {
-                LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " 不属于本机节点 " + (_cfg.LocalNodeName ?? "") + "，拒绝配置自动应答");
-                return false;
-            }
-            // 主节点只更新发送缓存；从节点更新硬件自动应答条目。
+            if (!IsConnected || dlc > 8 || (data != null && data.Length > 8)) return false;
+            if (transmitType == LinTransmitType.BreakOnly) return SendBreakOnly(pid);
+            byte len = dlc == 0 ? (byte)(data == null ? 8 : data.Length) : dlc;
+            if (len == 0) len = 8;
+            bool publisher = transmitType == LinTransmitType.Master || transmitType == LinTransmitType.Slave;
+            bool responseEnable = transmitType == LinTransmitType.Slave;
             var entry = new LinPlFrameEntry
             {
                 FrameId = pid,
-                Length = (byte)data.Length,
-                Direction = LinPlDirection.dirPublisher,
+                Length = len,
+                Direction = publisher ? LinPlDirection.dirPublisher : LinPlDirection.dirSubscriber,
                 ChecksumType = ToPlChecksum(LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid)),
-                Flags = (ushort)(_cfg.Mode == LinNodeMode.Slave ? LinPlApi.FRAME_FLAG_RESPONSE_ENABLE : 0),
+                Flags = (ushort)(responseEnable ? LinPlApi.FRAME_FLAG_RESPONSE_ENABLE : 0),
                 InitialData = new byte[8],
             };
-            Array.Copy(data, entry.InitialData, data.Length);
+            if (data != null) Array.Copy(data, entry.InitialData, Math.Min(data.Length, len));
             LinPlError err = LinPlApi.SetFrameEntry(_client, _hw, ref entry);
-            if (err != LinPlError.errOK) { LinDebugLog.Write("[SLAVE] UpdateSlaveData pid=" + pid + " SetFrameEntry → err=" + err); return false; }
-            LinPlError err2 = LinPlApi.UpdateByteArray(_client, _hw, pid, 0, (byte)data.Length, data);
-            LinDebugLog.Write("[LIN] UpdateSlaveData pid=" + pid + " len=" + data.Length + " data=" + LinDebugLog.Hex(data) + " checksum=" + entry.ChecksumType + " response=" + (_cfg.Mode == LinNodeMode.Slave) + " SetFrameEntry=OK UpdateByteArray → err=" + err2);
-            if (err2 != LinPlError.errOK) return false;
-            lock (_frameData) { _frameData[pid] = (byte[])data.Clone(); }
+            if (err != LinPlError.errOK)
+            {
+                LinDebugLog.Write("[TX] ConfigureTransmitEntry pid=" + pid + " type=" + transmitType + " SetFrameEntry → " + err);
+                return false;
+            }
+            if (!publisher)
+            {
+                lock (_frameData) _frameData.Remove(pid);
+                return true;
+            }
+            byte[] payload = data == null ? new byte[len] : (byte[])data.Clone();
+            if (payload.Length != len) Array.Resize(ref payload, len);
+            LinPlError updateErr = LinPlApi.UpdateByteArray(_client, _hw, pid, 0, len, payload);
+            LinDebugLog.Write("[TX] ConfigureTransmitEntry pid=" + pid + " type=" + transmitType + " len=" + len + " response=" + responseEnable + " → " + updateErr);
+            if (updateErr != LinPlError.errOK) return false;
+            lock (_frameData) _frameData[pid] = payload;
             return true;
+        }
+
+        /// <summary>旧调用兼容：已配置项按其类型更新，否则按 LDF 主节点发布者推断。</summary>
+        public bool UpdateSlaveData(byte pid, byte[] data)
+        {
+            var configured = GetTransmitEntry(pid);
+            LinTransmitType type = configured == null
+                ? (LinLdfHelper.IsMasterPublisherFrame(_cfg.LdfHelper, pid) ? LinTransmitType.Master : LinTransmitType.Slave)
+                : configured.Type;
+            return ConfigureTransmitEntry(pid, type, data, (byte)(data == null ? 0 : data.Length));
         }
 
         /// <summary>停用响应：帧条目方向置禁用（硬件不再自动应答该 ID）</summary>
@@ -497,7 +582,9 @@ namespace PCAN_Client.LIN_API
                 Flags = 0,
                 InitialData = new byte[8],
             };
-            return LinPlApi.SetFrameEntry(_client, _hw, ref entry) == LinPlError.errOK;
+            bool ok = LinPlApi.SetFrameEntry(_client, _hw, ref entry) == LinPlError.errOK;
+            if (ok) lock (_frameData) _frameData.Remove(pid);
+            return ok;
         }
 
         // ==================== 调度表（硬件自主运行） ====================
@@ -506,17 +593,19 @@ namespace PCAN_Client.LIN_API
         public string StartSchedule(List<LinScheduleSlot> slots)
         {
             if (!IsConnected) return "未连接";
-            if (_cfg.Mode != LinNodeMode.Master) return "从节点模式不启动调度表，请等待外部主节点发送 Header";
             var active = new List<LinScheduleSlot>();
             foreach (var slot in slots)
-                if (slot.Enabled) active.Add(slot);
-            if (active.Count == 0) return "没有启用的调度槽";
+                if (slot.Enabled && slot.TransmitType != LinTransmitType.Slave && slot.TransmitType != LinTransmitType.BreakOnly)
+                    active.Add(slot);
+            if (active.Count == 0)
+                return "当前发送计划只有 Slave 项；从节点不会主动发送 Header，请等待外部主节点 Header（无需启动调度表）";
             var arr = new LinPlScheduleSlot[active.Count];
             for (int i = 0; i < active.Count; i++)
             {
                 arr[i] = new LinPlScheduleSlot
                 {
-                    Type = LinPlSlotType.sltUnconditional,
+                    Type = active[i].TransmitType == LinTransmitType.HeaderOnly
+                        ? LinPlSlotType.sltMasterRequest : LinPlSlotType.sltUnconditional,
                     Delay = (ushort)active[i].SlotMs,
                     FrameId = new byte[8],
                     CountResolve = 1,
@@ -646,11 +735,17 @@ namespace PCAN_Client.LIN_API
             }
 
             // PLIN 返回的是 LDF 角色方向（Publisher/Subscriber），而不是本机 Tx/Rx。
-            // 结合当前选定节点转换为监控页语义：本机 Publisher 才是 Tx，
-            // 其余 Subscriber/外部节点数据均为 Rx。这样主节点收到从节点响应时不会被误标为 Tx。
-            bool localPublisher = (_cfg.Mode == LinNodeMode.Master && IsMasterPublisherFrame(m.FrameId))
-                || (_cfg.Mode == LinNodeMode.Slave && IsSlaveResponseFrame(m.FrameId));
-            LinFrameDir frameDirection = localPublisher && m.Direction == LinPlDirection.dirPublisher
+            // 只有发送页中明确配置为本机 Publisher 的 Master/Slave 项才标为 Tx；
+            // 未配置报文和 HeaderOnly 报文一律把总线数据视为 Rx。
+            bool otherResponse = (m.ErrorFlags & LinPlMsgErrors.OtherResponse) != 0;
+            var configured = GetTransmitEntry(m.FrameId);
+            bool localPublisher = configured != null && configured.Enabled &&
+                (configured.Type == LinTransmitType.Master || configured.Type == LinTransmitType.Slave);
+            // 从节点可以仅依赖 LDF + 本机节点选择自动应答，不一定有发送页条目；
+            // 这种隐式响应仍是本机 Tx，不能被监控页误画成 Rx。
+            if (configured == null && _cfg.Mode == LinNodeMode.Slave)
+                localPublisher = LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, m.FrameId, _cfg.LocalNodeName);
+            LinFrameDir frameDirection = localPublisher && !otherResponse && m.Direction == LinPlDirection.dirPublisher
                 ? LinFrameDir.Tx
                 : LinFrameDir.Rx;
             var frame = new LinFrameRecord

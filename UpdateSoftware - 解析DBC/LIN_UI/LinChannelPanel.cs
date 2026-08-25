@@ -50,7 +50,7 @@ namespace PCAN_Client.LIN_UI
 
         private static readonly LinHwBindItem NotConnectItem = new LinHwBindItem { HwType = "", HwHandle = "", Display = "不连接" };
 
-        /// <summary>从节点仿真下拉项：空名称表示只监听、不为任何 LDF 从节点自动应答。</summary>
+        /// <summary>从节点仿真下拉项：空名称表示只监听，不为任何 LDF 从节点自动应答。</summary>
         private class LinNodeItem
         {
             public string Name { get; set; } = "";
@@ -283,8 +283,6 @@ namespace PCAN_Client.LIN_UI
 
         private void AddChannelRow(LinChannel ch)
         {
-            if (ch.LdfHelper != null)
-                ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, ch.LocalNodeName);
             var row = new DataGridViewRow { Tag = ch };
             row.CreateCells(_dgv,
                 ch.Name,
@@ -323,7 +321,6 @@ namespace PCAN_Client.LIN_UI
             return items;
         }
 
-        /// <summary>根据当前行 LDF 重建本机从节点下拉；主节点模式固定显示仅监听，保留已选从节点供切换回从节点后继续使用。</summary>
         private void RebuildLocalNodeCellDataSource(DataGridViewRow row)
         {
             var cell = (DataGridViewComboBoxCell)row.Cells["colLocalNode"];
@@ -662,9 +659,13 @@ namespace PCAN_Client.LIN_UI
                         {
                             Lin_API.LinDisconnect(logicChannel);
                             ch.ConnectError = "本机从节点已修改，请重新连接";
+                            UpdateRowStatus(row);
                         }
-                        else ch.ConnectError = "";
-                        UpdateRowStatus(row);
+                        else
+                        {
+                            ch.ConnectError = "";
+                            UpdateRowStatus(row);
+                        }
                     }
                     break;
                 case "colBaud":
@@ -686,7 +687,7 @@ namespace PCAN_Client.LIN_UI
             }
             LinConfig.Channels = channels;
             LinConfig.SaveLinConfig();
-            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + ",节点=" + (c.LocalNodeName.Length > 0 ? c.LocalNodeName : "仅监听") + "]").ToArray()) + "）");
+            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + ",节点=" + (c.Mode == LinNodeMode.Master ? "主节点" : "从节点") + ",发送项=" + (c.TransmitEntries == null ? 0 : c.TransmitEntries.Count) + "]").ToArray()) + "）");
         }
     }
 }

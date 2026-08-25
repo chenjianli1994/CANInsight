@@ -9,6 +9,8 @@ namespace PCAN_Client.LIN_API
     {
         public bool Enabled = true;
         public byte Pid;
+        /// <summary>该槽对应的发送原语；Slave 槽只配置自动响应，不由调度器主动发 Header。</summary>
+        public LinTransmitType TransmitType = LinTransmitType.Master;
         public int SlotMs = 10;
         /// <summary>运行计数（调度循环执行次数）</summary>
         public long Counter;
@@ -67,6 +69,7 @@ namespace PCAN_Client.LIN_API
         private long _nextDueMs;
         private long _tickCount;
         private string _lastError = "";
+        private bool _passiveListening;
         private struct PendingResponse
         {
             public long SentMs;
@@ -96,6 +99,9 @@ namespace PCAN_Client.LIN_API
 
         public bool IsRunning => _running;
 
+        /// <summary>当前计划只有 Slave 响应项，硬件已配置但软件调度器不发 Header。</summary>
+        public bool IsPassiveListening => _passiveListening;
+
         /// <summary>槽列表（UI 直接编辑）</summary>
         public List<LinScheduleSlot> Slots => _slots;
 
@@ -122,6 +128,12 @@ namespace PCAN_Client.LIN_API
             foreach (var s in _slots)
             {
                 if (!s.Enabled) continue;
+                if (s.TransmitType == LinTransmitType.BreakOnly)
+                    return $"帧 0x{s.Pid:X2} 使用 BreakOnly，但当前 PCAN/Vector 适配器不提供独立 Break 原语";
+                if (s.SlotMs <= 0)
+                    return $"帧 0x{s.Pid:X2} 时隙必须大于 0ms";
+                // Slave 槽不产生 Header，时隙只用于调度游标，不需要按总线传输时间校验。
+                if (s.TransmitType == LinTransmitType.Slave) continue;
                 byte dlc = LinLdfHelper.GetFrameDlc(ldf, s.Pid);
                 if (dlc == 0) dlc = 8; // 无 LDF 时按最大帧保守校验
                 double minMs = LinChecksum.MinFrameTimeMs(dlc, baudrate);
@@ -136,17 +148,67 @@ namespace PCAN_Client.LIN_API
 
         public bool Start()
         {
-            if (_running || _slots.Count == 0) return false;
-            if (_logicChannel < 1 || _logicChannel > LinConfig.Channels.Count ||
-                LinConfig.Channels[_logicChannel - 1].Mode != LinNodeMode.Master)
+            bool channelSlave = _logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
+                LinConfig.Channels[_logicChannel - 1].GetHardwareMode() == LinNodeMode.Slave;
+            // 通道模式可能在通道管理器中切换，而调度器实例按窗体生命周期复用。
+            // 切换到从节点后，先清理旧主节点定时器，再进入被动监听状态。
+            if (_running)
             {
-                _lastError = "从节点不启动调度表；LIN 从节点只能等待外部主节点 Header 并自动响应";
-                return false;
+                if (!channelSlave) return false;
+                Suspend();
             }
+            else
+            {
+                // OnTick 在“全部槽被取消勾选”时只置停止状态，不能在 winmm
+                // 回调内销毁自身；下一次启动/暂停负责回收遗留定时器。
+                _timer.Stop();
+            }
+            _passiveListening = false;
             if (!Lin_API.IsConnected(_logicChannel))
             {
                 _lastError = "LIN 通道未连接，不能启动调度表";
                 return false;
+            }
+
+            // 从节点没有本地调度时钟；连接时已经把 RESPONSE_ENABLE 配置给硬件，
+            // “开始调度”只切换到被动监听状态。即使发送项为空，也不能启动一个
+            // 空的 1ms 定时器，否则会在 UI 线程/接收线程之间制造无意义的高频回调。
+            if (channelSlave)
+            {
+                _lastError = "";
+                _passiveListening = true;
+                RunningChanged?.Invoke(false);
+                return true;
+            }
+
+            if (_slots.Count == 0)
+            {
+                _lastError = "没有配置调度槽";
+                return false;
+            }
+
+            bool hasEnabled = false;
+            bool hasInitiator = false;
+            foreach (var slot in _slots)
+            {
+                if (slot == null || !slot.Enabled) continue;
+                hasEnabled = true;
+                if (slot.TransmitType == LinTransmitType.Master || slot.TransmitType == LinTransmitType.HeaderOnly)
+                    hasInitiator = true;
+            }
+            if (!hasEnabled)
+            {
+                _lastError = "没有启用的调度槽";
+                return false;
+            }
+            if (!hasInitiator)
+            {
+                _passiveListening = true;
+                _lastError = "";
+                RunningChanged?.Invoke(false);
+                // 纯 Slave 计划的“启动”只确认被动监听状态，不启动本地定时器。
+                // 报文是否出现取决于总线上是否有外部 Master 发出对应 Header。
+                return true;
             }
             _lastError = "";
             _pendingResponses.Clear();
@@ -157,8 +219,8 @@ namespace PCAN_Client.LIN_API
             }
             else
             {
-                // 软件调度（PEAK 本环境硬件调度表 errUnknown，Vector 本就软件）：主节点模式先
-                // 预置主节点发布帧数据，确保硬件响应槽和界面回显都使用同一份数据。
+                // 软件调度（PEAK 本环境硬件调度表 errUnknown，Vector 本就软件）：
+                // 预置发送页中 Master 项数据；Slave 项在连接时已配置自动响应。
                 Lin_API.PrepareMasterFrames(_logicChannel);
                 _cursor = 0;
                 _nextDueMs = NowMs();
@@ -171,8 +233,15 @@ namespace PCAN_Client.LIN_API
 
         public void Suspend()
         {
-            if (!_running) return;
+            if (!_running)
+            {
+                _passiveListening = false;
+                _pendingResponses.Clear();
+                _timer.Stop();
+                return;
+            }
             _running = false; // 先置位：已派发的 winmm 回调在 OnTick 开头被拦截，不再多发 Header
+            _passiveListening = false;
             _pendingResponses.Clear();
             if (_useHardwareSchedule) Lin_API.SuspendSchedule(_logicChannel);
             else _timer.Stop();
@@ -182,6 +251,12 @@ namespace PCAN_Client.LIN_API
         public void Resume()
         {
             if (_running) return;
+            if (_logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
+                LinConfig.Channels[_logicChannel - 1].GetHardwareMode() == LinNodeMode.Slave)
+            {
+                _passiveListening = true;
+                return;
+            }
             if (_useHardwareSchedule)
             {
                 if (!Lin_API.ResumeSchedule(_logicChannel)) return;
@@ -238,23 +313,10 @@ namespace PCAN_Client.LIN_API
             _cursor = (idx + 1) % snapshot.Count;
             _nextDueMs = now + slot.SlotMs; // 累计式：基于实际时刻，防漂移
 
-            // 主节点模式：逐槽发送完整发布帧或 Header（等待从节点响应）。
-            // 从节点不进入此调度器；它只在外部主节点 Header 到达时由 PLIN 自动响应。
-            bool master = _logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
-                          LinConfig.Channels[_logicChannel - 1].Mode == LinNodeMode.Master;
-            if (!master)
-            {
-                _running = false;
-                _timer.Stop();
-                _lastError = "从节点不运行调度表；等待外部主节点 Header";
-                RunningChanged?.Invoke(false);
-                return;
-            }
-            bool sent = false;
-            // 完整帧发送失败时不能退化为 Header-only：对主节点发布帧会违反 LIN 角色语义。
+            bool dispatched;
             long sendStartMs = Lin_API.SessionMs;
-            sent = Lin_API.LinSendScheduleFrame(_logicChannel, slot.Pid);
-            if (sent && !Lin_API.IsMasterPublisherFrame(_logicChannel, slot.Pid))
+            dispatched = Lin_API.LinSendScheduleSlot(_logicChannel, slot);
+            if (dispatched && slot.TransmitType == LinTransmitType.HeaderOnly)
             {
                 // 同一响应槽可能在超时窗口内重复调度，保留最早一次等待，避免反复重置超时。
                 if (!_pendingResponses.ContainsKey(slot.Pid))
@@ -267,8 +329,10 @@ namespace PCAN_Client.LIN_API
                     };
                 }
             }
-            slot.Counter++;
-            LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") + " slotMs=" + slot.SlotMs + " master=" + master + " sent=" + sent);
+            // Slave 槽仅用于把自动应答配置纳入同一张表，不代表本机主动发送；
+            // 发送失败也不记为一个已完成周期。
+            if (dispatched && slot.TransmitType != LinTransmitType.Slave) slot.Counter++;
+            LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") + " slotMs=" + slot.SlotMs + " type=" + slot.TransmitType + " dispatched=" + dispatched);
             SlotChanged?.Invoke(idx);
         }
 

@@ -165,62 +165,56 @@ namespace PCAN_Client.LIN_API
             return ok;
         }
 
-        /// <summary>调度表发一帧（软件调度）：本机发布帧发完整帧，从节点发布帧只发 Header</summary>
+        /// <summary>调度表兼容入口：使用发送页中该 PID 的发送类型。</summary>
         public static bool LinSendScheduleFrame(byte logicChannel, byte pid)
         {
-            LinChecksumKind ck = GetFrameChecksumKind(logicChannel, pid);
+            var slot = new LinScheduleSlot
+            {
+                Pid = pid,
+                SlotMs = 15,
+                TransmitType = GetTransmitType(logicChannel, pid, LinTransmitType.Master),
+            };
+            return LinSendScheduleSlot(logicChannel, slot);
+        }
+
+        /// <summary>按调度槽发送 Master/HeaderOnly/BreakOnly；Slave 槽只等待外部 Header。</summary>
+        public static bool LinSendScheduleSlot(byte logicChannel, LinScheduleSlot slot)
+        {
+            if (slot == null) return false;
+            LinTransmitType type = slot.TransmitType;
+            if (type == LinTransmitType.Master && GetTransmitEntry(logicChannel, slot.Pid) != null)
+                type = GetTransmitType(logicChannel, slot.Pid, type);
+            if (type == LinTransmitType.Slave)
+            {
+                LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 被动响应，不产生调度报文");
+                return true;
+            }
             PcanLinHardware pcan;
             XlLinHardware xl;
             lock (_hwLock)
             {
                 if (_pcan.TryGetValue(logicChannel, out pcan))
                 {
-                    bool ok = pcan.SendScheduleFrame(pid, GetFrameDlc(logicChannel, pid));
-                    LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → " + ok);
-                    // 回显必须对应实际发送：主节点发布帧无缓存时，硬件发送的是全零完整帧；
-                    // 从节点发布帧只发送 Header，真实响应由接收线程上报，不伪造 Tx 帧。
-                    if (ok)
-                    {
-                        bool localPublisher = IsMasterPublisherFrame(logicChannel, pid);
-                        if (localPublisher)
-                        {
-                            byte[] data = pcan.GetFrameData(pid);
-                            if (data == null)
-                            {
-                                byte dlc = GetFrameDlc(logicChannel, pid);
-                                data = new byte[dlc == 0 ? 8 : dlc];
-                            }
-                            EchoTx(logicChannel, pid, data, ck);
-                        }
-                    }
+                    bool ok = pcan.SendScheduleFrame(slot.Pid, GetFrameDlc(logicChannel, slot.Pid), type);
+                    LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=" + type + " → " + ok);
                     return ok;
                 }
                 if (_xl.TryGetValue(logicChannel, out xl))
                 {
-                    bool localPublisher = IsMasterPublisherFrame(logicChannel, pid);
-                    if (!localPublisher)
-                    {
-                        bool headerOk = xl.SendRequest(pid);
-                        LinDebugLog.Write("[SCH] LinSendScheduleFrame Vector ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " Header → " + headerOk);
-                        return headerOk;
-                    }
-
-                    byte dlc = GetFrameDlc(logicChannel, pid);
-                    if (dlc == 0) dlc = 8;
-                    byte[] data = xl.GetFrameData(pid);
-                    if (data == null || data.Length != dlc) data = new byte[dlc];
-                    bool ok = xl.ConfigureSlaveResponse(pid, data, dlc) && xl.SendRequest(pid);
-                    LinDebugLog.Write("[SCH] LinSendScheduleFrame Vector ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " 完整帧 len=" + dlc + " → " + ok);
-                    if (ok) EchoTx(logicChannel, pid, data, ck);
+                    byte dlc = GetFrameDlc(logicChannel, slot.Pid);
+                    bool ok = xl.SendScheduleFrame(slot.Pid, dlc, type);
+                    LinDebugLog.Write("[SCH] LinSendScheduleSlot Vector ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=" + type + " → " + ok);
                     return ok;
                 }
             }
-            LinDebugLog.Write("[SCH] LinSendScheduleFrame ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + " → false（未连接）");
+            LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → false（未连接）");
             return false;
         }
 
         private static byte GetFrameDlc(byte logicChannel, byte pid)
         {
+            var configured = GetTransmitEntry(logicChannel, pid);
+            if (configured != null && configured.Dlc > 0) return configured.Dlc;
             var ldf = GetLdf(logicChannel);
             if (ldf != null && ldf.Frames.ContainsKey(pid)) return ldf.Frames[pid].Dlc;
             return 0;
@@ -234,17 +228,32 @@ namespace PCAN_Client.LIN_API
             return ldf == null ? fallback : LinLdfHelper.GetFrameChecksumType(ldf, pid);
         }
 
-        /// <summary>更新发布/从节点响应数据</summary>
-        public static bool UpdateSlaveData(byte logicChannel, byte pid, byte[] data, byte dlc)
+        /// <summary>更新发送项数据和硬件帧条目。</summary>
+        public static bool UpdateTransmitData(byte logicChannel, byte pid, byte[] data, byte dlc, LinTransmitType type)
         {
+            if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count || dlc > 8) return false;
+            var cfg = LinConfig.Channels[logicChannel - 1];
+            var entry = cfg.GetOrCreateTransmitEntry(pid, dlc, type);
+            entry.Type = type;
+            entry.Dlc = dlc == 0 ? (byte)(data == null ? 0 : data.Length) : dlc;
+            entry.Data = data == null ? new byte[entry.Dlc == 0 ? 8 : entry.Dlc] : (byte[])data.Clone();
+            if (entry.Data.Length != (entry.Dlc == 0 ? entry.Data.Length : entry.Dlc))
+                Array.Resize(ref entry.Data, entry.Dlc);
             PcanLinHardware pcan;
             XlLinHardware xl;
             lock (_hwLock)
             {
-                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.UpdateSlaveData(pid, data);
-                if (_xl.TryGetValue(logicChannel, out xl)) return xl.UpdateSlaveData(pid, data, dlc);
+                if (_pcan.TryGetValue(logicChannel, out pcan)) return pcan.ConfigureTransmitEntry(pid, type, entry.Data, entry.Dlc);
+                if (_xl.TryGetValue(logicChannel, out xl)) return xl.ConfigureTransmitEntry(pid, type, entry.Data, entry.Dlc);
             }
             return false;
+        }
+
+        /// <summary>旧调用兼容：使用已配置项类型；无配置时按 Slave 处理。</summary>
+        public static bool UpdateSlaveData(byte logicChannel, byte pid, byte[] data, byte dlc)
+        {
+            return UpdateTransmitData(logicChannel, pid, data, dlc,
+                GetTransmitType(logicChannel, pid, LinTransmitType.Slave));
         }
 
         /// <summary>停用从节点/发布响应（取消勾选时撤销硬件自动应答）</summary>
@@ -379,31 +388,23 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 调度表 ====================
 
-        /// <summary>
-        /// 预置 LDF 中主节点发布帧的初始数据（全零，后续由发布数据页签修改）到硬件帧条目/软件缓存。
-        /// 仅主节点模式：从节点模式下预置会让本机对主节点发布帧配置 RESPONSE_ENABLE 自动应答，
-        /// 与真实主节点/真实从节点抢答 → 总线数据冲突、全部校验和错误（实测症状：接入外部主节点后
-        /// 所有报文报错误帧）。从节点模式只应答自己发布的帧（由 ConfigureFrameEntries/从节点页签配置）。
-        /// 软件调度（Vector/PEAK 均为 LinScheduler 驱动）与硬件调度启动前都必须调用——
-        /// 否则主节点发布帧只能使用发送层的全零兜底，无法保持用户配置的数据槽。
-        /// </summary>
+        /// <summary>预置发送页中 Master 项的初始数据，不再按 LDF Publisher 全量抢答。</summary>
         public static void PrepareMasterFrames(byte logicChannel)
         {
-            bool master = logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
-                          LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master;
-            if (!master) return;
-            var ldf = GetLdf(logicChannel);
-            if (ldf == null) return;
+            if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return;
+            var cfg = LinConfig.Channels[logicChannel - 1];
             int n = 0;
-            foreach (var kv in ldf.Frames)
+            foreach (var entry in cfg.TransmitEntries ?? new List<LinTransmitEntry>())
             {
-                if (!string.Equals(kv.Value.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase)) continue;
-                // 已有用户配置数据（发送页/发布数据页签先于调度写入）时不覆盖，仅补未配置帧的全零初始数据
-                if (HasFrameData(logicChannel, kv.Key)) continue;
-                UpdateSlaveData(logicChannel, kv.Key, new byte[kv.Value.Dlc == 0 ? 8 : kv.Value.Dlc], kv.Value.Dlc);
+                if (entry == null || !entry.Enabled || entry.Type != LinTransmitType.Master) continue;
+                byte dlc = entry.Dlc == 0 ? GetFrameDlc(logicChannel, entry.Pid) : entry.Dlc;
+                if (dlc == 0) dlc = 8;
+                if (entry.Data == null || entry.Data.Length != dlc) entry.Data = new byte[dlc];
+                if (HasFrameData(logicChannel, entry.Pid)) continue;
+                UpdateTransmitData(logicChannel, entry.Pid, entry.Data, dlc, LinTransmitType.Master);
                 n++;
             }
-            LinDebugLog.Write("[SCH] PrepareMasterFrames ch=" + logicChannel + " 补预置主节点发布帧 " + n + " 条（全零初始数据）");
+            LinDebugLog.Write("[SCH] PrepareMasterFrames ch=" + logicChannel + " 补预置发送页 Master 帧 " + n + " 条（全零初始数据）");
         }
 
         /// <summary>该帧是否已有缓存数据（PEAK/Vector 软件调度缓存）</summary>
@@ -421,19 +422,12 @@ namespace PCAN_Client.LIN_API
             return false;
         }
 
-        /// <summary>
-        /// 启动调度：先预置主节点发布帧的初始数据（Vector 需 XL_LinSetSlave 配置响应，否则发 Header 后无应答；
-        /// PEAK 需帧条目数据，否则发全零帧），再启动硬件调度（PEAK）或软件调度（Vector 由 LinScheduler 驱动）。
-        /// </summary>
+        /// <summary>启动硬件调度；每槽发送类型已经编码在 LinScheduleSlot 中。</summary>
         public static string StartSchedule(byte logicChannel, List<LinScheduleSlot> slots)
         {
-            bool master = logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
-                          LinConfig.Channels[logicChannel - 1].Mode == LinNodeMode.Master;
             var sb = new System.Text.StringBuilder();
-            foreach (var s in slots) { if (s.Enabled) { if (sb.Length > 0) sb.Append(','); sb.Append("0x").Append(s.Pid.ToString("X2")).Append('@').Append(s.SlotMs).Append("ms"); } }
-            LinDebugLog.Write("[SCH] StartSchedule ch=" + logicChannel + " master=" + master + " slots=" + sb);
-            if (!master)
-                return "从节点模式不启动调度表，请等待外部主节点发送 Header";
+            foreach (var s in slots) { if (s.Enabled) { if (sb.Length > 0) sb.Append(','); sb.Append("0x").Append(s.Pid.ToString("X2")).Append('@').Append(s.SlotMs).Append("ms/").Append(s.TransmitType); } }
+            LinDebugLog.Write("[SCH] StartSchedule ch=" + logicChannel + " slots=" + sb);
             if (!IsConnected(logicChannel))
                 return "LIN 通道未连接，不能启动调度表";
             PrepareMasterFrames(logicChannel);
@@ -569,16 +563,23 @@ namespace PCAN_Client.LIN_API
             BusEvent?.Invoke(logicChannel, kind);
         }
 
-        /// <summary>该帧是否为 LDF 中主节点发布帧（主节点模式发完整帧后无需应答，超时检测应跳过）；无 LDF 返回 false</summary>
+        private static LinTransmitEntry GetTransmitEntry(byte logicChannel, byte pid)
+        {
+            if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return null;
+            return LinConfig.Channels[logicChannel - 1].FindTransmitEntry(pid);
+        }
+
+        internal static LinTransmitType GetTransmitType(byte logicChannel, byte pid, LinTransmitType fallback)
+        {
+            var entry = GetTransmitEntry(logicChannel, pid);
+            return entry == null ? fallback : entry.Type;
+        }
+
+        /// <summary>该帧是否是发送页中明确配置的 Master 项。</summary>
         internal static bool IsMasterPublisherFrame(byte logicChannel, byte pid)
         {
-            if (pid == 0x3C) return true;
-            var ldf = GetLdf(logicChannel);
-            if (ldf == null) return false;
-            LinFrameDef def;
-            if (!ldf.Frames.TryGetValue(pid, out def)) return false;
-            return !string.IsNullOrEmpty(ldf.MasterName)
-                && string.Equals(def.Publisher, ldf.MasterName, StringComparison.OrdinalIgnoreCase);
+            var entry = GetTransmitEntry(logicChannel, pid);
+            return entry != null && entry.Enabled && entry.Type == LinTransmitType.Master;
         }
     }
 }

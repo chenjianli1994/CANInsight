@@ -84,6 +84,8 @@ namespace PCAN_Client.LIN_API
             bool portOpened = false;
             try
             {
+                string planError = _cfg.ValidateTransmitPlan();
+                if (planError.Length > 0) return planError;
                 int channelIndex = -1;
                 if (_cfg.HwHandle.StartsWith("ch ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -124,15 +126,20 @@ namespace PCAN_Client.LIN_API
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "打开 Vector LIN 端口失败: " + status;
                 portOpened = true;
 
-                // 通道参数：模式（主/从）+ 波特率 + LDF 协议版本
+                // Vector 仍要求底层连接模式；通道级 Slave 选择优先，纯 Slave 发送计划
+                // 也会自动推导为 XL_LIN_SLAVE。
                 var linVersion = GetLinVersion();
                 var linStat = new XLClass.xl_linStatPar
                 {
-                    LINMode = _cfg.Mode == LinNodeMode.Master ? XLDefine.XL_LIN_Mode.XL_LIN_MASTER : XLDefine.XL_LIN_Mode.XL_LIN_SLAVE,
+                    LINMode = _cfg.GetHardwareMode() == LinNodeMode.Slave
+                        ? XLDefine.XL_LIN_Mode.XL_LIN_SLAVE
+                        : XLDefine.XL_LIN_Mode.XL_LIN_MASTER,
                     baudrate = (int)_cfg.Baudrate,
                     LINVersion = linVersion,
                     reserved = 0,
                 };
+                string modeNotice = _cfg.GetHardwareModeNotice();
+                if (modeNotice.Length > 0) LinDebugLog.Write("[CONN] 警告: " + modeNotice);
                 status = _xlDriver.XL_LinSetChannelParams(_portHandle, _channelMask, linStat);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 通道参数失败: " + status;
 
@@ -146,21 +153,43 @@ namespace PCAN_Client.LIN_API
                     if (status != XLDefine.XL_Status.XL_SUCCESS) return "配置 LIN 校验和模型失败: " + status;
                 }
 
-                status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_NONE);
-                if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
-                _active = true;
-
-                // 从节点模式：只按选定本机节点配置硬件自动应答。
-                if (_cfg.Mode == LinNodeMode.Slave && _cfg.LdfHelper != null)
+                // Vector 示例要求在激活通道前调用 XL_LinSetSlave。发送页明确选择
+                // 为 Slave 的报文直接配置；旧的通道级从节点配置也在这里迁移，
+                // 避免“选择从节点但没有发送项”时既不应答又让启动流程失去状态。
+                var configuredSlaveIds = new HashSet<byte>();
+                if (_cfg.TransmitEntries != null)
+                {
+                    foreach (var transmit in _cfg.TransmitEntries)
+                    {
+                        if (transmit == null || !transmit.Enabled) continue;
+                        bool legacySlave = _cfg.Mode == LinNodeMode.Slave &&
+                            LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, transmit.Pid, _cfg.LocalNodeName);
+                        if (transmit.Type != LinTransmitType.Slave && !legacySlave) continue;
+                        byte dlc = transmit.Dlc;
+                        if (dlc == 0 && _cfg.LdfHelper != null) dlc = LinLdfHelper.GetFrameDlc(_cfg.LdfHelper, transmit.Pid);
+                        if (dlc == 0) dlc = 8;
+                        byte[] data = transmit.Data == null ? new byte[dlc] : (byte[])transmit.Data.Clone();
+                        if (data.Length != dlc) Array.Resize(ref data, dlc);
+                        if (!ConfigureSlaveResponse(transmit.Pid, data, dlc))
+                            return "配置从节点响应失败: PID 0x" + transmit.Pid.ToString("X2");
+                        configuredSlaveIds.Add(transmit.Pid);
+                    }
+                }
+                if (_cfg.Mode == LinNodeMode.Slave)
                 {
                     foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(_cfg.LdfHelper, _cfg.LocalNodeName))
                     {
-                        var def = _cfg.LdfHelper.Frames[pid];
-                        byte dlc = def.Dlc == 0 ? (byte)8 : def.Dlc;
+                        if (configuredSlaveIds.Contains(pid)) continue;
+                        byte dlc = LinLdfHelper.GetFrameDlc(_cfg.LdfHelper, pid);
+                        if (dlc == 0) dlc = 8;
                         if (!ConfigureSlaveResponse(pid, new byte[dlc], dlc))
                             return "配置从节点响应失败: PID 0x" + pid.ToString("X2");
                     }
                 }
+
+                status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_NONE);
+                if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
+                _active = true;
 
                 _running = true;
                 _recvThread = new Thread(ReceiveLoop) { IsBackground = true, Name = $"XLLIN_Rx_CH{_logicChannel}" };
@@ -184,10 +213,10 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>逐 ID DLC 数组（60 项，LDF 命中按定义，缺省 8）</summary>
+        /// <summary>逐 ID DLC 数组（64 项，LDF 命中按定义，缺省 8）</summary>
         private byte[] BuildDlcArray()
         {
-            var arr = new byte[60];
+            var arr = new byte[64];
             for (int i = 0; i < arr.Length; i++) arr[i] = 8;
             if (_cfg.LdfHelper != null)
             {
@@ -196,13 +225,18 @@ namespace PCAN_Client.LIN_API
                     if (kv.Key < arr.Length && kv.Value.Dlc > 0) arr[kv.Key] = kv.Value.Dlc;
                 }
             }
+            foreach (var entry in _cfg.TransmitEntries ?? new List<LinTransmitEntry>())
+            {
+                if (entry != null && entry.Pid < arr.Length && entry.Dlc > 0 && entry.Dlc <= 8)
+                    arr[entry.Pid] = entry.Dlc;
+            }
             return arr;
         }
 
-        /// <summary>逐 ID 校验和模型数组（Vector API：经典=1，增强=2）</summary>
+        /// <summary>逐 ID 校验和模型数组（64 项；Vector API：经典=1，增强=2）</summary>
         private byte[] BuildChecksumArray()
         {
-            var arr = new byte[60];
+            var arr = new byte[64];
             for (int i = 0; i < arr.Length; i++) arr[i] = 2;
             if (_cfg.LdfHelper != null)
             {
@@ -255,10 +289,19 @@ namespace PCAN_Client.LIN_API
             return _xlDriver.XL_LinSendRequest(_portHandle, _channelMask, pid, 0) == XLDefine.XL_Status.XL_SUCCESS;
         }
 
+        /// <summary>Vector API 没有公开独立 Break 发送原语。</summary>
+        public bool SendBreakOnly(byte pid)
+        {
+            LinDebugLog.Write("[TX] BreakOnly pid=" + pid + " → Vector API 不支持独立 Break 原语");
+            return false;
+        }
+
         /// <summary>配置本机对指定帧 ID 的响应数据（主节点发布数据 / 从节点自动应答共用）</summary>
         public bool ConfigureSlaveResponse(byte pid, byte[] data, byte dlc)
         {
-            if (!IsConnected || data == null || dlc > 8 || data.Length < dlc) return false;
+            // XL_LinSetSlave 按官方示例须在 XL_ActivateChannel 前调用；此时 _active
+            // 尚未置位，但端口和通道掩码已经有效。
+            if (_channelMask == 0 || data == null || dlc > 8 || data.Length < dlc) return false;
             var checksum = LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid) == LinChecksumKind.Classic
                 ? XLDefine.XL_LIN_CalcChecksum.XL_LIN_CALC_CHECKSUM
                 : XLDefine.XL_LIN_CalcChecksum.XL_LIN_CALC_CHECKSUM_ENHANCED;
@@ -280,13 +323,32 @@ namespace PCAN_Client.LIN_API
             return ok;
         }
 
-        /// <summary>更新从节点/发布帧数据</summary>
+        /// <summary>按发送项类型配置数据；Vector 的 Master 数据通过一次性 SetSlave + SendRequest 完成。</summary>
+        public bool ConfigureTransmitEntry(byte pid, LinTransmitType type, byte[] data, byte dlc)
+        {
+            if (type == LinTransmitType.BreakOnly) return SendBreakOnly(pid);
+            if (type == LinTransmitType.HeaderOnly)
+            {
+                // 防止此前的 Slave 配置继续响应该 ID。
+                DisableResponse(pid);
+                return true;
+            }
+            if (data == null) data = new byte[dlc == 0 ? 8 : dlc];
+            if (dlc == 0) dlc = (byte)data.Length;
+            if (type == LinTransmitType.Master)
+            {
+                // Master 数据缓存不应在连接层长期注册成 Slave 响应；发送时临时装载。
+                lock (_frameData) _frameData[pid] = (byte[])data.Clone();
+                return true;
+            }
+            return ConfigureSlaveResponse(pid, data, dlc);
+        }
+
+        /// <summary>旧调用兼容：已配置项按其类型更新，否则按 Slave 处理。</summary>
         public bool UpdateSlaveData(byte pid, byte[] data, byte dlc)
         {
-            if (_cfg.Mode == LinNodeMode.Slave &&
-                !LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName))
-                return false;
-            return ConfigureSlaveResponse(pid, data, dlc);
+            var configured = _cfg.FindTransmitEntry(pid);
+            return ConfigureTransmitEntry(pid, configured == null ? LinTransmitType.Slave : configured.Type, data, dlc);
         }
 
         /// <summary>软件调度回显用的本地帧数据缓存。</summary>
@@ -299,14 +361,42 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>手动发送完整帧：预置响应数据 + 发 Header（硬件自动补数据与校验和）</summary>
+        /// <summary>手动发送完整帧：临时装载数据响应、发 Header，再撤销临时响应。</summary>
         public bool Transmit(byte pid, byte[] data, LinChecksumKind ck)
         {
             if (!IsConnected) return false;
             byte dlc = (byte)(data == null ? 0 : data.Length);
             if (dlc > 8) return false;
-            if (dlc > 0 && !ConfigureSlaveResponse(pid, data, dlc)) return false;
-            return SendRequest(pid);
+            if (dlc == 0) dlc = 8;
+            if (!ConfigureSlaveResponse(pid, data ?? new byte[dlc], dlc)) return false;
+            bool ok = SendRequest(pid);
+            // XL_LinSendRequest 已将当前请求放入驱动队列；撤销长期 Slave 响应，
+            // 防止外部主节点随后用同一 PID 触发本机抢答。
+            DisableResponse(pid);
+            lock (_frameData) _frameData[pid] = data == null ? new byte[dlc] : (byte[])data.Clone();
+            return ok;
+        }
+
+        /// <summary>软件调度按发送项类型执行一次操作。</summary>
+        public bool SendScheduleFrame(byte pid, byte dlc, LinTransmitType type)
+        {
+            if (type == LinTransmitType.Slave)
+            {
+                LinDebugLog.Write("[TX] SendScheduleFrame pid=" + pid + " type=Slave → 等待外部 Header");
+                return true;
+            }
+            if (type == LinTransmitType.HeaderOnly) return SendRequest(pid);
+            if (type == LinTransmitType.BreakOnly) return SendBreakOnly(pid);
+            byte[] data = GetFrameData(pid);
+            byte len = dlc == 0 ? (byte)8 : dlc;
+            if (data == null || data.Length != len) data = new byte[len];
+            return Transmit(pid, data, LinLdfHelper.GetFrameChecksumType(_cfg.LdfHelper, pid));
+        }
+
+        public bool SendScheduleFrame(byte pid, byte dlc)
+        {
+            var configured = _cfg.FindTransmitEntry(pid);
+            return SendScheduleFrame(pid, dlc, configured == null ? LinTransmitType.Master : configured.Type);
         }
 
         // ==================== 调度（软件调度原语，LinScheduler 驱动） ====================

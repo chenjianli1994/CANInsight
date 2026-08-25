@@ -9,6 +9,46 @@ namespace PCAN_Client.LIN_API
         Slave = 1,
     }
 
+    /// <summary>
+    /// 发送页签中的 LIN 发送原语。它描述本机对某一个报文的行为，
+    /// 不再把主/从角色绑定到整个通道。
+    /// </summary>
+    public enum LinTransmitType
+    {
+        /// <summary>本机发送 Header 和数据（主节点发布帧）。</summary>
+        Master = 0,
+        /// <summary>等待总线 Header，再由本机发布数据。</summary>
+        Slave = 1,
+        /// <summary>本机只发送 Header，不提供数据。</summary>
+        HeaderOnly = 2,
+        /// <summary>只发送 LIN Break；当前 PCAN/Vector 适配器若无原语则明确报告不支持。</summary>
+        BreakOnly = 3,
+    }
+
+    /// <summary>发送页签的一条报文配置，同时作为调度表的来源。</summary>
+    public class LinTransmitEntry
+    {
+        public byte Pid;
+        public LinTransmitType Type = LinTransmitType.Master;
+        public bool Enabled = true;
+        public int SlotMs = 15;
+        public byte Dlc;
+        public byte[] Data = new byte[0];
+
+        public LinTransmitEntry Clone()
+        {
+            return new LinTransmitEntry
+            {
+                Pid = Pid,
+                Type = Type,
+                Enabled = Enabled,
+                SlotMs = SlotMs,
+                Dlc = Dlc,
+                Data = Data == null ? new byte[0] : (byte[])Data.Clone(),
+            };
+        }
+    }
+
     /// <summary>LIN 帧方向（相对本工具）</summary>
     public enum LinFrameDir
     {

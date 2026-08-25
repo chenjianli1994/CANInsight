@@ -69,7 +69,7 @@ namespace PCAN_Client
             }
             else if (ext == ".asc")
             {
-                foreach (var msg in EnumerateAscMessages(filePath))
+                foreach (var msg in EnumerateAscMessages(filePath, channelFilter))
                     yield return msg;
             }
             else
@@ -220,7 +220,7 @@ namespace PCAN_Client
 
         #region ASC文件流式读取
 
-        private static IEnumerable<CanRawMessageRead> EnumerateAscMessages(string filePath)
+        private static IEnumerable<CanRawMessageRead> EnumerateAscMessages(string filePath, HashSet<byte> channelFilter = null)
         {
             if (!File.Exists(filePath))
                 throw new FileNotFoundException($"文件不存在: {filePath}");
@@ -250,6 +250,10 @@ namespace PCAN_Client
                     var msg = ParseAscLine(line, reader.BaseStream.Position);
                     if (msg != null)
                     {
+                        // 通道筛选（与BLF文件行为一致）
+                        if (channelFilter != null && !channelFilter.Contains(msg.Channel))
+                            continue;
+
                         // ASC 时间戳为绝对时间，归零到首条报文
                         if (startTime < 0) startTime = msg.TimeStampSeconds;
                         msg.TimeStampSeconds -= (float)startTime;
@@ -277,6 +281,26 @@ namespace PCAN_Client
                     System.Globalization.CultureInfo.InvariantCulture,
                     out uint canId))
                     return null;
+
+                // 解析通道号（parts[1]）：Vector ASC 为 1-based 数字，部分工具输出 "CAN1" 前缀；
+                // 无法解析时默认 1（单通道文件）。此前该列被忽略导致报文 Channel 恒为 0，
+                // 通道配置（BlfChannelId）匹配不上，绘图区无法解码绘制
+                byte channel = 1;
+                if (parts.Length >= 3 && parts[1].Length > 0)
+                {
+                    if (!byte.TryParse(parts[1],
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out channel))
+                    {
+                        channel = 1;
+                        if (parts[1].StartsWith("CAN", StringComparison.OrdinalIgnoreCase))
+                            byte.TryParse(parts[1].Substring(3),
+                                System.Globalization.NumberStyles.Integer,
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                out channel);
+                    }
+                }
 
                 int dataLengthIndex = -1;
                 for (int i = 3; i < parts.Length - 1; i++)
@@ -310,7 +334,8 @@ namespace PCAN_Client
                     CanId = canId,
                     Data = datas,
                     TimeStampSeconds = timestampSeconds,
-                    FilePosition = filePosition  // ASC文件：使用当前流位置
+                    FilePosition = filePosition,  // ASC文件：使用当前流位置
+                    Channel = channel
                 };
             }
             catch
