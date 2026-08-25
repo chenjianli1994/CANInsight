@@ -386,6 +386,9 @@ namespace PCAN_Client.LIN_UI
             _dgvSlots.Columns["colSlotCnt"].ReadOnly = true;
             _dgvSlots.CellValueChanged += DgvSlots_CellValueChanged;
             _dgvSlots.CellFormatting += DgvSlots_CellFormatting;
+            // 单元格值格式化/转换失败时静默跳过，不弹 DataGridView 默认错误对话框
+            // （如 CheckBox 列被旧数据赋了非 bool 值）。
+            _dgvSlots.DataError += (s, e) => { e.ThrowException = false; };
             _dgvSlots.CurrentCellDirtyStateChanged += (s, e) =>
             {
                 if (_dgvSlots.IsCurrentCellDirty) _dgvSlots.CommitEdit(DataGridViewDataErrorContexts.Commit);
@@ -562,6 +565,9 @@ namespace PCAN_Client.LIN_UI
             _dgvSend.CellContentClick += DgvSend_CellContentClick;
             _dgvSend.CellDoubleClick += DgvSend_CellDoubleClick;
             _dgvSend.CellValueChanged += DgvSend_CellValueChanged;
+            // 单元格值格式化/转换失败时静默跳过，不弹 DataGridView 默认错误对话框
+            // （如 CheckBox 列被旧数据赋了非 bool 值）。
+            _dgvSend.DataError += (s, e) => { e.ThrowException = false; };
             _dgvSend.CurrentCellDirtyStateChanged += (s, e) =>
             {
                 if (_dgvSend.IsCurrentCellDirty) _dgvSend.CommitEdit(DataGridViewDataErrorContexts.Commit);
@@ -2029,7 +2035,7 @@ namespace PCAN_Client.LIN_UI
                 _dgvSend.Rows.Insert(insertAt, 1);
                 var srow = _dgvSend.Rows[insertAt];
                 srow.Cells["colSendExpand"].Value = "";
-                srow.Cells["colSendEn"].Value = "";
+                srow.Cells["colSendEn"].Value = false; // CheckBox 列必须 bool，空字符串会触发格式化异常
                 srow.Cells["colSendPid"].Value = "";
                 srow.Cells["colSendName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
                 srow.Cells["colSendType"].Value = "信号";
