@@ -26,7 +26,8 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public LinNodeMode Mode = LinNodeMode.Master;
 
-        /// <summary>通道级本机从节点选择；空值表示从节点仅监听。</summary>
+        /// <summary>旧配置兼容字段：历史版本用本机从节点名做隐式响应归属；新版本从机响应
+        /// 完全由发送页 Slave 发送项定义，此字段仅用于旧配置加载时迁移生成发送项。</summary>
         public string LocalNodeName = "";
 
         /// <summary>发送页签配置；每条报文可独立选择 Master/Slave/HeaderOnly/BreakOnly。</summary>
@@ -134,9 +135,6 @@ namespace PCAN_Client.LIN_API
                 return false;
             }
         }
-        /// <summary>是否选择了本机从节点（用于 LDF 从机响应帧的自动归属：本节点发布的帧默认按 Slave 响应配置）。</summary>
-        public bool HasLocalSlaveNode => !string.IsNullOrWhiteSpace(LocalNodeName);
-
         /// <summary>
         /// PCAN/PLIN 的硬件模式是通道级能力，不能在同一物理通道同时切换 Master 与 Slave。
         /// 返回空表示发送计划没有混合角色；混合计划仍可保存，但 Slave 项不会在 Master 硬件模式下自动应答。

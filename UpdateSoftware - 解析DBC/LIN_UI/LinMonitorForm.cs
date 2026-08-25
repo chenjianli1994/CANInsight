@@ -689,10 +689,6 @@ namespace PCAN_Client.LIN_UI
             if (ldf != null && ldf.Frames.TryGetValue(pid, out def) && def.Dlc > 0 && def.Dlc <= 8)
                 dlc = def.Dlc;
             LinTransmitType type = DefaultTransmitType(ldf, pid);
-            var ch = CurrentChannel;
-            if (ch != null && ch.HasLocalSlaveNode &&
-                LinLdfHelper.IsLocalSlaveResponseFrame(ldf, pid, ch.LocalNodeName))
-                type = LinTransmitType.Slave;
             return new LinTransmitEntry
             {
                 Pid = pid,
@@ -1634,9 +1630,6 @@ namespace PCAN_Client.LIN_UI
                         ? CreateTransmitEntry(frame.Pid)
                         : prototype.Clone();
                     entry.Pid = frame.Pid;
-                    if (CurrentChannel.HasLocalSlaveNode &&
-                        LinLdfHelper.IsLocalSlaveResponseFrame(ldf, frame.Pid, CurrentChannel.LocalNodeName))
-                        entry.Type = LinTransmitType.Slave;
                     entry.SlotMs = def.SlotMs > 0 ? def.SlotMs : (entry.SlotMs > 0 ? entry.SlotMs : 15);
                     entry.Dlc = EntryDlc(entry, ldf);
                     entry.Data = EntryData(entry, entry.Dlc);
@@ -1654,9 +1647,6 @@ namespace PCAN_Client.LIN_UI
                         ? CreateTransmitEntry(kv.Key)
                         : prototype.Clone();
                     entry.Pid = kv.Key;
-                    if (CurrentChannel.HasLocalSlaveNode &&
-                        LinLdfHelper.IsLocalSlaveResponseFrame(ldf, kv.Key, CurrentChannel.LocalNodeName))
-                        entry.Type = LinTransmitType.Slave;
                     entry.SlotMs = entry.SlotMs > 0 ? entry.SlotMs : 15;
                     entry.Dlc = EntryDlc(entry, ldf);
                     entry.Data = EntryData(entry, entry.Dlc);

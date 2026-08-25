@@ -155,16 +155,13 @@ namespace PCAN_Client.LIN_API
 
                 // Vector 示例要求在激活通道前调用 XL_LinSetSlave。发送页明确选择
                 // 为 Slave 的报文直接配置；旧的通道级从节点配置也在这里迁移，
-                // 避免“选择从节点但没有发送项”时既不应答又让启动流程失去状态。
-                var configuredSlaveIds = new HashSet<byte>();
+                // 从机响应完全由发送页 Slave 项驱动（Vector 示例要求在激活通道前调用 XL_LinSetSlave）。
                 if (_cfg.TransmitEntries != null)
                 {
                     foreach (var transmit in _cfg.TransmitEntries)
                     {
                         if (transmit == null || !transmit.Enabled) continue;
-                        bool legacySlave = _cfg.HasLocalSlaveNode &&
-                            LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, transmit.Pid, _cfg.LocalNodeName);
-                        if (transmit.Type != LinTransmitType.Slave && !legacySlave) continue;
+                        if (transmit.Type != LinTransmitType.Slave) continue;
                         byte dlc = transmit.Dlc;
                         if (dlc == 0 && _cfg.LdfHelper != null) dlc = LinLdfHelper.GetFrameDlc(_cfg.LdfHelper, transmit.Pid);
                         if (dlc == 0) dlc = 8;
@@ -172,18 +169,6 @@ namespace PCAN_Client.LIN_API
                         if (data.Length != dlc) Array.Resize(ref data, dlc);
                         if (!ConfigureSlaveResponse(transmit.Pid, data, dlc))
                             return "配置从节点响应失败: PID 0x" + transmit.Pid.ToString("X2");
-                        configuredSlaveIds.Add(transmit.Pid);
-                    }
-                }
-                if (_cfg.HasLocalSlaveNode)
-                {
-                    foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(_cfg.LdfHelper, _cfg.LocalNodeName))
-                    {
-                        if (configuredSlaveIds.Contains(pid)) continue;
-                        byte dlc = LinLdfHelper.GetFrameDlc(_cfg.LdfHelper, pid);
-                        if (dlc == 0) dlc = 8;
-                        if (!ConfigureSlaveResponse(pid, new byte[dlc], dlc))
-                            return "配置从节点响应失败: PID 0x" + pid.ToString("X2");
                     }
                 }
 

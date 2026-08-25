@@ -34,7 +34,6 @@ namespace PCAN_Client.LIN_UI
         /// 静默清空用户配置（实测根因：重开页面触发重枚举→缓存清空→绑定被回退清空）。
         /// </summary>
         private bool _suppressBindWriteback;
-        private bool _suppressLocalNodeWriteback;
 
         /// <summary>绑定硬件下拉项（携带硬件类型+通道标识，选中即固化二元组；HwType=""表示不连接）</summary>
         private class LinHwBindItem
@@ -49,16 +48,6 @@ namespace PCAN_Client.LIN_UI
         }
 
         private static readonly LinHwBindItem NotConnectItem = new LinHwBindItem { HwType = "", HwHandle = "", Display = "不连接" };
-
-        /// <summary>从节点仿真下拉项：空名称表示只监听，不为任何 LDF 从节点自动应答。</summary>
-        private class LinNodeItem
-        {
-            public string Name { get; set; } = "";
-            public string Display { get; set; } = "";
-            public override string ToString() { return Display; }
-        }
-
-        private static readonly LinNodeItem ListenOnlyNodeItem = new LinNodeItem { Name = "", Display = "仅监听" };
 
         public LinChannelPanel()
         {
@@ -112,16 +101,6 @@ namespace PCAN_Client.LIN_UI
                 FlatStyle = FlatStyle.Flat
             };
             _dgv.Columns.Add(colHwBind);
-            var colLocalNode = new DataGridViewComboBoxColumn
-            {
-                Name = "colLocalNode",
-                HeaderText = "本机从节点",
-                Width = 140,
-                DisplayMember = "Display",
-                ValueMember = "Name",
-                FlatStyle = FlatStyle.Flat,
-            };
-            _dgv.Columns.Add(colLocalNode);
             var colBaud = new DataGridViewComboBoxColumn { Name = "colBaud", HeaderText = "波特率", Width = 70 };
             colBaud.Items.AddRange(new object[] { "1000", "2400", "9600", "19200" });
             _dgv.Columns.Add(colBaud);
@@ -284,14 +263,12 @@ namespace PCAN_Client.LIN_UI
             row.CreateCells(_dgv,
                 ch.Name,
                 "", // 绑定硬件通道：由 FindHwBindKey 赋值
-                "", // 本机从节点：由 RebuildLocalNodeCellDataSource 赋值
                 ch.Baudrate.ToString(),
                 ch.LdfPath,
                 "", // 状态列：行加入后由 UpdateRowStatus 以权威状态填充
                 "连接");
             _dgv.Rows.Add(row);
             RebuildHwBindCellDataSource(row);
-            RebuildLocalNodeCellDataSource(row);
             _suppressBindWriteback = true;
             try { row.Cells["colHwBind"].Value = FindHwBindKey(row, ch); }
             finally { _suppressBindWriteback = false; }
@@ -300,36 +277,6 @@ namespace PCAN_Client.LIN_UI
         }
 
         private LinChannel RowChannel(DataGridViewRow row) => (LinChannel)row.Tag;
-
-        private static List<LinNodeItem> BuildLocalNodeItems(LinChannel ch)
-        {
-            var items = new List<LinNodeItem> { ListenOnlyNodeItem };
-            if (ch != null && ch.LdfHelper != null)
-            {
-                foreach (string name in ch.LdfHelper.SlaveNames)
-                    items.Add(new LinNodeItem { Name = name, Display = name });
-            }
-            if (ch != null && !string.IsNullOrWhiteSpace(ch.LocalNodeName) &&
-                !items.Any(x => string.Equals(x.Name, ch.LocalNodeName, StringComparison.OrdinalIgnoreCase)))
-            {
-                items.Add(new LinNodeItem { Name = ch.LocalNodeName, Display = ch.LocalNodeName + " (LDF 未加载)" });
-            }
-            return items;
-        }
-
-        private void RebuildLocalNodeCellDataSource(DataGridViewRow row)
-        {
-            var cell = (DataGridViewComboBoxCell)row.Cells["colLocalNode"];
-            var ch = RowChannel(row);
-            var items = BuildLocalNodeItems(ch);
-            cell.DataSource = items;
-            cell.ReadOnly = false;
-            string selected = ch.LocalNodeName ?? "";
-            if (!items.Any(x => string.Equals(x.Name, selected, StringComparison.OrdinalIgnoreCase))) selected = "";
-            _suppressLocalNodeWriteback = true;
-            try { cell.Value = selected; }
-            finally { _suppressLocalNodeWriteback = false; }
-        }
 
         /// <summary>构建绑定下拉选项：不连接 + 已识别到的全部硬件通道（带类型前缀；冲突不限制选择，由标红提示+连接时拦截）。
         /// 通道已保存绑定不在本次枚举结果（枚举未完成/硬件未插/枚举失败）时追加 "(未在线)" 占位项——
@@ -582,9 +529,7 @@ namespace PCAN_Client.LIN_UI
                             var ldf = LinLdfHelper.Parse(dlg.FileName);
                             ch.LdfPath = dlg.FileName;
                             ch.LdfHelper = ldf;
-                            ch.LocalNodeName = LinLdfHelper.NormalizeLocalSlaveName(ldf, ch.LocalNodeName);
                             row.Cells["colLdf"].Value = dlg.FileName;
-                            RebuildLocalNodeCellDataSource(row);
                             byte logicChannel = (byte)(e.RowIndex + 1);
                             if (Lin_API.IsConnected(logicChannel))
                             {
@@ -623,26 +568,6 @@ namespace PCAN_Client.LIN_UI
                     ch.HwHandle = bind.HwHandle;
                     UpdateRowStatus(row); // 操作列 "-/连接/断开" 联动
                     UpdateConflict(row);   // 冲突标红即时刷新
-                    break;
-                case "colLocalNode":
-                    if (_suppressLocalNodeWriteback) return;
-                    string localNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, (v ?? "").ToString());
-                    if (ch.LocalNodeName != localNodeName)
-                    {
-                        ch.LocalNodeName = localNodeName;
-                        byte logicChannel = (byte)(e.RowIndex + 1);
-                        if (Lin_API.IsConnected(logicChannel))
-                        {
-                            Lin_API.LinDisconnect(logicChannel);
-                            ch.ConnectError = "本机从节点已修改，请重新连接";
-                            UpdateRowStatus(row);
-                        }
-                        else
-                        {
-                            ch.ConnectError = "";
-                            UpdateRowStatus(row);
-                        }
-                    }
                     break;
                 case "colBaud":
                     uint b;
