@@ -112,9 +112,6 @@ namespace PCAN_Client.LIN_UI
                 FlatStyle = FlatStyle.Flat
             };
             _dgv.Columns.Add(colHwBind);
-            var colMode = new DataGridViewComboBoxColumn { Name = "colMode", HeaderText = "节点模式", Width = 80 };
-            colMode.Items.AddRange(new object[] { "主节点", "从节点" });
-            _dgv.Columns.Add(colMode);
             var colLocalNode = new DataGridViewComboBoxColumn
             {
                 Name = "colLocalNode",
@@ -287,7 +284,6 @@ namespace PCAN_Client.LIN_UI
             row.CreateCells(_dgv,
                 ch.Name,
                 "", // 绑定硬件通道：由 FindHwBindKey 赋值
-                ch.Mode == LinNodeMode.Master ? "主节点" : "从节点",
                 "", // 本机从节点：由 RebuildLocalNodeCellDataSource 赋值
                 ch.Baudrate.ToString(),
                 ch.LdfPath,
@@ -327,8 +323,8 @@ namespace PCAN_Client.LIN_UI
             var ch = RowChannel(row);
             var items = BuildLocalNodeItems(ch);
             cell.DataSource = items;
-            cell.ReadOnly = ch.Mode != LinNodeMode.Slave;
-            string selected = ch.Mode == LinNodeMode.Slave ? (ch.LocalNodeName ?? "") : "";
+            cell.ReadOnly = false;
+            string selected = ch.LocalNodeName ?? "";
             if (!items.Any(x => string.Equals(x.Name, selected, StringComparison.OrdinalIgnoreCase))) selected = "";
             _suppressLocalNodeWriteback = true;
             try { cell.Value = selected; }
@@ -628,28 +624,8 @@ namespace PCAN_Client.LIN_UI
                     UpdateRowStatus(row); // 操作列 "-/连接/断开" 联动
                     UpdateConflict(row);   // 冲突标红即时刷新
                     break;
-                case "colMode":
-                    LinNodeMode mode = (v ?? "").ToString() == "从节点" ? LinNodeMode.Slave : LinNodeMode.Master;
-                    if (ch.Mode != mode)
-                    {
-                        ch.Mode = mode;
-                        byte logicChannel = (byte)(e.RowIndex + 1);
-                        if (Lin_API.IsConnected(logicChannel))
-                        {
-                            Lin_API.LinDisconnect(logicChannel);
-                            ch.ConnectError = "节点模式已修改，请重新连接";
-                            UpdateRowStatus(row);
-                        }
-                        else
-                        {
-                            ch.ConnectError = "";
-                            UpdateRowStatus(row);
-                        }
-                        RebuildLocalNodeCellDataSource(row);
-                    }
-                    break;
                 case "colLocalNode":
-                    if (_suppressLocalNodeWriteback || ch.Mode != LinNodeMode.Slave) return;
+                    if (_suppressLocalNodeWriteback) return;
                     string localNodeName = LinLdfHelper.NormalizeLocalSlaveName(ch.LdfHelper, (v ?? "").ToString());
                     if (ch.LocalNodeName != localNodeName)
                     {
@@ -687,7 +663,7 @@ namespace PCAN_Client.LIN_UI
             }
             LinConfig.Channels = channels;
             LinConfig.SaveLinConfig();
-            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + ",节点=" + (c.Mode == LinNodeMode.Master ? "主节点" : "从节点") + ",发送项=" + (c.TransmitEntries == null ? 0 : c.TransmitEntries.Count) + "]").ToArray()) + "）");
+            AppLog.Write("[LIN-UI] SaveConfig: " + channels.Count + " 路已保存（" + string.Join(",", channels.ConvertAll(c => c.Name + "[" + (c.HwHandle.Length > 0 ? c.HwHandle : "未绑定") + ",硬件模式=" + (c.GetHardwareMode() == LinNodeMode.Master ? "Master" : "Slave") + ",发送项=" + (c.TransmitEntries == null ? 0 : c.TransmitEntries.Count) + "]").ToArray()) + "）");
         }
     }
 }

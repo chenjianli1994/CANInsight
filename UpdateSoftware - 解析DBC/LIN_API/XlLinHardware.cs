@@ -162,7 +162,7 @@ namespace PCAN_Client.LIN_API
                     foreach (var transmit in _cfg.TransmitEntries)
                     {
                         if (transmit == null || !transmit.Enabled) continue;
-                        bool legacySlave = _cfg.Mode == LinNodeMode.Slave &&
+                        bool legacySlave = _cfg.HasLocalSlaveNode &&
                             LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, transmit.Pid, _cfg.LocalNodeName);
                         if (transmit.Type != LinTransmitType.Slave && !legacySlave) continue;
                         byte dlc = transmit.Dlc;
@@ -175,7 +175,7 @@ namespace PCAN_Client.LIN_API
                         configuredSlaveIds.Add(transmit.Pid);
                     }
                 }
-                if (_cfg.Mode == LinNodeMode.Slave)
+                if (_cfg.HasLocalSlaveNode)
                 {
                     foreach (byte pid in LinLdfHelper.GetLocalSlaveResponseIds(_cfg.LdfHelper, _cfg.LocalNodeName))
                     {

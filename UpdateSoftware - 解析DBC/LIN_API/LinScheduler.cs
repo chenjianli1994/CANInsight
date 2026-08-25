@@ -74,6 +74,7 @@ namespace PCAN_Client.LIN_API
         {
             public long SentMs;
             public long DeadlineMs;
+            public LinTransmitType Type;
         }
         private readonly Dictionary<byte, PendingResponse> _pendingResponses = new Dictionary<byte, PendingResponse>();
 
@@ -170,9 +171,12 @@ namespace PCAN_Client.LIN_API
                 return false;
             }
 
-            // 从节点没有本地调度时钟；连接时已经把 RESPONSE_ENABLE 配置给硬件，
-            // “开始调度”只切换到被动监听状态。即使发送项为空，也不能启动一个
-            // 空的 1ms 定时器，否则会在 UI 线程/接收线程之间制造无意义的高频回调。
+            // 纯 Slave 发送计划（推导硬件模式为从机）：本机没有本地调度时钟，连接时已把
+            // RESPONSE_ENABLE 配置给硬件，“开始调度”只切换到被动监听状态——报文由外部
+            // Master 的 Header 触发自动应答。单设备自测需在 UI 选择“主从一体驱动”
+            // （ForceMasterDriven，以 modMaster 重连后本机发 Header 驱动响应帧）。
+            // 即使发送项为空，也不能启动一个空的 1ms 定时器，否则会在 UI 线程/接收
+            // 线程之间制造无意义的高频回调。
             if (channelSlave)
             {
                 _lastError = "";
@@ -189,11 +193,15 @@ namespace PCAN_Client.LIN_API
 
             bool hasEnabled = false;
             bool hasInitiator = false;
+            // 主从一体驱动（ForceMasterDriven）：Slave 槽也由本机发 Header 驱动，视为可驱动槽。
+            bool masterDriven = _logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
+                LinConfig.Channels[_logicChannel - 1].ForceMasterDriven;
             foreach (var slot in _slots)
             {
                 if (slot == null || !slot.Enabled) continue;
                 hasEnabled = true;
-                if (slot.TransmitType == LinTransmitType.Master || slot.TransmitType == LinTransmitType.HeaderOnly)
+                if (slot.TransmitType == LinTransmitType.Master || slot.TransmitType == LinTransmitType.HeaderOnly ||
+                    (masterDriven && slot.TransmitType == LinTransmitType.Slave))
                     hasInitiator = true;
             }
             if (!hasEnabled)
@@ -206,8 +214,8 @@ namespace PCAN_Client.LIN_API
                 _passiveListening = true;
                 _lastError = "";
                 RunningChanged?.Invoke(false);
-                // 纯 Slave 计划的“启动”只确认被动监听状态，不启动本地定时器。
-                // 报文是否出现取决于总线上是否有外部 Master 发出对应 Header。
+                // 纯 Slave 计划（非主从一体驱动）的“启动”只确认被动监听状态，不启动本地
+                // 定时器。报文是否出现取决于总线上是否有外部 Master 发出对应 Header。
                 return true;
             }
             _lastError = "";
@@ -316,7 +324,11 @@ namespace PCAN_Client.LIN_API
             bool dispatched;
             long sendStartMs = Lin_API.SessionMs;
             dispatched = Lin_API.LinSendScheduleSlot(_logicChannel, slot);
-            if (dispatched && slot.TransmitType == LinTransmitType.HeaderOnly)
+            // HeaderOnly 槽和主从一体驱动下的 Slave 槽都发出 Header，需要等待响应；
+            // 前者超时按真实无应答处理，后者超时注入仿真响应（软件调度回退）。
+            bool waitsResponse = slot.TransmitType == LinTransmitType.HeaderOnly ||
+                (slot.TransmitType == LinTransmitType.Slave && Lin_API.IsMasterDriven(_logicChannel));
+            if (dispatched && waitsResponse)
             {
                 // 同一响应槽可能在超时窗口内重复调度，保留最早一次等待，避免反复重置超时。
                 if (!_pendingResponses.ContainsKey(slot.Pid))
@@ -326,6 +338,7 @@ namespace PCAN_Client.LIN_API
                     {
                         SentMs = sendStartMs,
                         DeadlineMs = sendStartMs + timeoutMs,
+                        Type = slot.TransmitType,
                     };
                 }
             }
@@ -338,7 +351,8 @@ namespace PCAN_Client.LIN_API
 
         /// <summary>
         /// 响应槽超时兜底：真实 Rx（包括驱动上报的硬件错误帧）优先作为结果；
-        /// 只有窗口到期且没有任何 Rx 时，才生成一条 Rx/错误·无应答记录。
+        /// 只有窗口到期且没有任何 Rx 时，才生成一条记录。主从一体驱动下的 Slave 槽
+        /// 注入带数据的仿真响应（软件调度回退）；其余槽按真实无应答记录错误帧。
         /// </summary>
         private void CheckPendingResponses(long nowMs)
         {
@@ -356,8 +370,12 @@ namespace PCAN_Client.LIN_API
             foreach (byte pid in completed) _pendingResponses.Remove(pid);
             foreach (byte pid in timedOut)
             {
+                PendingResponse pending = _pendingResponses[pid];
                 _pendingResponses.Remove(pid);
-                Lin_API.InjectNoResponse(_logicChannel, pid);
+                if (pending.Type == LinTransmitType.Slave && Lin_API.IsMasterDriven(_logicChannel))
+                    Lin_API.SimulateSlaveResponse(_logicChannel, pid);
+                else
+                    Lin_API.InjectNoResponse(_logicChannel, pid);
             }
         }
     }

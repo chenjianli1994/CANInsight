@@ -348,9 +348,9 @@ namespace PCAN_Client.LIN_API
                 if (_cfg.LdfHelper != null) _cfg.LdfHelper.Frames.TryGetValue(pid, out def);
                 var configured = _cfg.FindTransmitEntry(pid);
                 LinTransmitType transmitType = configured == null ? LinTransmitType.HeaderOnly : configured.Type;
-                // 保留通道面板的显式从节点语义：旧配置可能只有 Mode/LocalNodeName，
-                // 尚未把响应帧迁移成发送项。此时按 LDF 归属补上 Slave 响应。
-                if (_cfg.Mode == LinNodeMode.Slave &&
+                // 选择了本机从节点（LocalNodeName）时，其 LDF 响应帧即使尚未加入发送页
+                // 也按 Slave 自动应答配置，保证“本机从节点”语义不依赖通道级主从模式。
+                if (_cfg.HasLocalSlaveNode &&
                     LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, pid, _cfg.LocalNodeName))
                     transmitType = LinTransmitType.Slave;
                 if (pid > 0x3F) return "发送项 PID 超出 LIN 范围: 0x" + pid.ToString("X2");
@@ -361,9 +361,9 @@ namespace PCAN_Client.LIN_API
                 bool masterPublisher = configured != null && configured.Enabled && transmitType == LinTransmitType.Master;
                 // 选择了从节点但尚未在发送页建立条目时，LDF 仍然定义了本机
                 // Publisher 响应帧。此类帧也必须打开 RESPONSE_ENABLE，否则
-                // “从节点仅监听/空发送页”虽然不再启动调度器，却永远不会应答。
+                // 从节点即使配置了 LocalNodeName 也永远不会应答。
                 bool slaveResp = transmitType == LinTransmitType.Slave &&
-                    (configured == null ? _cfg.Mode == LinNodeMode.Slave : configured.Enabled);
+                    (configured == null ? _cfg.HasLocalSlaveNode : configured.Enabled);
                 // PLIN 的帧表同时决定发送角色和接收过滤：本机发布帧为 Publisher，
                 // 其余帧必须显式设为 Subscriber，主节点才能看到从节点响应，
                 // 从节点也才能接收主节点 Header。未选本机节点的从节点帧不会启用响应。
@@ -589,23 +589,29 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 调度表（硬件自主运行） ====================
 
-        /// <summary>下发调度槽到硬件并启动（slot 0；无条件帧）</summary>
+        /// <summary>
+        /// 下发调度槽到硬件并启动（slot 0）。
+        /// 主从一体（modMaster + 硬件调度表）：Slave 槽同样纳入调度表，硬件发 Header 后由
+        /// 帧表 RESPONSE_ENABLE 自动应答本机响应帧（官方手册：modMaster 下帧表自动应答在
+        /// 硬件调度表激活时生效）。HeaderOnly/Master 槽均为无条件帧（sltUnconditional 总是发
+        /// Header；sltMasterRequest 只用于诊断请求 0x3C 且“新数据才发”，普通帧会被饿死）。
+        /// </summary>
         public string StartSchedule(List<LinScheduleSlot> slots)
         {
             if (!IsConnected) return "未连接";
             var active = new List<LinScheduleSlot>();
             foreach (var slot in slots)
-                if (slot.Enabled && slot.TransmitType != LinTransmitType.Slave && slot.TransmitType != LinTransmitType.BreakOnly)
+                if (slot.Enabled && slot.TransmitType != LinTransmitType.BreakOnly)
                     active.Add(slot);
             if (active.Count == 0)
-                return "当前发送计划只有 Slave 项；从节点不会主动发送 Header，请等待外部主节点 Header（无需启动调度表）";
+                return "没有启用的调度槽";
             var arr = new LinPlScheduleSlot[active.Count];
             for (int i = 0; i < active.Count; i++)
             {
+                // 无条件槽：每个周期固定发 Header；Slave 槽的响应由帧表自动应答。
                 arr[i] = new LinPlScheduleSlot
                 {
-                    Type = active[i].TransmitType == LinTransmitType.HeaderOnly
-                        ? LinPlSlotType.sltMasterRequest : LinPlSlotType.sltUnconditional,
+                    Type = LinPlSlotType.sltUnconditional,
                     Delay = (ushort)active[i].SlotMs,
                     FrameId = new byte[8],
                     CountResolve = 1,
@@ -741,9 +747,9 @@ namespace PCAN_Client.LIN_API
             var configured = GetTransmitEntry(m.FrameId);
             bool localPublisher = configured != null && configured.Enabled &&
                 (configured.Type == LinTransmitType.Master || configured.Type == LinTransmitType.Slave);
-            // 从节点可以仅依赖 LDF + 本机节点选择自动应答，不一定有发送页条目；
+            // 本机从节点可以仅依赖 LDF + LocalNodeName 自动应答，不一定有发送页条目；
             // 这种隐式响应仍是本机 Tx，不能被监控页误画成 Rx。
-            if (configured == null && _cfg.Mode == LinNodeMode.Slave)
+            if (configured == null && _cfg.HasLocalSlaveNode)
                 localPublisher = LinLdfHelper.IsLocalSlaveResponseFrame(_cfg.LdfHelper, m.FrameId, _cfg.LocalNodeName);
             LinFrameDir frameDirection = localPublisher && !otherResponse && m.Direction == LinPlDirection.dirPublisher
                 ? LinFrameDir.Tx

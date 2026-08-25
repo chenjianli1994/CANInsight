@@ -337,7 +337,7 @@ namespace PCAN_Client.LIN_UI
             // ---- 调度表页签 ----
             var slotPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4) };
             _slotToolbar = new ToolStrip { GripStyle = ToolStripGripStyle.Hidden };
-            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "主节点按调度槽发送完整帧或 Header；从节点等待外部主节点" });
+            _slotToolbar.Items.Add(new ToolStripButton("开始调度", ToolbarIcons.Get("play")) { Tag = "start", ToolTipText = "Master/HeaderOnly 槽由本机发送；Slave 槽由硬件自动应答，单设备自测时可切换主从一体驱动" });
             _slotToolbar.Items.Add(new ToolStripButton("暂停", ToolbarIcons.Get("stop")) { Tag = "suspend", ToolTipText = "暂停调度" });
             _slotToolbar.Items.Add(new ToolStripButton("单步", ToolbarIcons.Get("scroll")) { Tag = "step", ToolTipText = "主节点发送选中槽一次；从节点不能主动发送 Header" });
             _slotToolbar.Items.Add(new ToolStripSeparator());
@@ -690,7 +690,7 @@ namespace PCAN_Client.LIN_UI
                 dlc = def.Dlc;
             LinTransmitType type = DefaultTransmitType(ldf, pid);
             var ch = CurrentChannel;
-            if (ch != null && ch.Mode == LinNodeMode.Slave &&
+            if (ch != null && ch.HasLocalSlaveNode &&
                 LinLdfHelper.IsLocalSlaveResponseFrame(ldf, pid, ch.LocalNodeName))
                 type = LinTransmitType.Slave;
             return new LinTransmitEntry
@@ -1456,6 +1456,33 @@ namespace PCAN_Client.LIN_UI
                 case "start":
                     if (CurrentChannel != null && CurrentChannel.GetHardwareMode() == LinNodeMode.Slave)
                     {
+                        // 纯 Slave 发送计划：本机不主动发 Header。表内有启用槽时给出场景引导——
+                        // 真实网络（外部主节点驱动）无需调度表，单设备自测可切换主从一体驱动。
+                        bool hasEnabledSlot = false;
+                        foreach (var s in sc.Slots)
+                            if (s != null && s.Enabled) { hasEnabledSlot = true; break; }
+                        if (hasEnabledSlot && !CurrentChannel.ForceMasterDriven)
+                        {
+                            var dlg = MessageBox.Show(this,
+                                "当前发送计划全部是从机响应帧，本机不主动发送 Header。\n\n" +
+                                "· 总线已有外部主节点（真实 ECU）→ 报文会自动出现，无需启动调度表；\n" +
+                                "· 单设备自测 → 切换到“主从一体驱动”（本机发 Header 驱动响应帧，需重新连接）。\n\n" +
+                                "是否切换到主从一体驱动？",
+                                "从机模式启动调度表", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                            if (dlg == DialogResult.Yes)
+                            {
+                                // 先断开（清除旧的驱动标志），再设置标志并重连，使硬件以 modMaster 打开。
+                                if (Lin_API.IsConnected(_channel)) Lin_API.LinDisconnect(_channel);
+                                CurrentChannel.ForceMasterDriven = true;
+                                string cerr = Lin_API.LinConnect(_channel);
+                                if (cerr.Length > 0)
+                                {
+                                    CurrentChannel.ForceMasterDriven = false;
+                                    ShowError("主从一体驱动重连失败: " + cerr);
+                                    break;
+                                }
+                            }
+                        }
                         if (!sc.Start())
                             ShowError(sc.LastError.Length > 0 ? "从节点监听启动失败: " + sc.LastError : "从节点监听启动失败");
                         RefreshStatusBar();
@@ -1473,6 +1500,19 @@ namespace PCAN_Client.LIN_UI
                     sc.Suspend();
                     break;
                 case "step":
+                    // 单步：按调度槽发送原语；Slave 槽在主从一体驱动下由本机发 Header，否则被动响应。
+                    if (_dgvSlots.SelectedRows.Count > 0)
+                    {
+                        var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
+                        bool masterDriven = CurrentChannel != null && CurrentChannel.ForceMasterDriven;
+                        if (slot != null && slot.TransmitType == LinTransmitType.Slave && !masterDriven)
+                        {
+                            ShowError("Slave 槽只配置自动响应，不会主动发送 Header；请等待外部主节点。");
+                        }
+                        else if (slot != null && !Lin_API.LinSendScheduleSlot(_channel, slot))
+                            ShowError("单步发送失败（未连接）");
+                    }
+                    break;
                     // 单步：按调度槽发送原语；Slave 槽是被动响应，不产生 Header。
                     if (_dgvSlots.SelectedRows.Count > 0)
                     {
@@ -1594,7 +1634,7 @@ namespace PCAN_Client.LIN_UI
                         ? CreateTransmitEntry(frame.Pid)
                         : prototype.Clone();
                     entry.Pid = frame.Pid;
-                    if (CurrentChannel.Mode == LinNodeMode.Slave &&
+                    if (CurrentChannel.HasLocalSlaveNode &&
                         LinLdfHelper.IsLocalSlaveResponseFrame(ldf, frame.Pid, CurrentChannel.LocalNodeName))
                         entry.Type = LinTransmitType.Slave;
                     entry.SlotMs = def.SlotMs > 0 ? def.SlotMs : (entry.SlotMs > 0 ? entry.SlotMs : 15);
@@ -1614,7 +1654,7 @@ namespace PCAN_Client.LIN_UI
                         ? CreateTransmitEntry(kv.Key)
                         : prototype.Clone();
                     entry.Pid = kv.Key;
-                    if (CurrentChannel.Mode == LinNodeMode.Slave &&
+                    if (CurrentChannel.HasLocalSlaveNode &&
                         LinLdfHelper.IsLocalSlaveResponseFrame(ldf, kv.Key, CurrentChannel.LocalNodeName))
                         entry.Type = LinTransmitType.Slave;
                     entry.SlotMs = entry.SlotMs > 0 ? entry.SlotMs : 15;
@@ -1653,8 +1693,10 @@ namespace PCAN_Client.LIN_UI
         private string EmptyFrameHint()
         {
             var ch = CurrentChannel;
-            if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave)
-                return "暂无报文 — 当前从节点只在外部主节点 Header 到达后响应；请确认总线已有主节点调度和接线/波特率一致";
+            if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave && !ch.ForceMasterDriven)
+                return "暂无报文 — 当前是从机监听模式：只在外部主节点 Header 到达后响应。单设备自测请在调度表页点击“开始调度”切换主从一体驱动";
+            if (ch != null && ch.ForceMasterDriven)
+                return "暂无报文 — 主从一体驱动已启用：点击“开始调度”后本机发 Header 驱动响应帧";
             return "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）";
         }
 
@@ -2266,7 +2308,9 @@ namespace PCAN_Client.LIN_UI
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
                 var ch = CurrentChannel;
-                if (sc.IsPassiveListening || (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave))
+                if (ch != null && ch.ForceMasterDriven)
+                    _lblSched.Text = sc.IsRunning ? "主从一体: 运行中（本机驱动响应帧）" : "主从一体: 待启动（本机驱动响应帧）";
+                else if (sc.IsPassiveListening || (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave))
                     _lblSched.Text = "从节点: 等待外部主节点 Header";
                 else if (ch != null && ch.GetHardwareModeNotice().Length > 0)
                     _lblSched.Text = "调度: 混合角色（Slave 不自动应答）";

@@ -45,6 +45,10 @@ namespace PCAN_Client.LIN_API
         /// <summary>是否已连接（运行期状态，不序列化）</summary>
         [JsonIgnore]
         public bool IsConnected;
+        /// <summary>运行期：单设备主从一体驱动（UI 引导选择，不持久化）。
+        /// 置位后硬件以 modMaster 连接，纯 Slave 计划也能由本机发 Header 驱动响应帧。</summary>
+        [JsonIgnore]
+        public bool ForceMasterDriven;
 
         /// <summary>连接失败原因（运行期状态，不序列化）</summary>
         [JsonIgnore]
@@ -86,16 +90,17 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 返回驱动连接所需的基础模式。通道面板的显式从节点选择优先，
-        /// 否则 PLIN/XL 驱动仍然需要从发送计划推导底层模式：纯 Slave 计划用 Slave，
-        /// 只要计划包含 Master 或 HeaderOnly 就用 Master。
+        /// 返回驱动连接所需的基础模式。通道面板不再提供主从选择（发送模式定义在报文级）；
+        /// PLIN/XL 硬件是通道级主从二选一，这里按发送计划透明推导：
+        /// - 计划含 Master/HeaderOnly（本机主动驱动）→ modMaster：主从一体，能发 Header、能在硬件调度表激活时自动应答、能纯监听
+        /// - 计划纯 Slave（本机仅响应外部 Header）→ modSlave：真实网络从机仿真
+        /// - 空计划 → modMaster：纯监听/手动发送（调度表挂起时硬件不产生流量）
         /// </summary>
         public LinNodeMode GetHardwareMode()
         {
-            // 通道面板中的显式“从节点”选择优先于发送项推导；否则旧配置中仍保留
-            // Master 发送项时，用户切到从节点后硬件会被错误地以 Master 打开。
-            if (Mode == LinNodeMode.Slave) return LinNodeMode.Slave;
-
+            // 运行期“主从一体驱动”优先：单设备自测时纯 Slave 计划也以 modMaster 打开，
+            // 由本机调度表发 Header 驱动响应帧。
+            if (ForceMasterDriven) return LinNodeMode.Master;
             bool hasSlave = false;
             bool hasMasterCapability = false;
             foreach (var entry in TransmitEntries ?? new List<LinTransmitEntry>())
@@ -129,6 +134,8 @@ namespace PCAN_Client.LIN_API
                 return false;
             }
         }
+        /// <summary>是否选择了本机从节点（用于 LDF 从机响应帧的自动归属：本节点发布的帧默认按 Slave 响应配置）。</summary>
+        public bool HasLocalSlaveNode => !string.IsNullOrWhiteSpace(LocalNodeName);
 
         /// <summary>
         /// PCAN/PLIN 的硬件模式是通道级能力，不能在同一物理通道同时切换 Master 与 Slave。

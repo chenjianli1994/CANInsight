@@ -120,6 +120,8 @@ namespace PCAN_Client.LIN_API
             if (logicChannel <= LinConfig.Channels.Count)
             {
                 LinConfig.Channels[logicChannel - 1].IsConnected = false;
+                // 断开连接 = 本次“主从一体驱动”会话结束；下次连接回到按发送计划推导。
+                LinConfig.Channels[logicChannel - 1].ForceMasterDriven = false;
                 ChannelStateChanged?.Invoke(logicChannel, false, "");
             }
         }
@@ -177,7 +179,8 @@ namespace PCAN_Client.LIN_API
             return LinSendScheduleSlot(logicChannel, slot);
         }
 
-        /// <summary>按调度槽发送 Master/HeaderOnly/BreakOnly；Slave 槽只等待外部 Header。</summary>
+        /// <summary>按调度槽发送 Master/HeaderOnly/BreakOnly；Slave 槽默认只等待外部 Header，
+        /// 主从一体驱动（ForceMasterDriven）下改为本机发 Header 驱动响应帧。</summary>
         public static bool LinSendScheduleSlot(byte logicChannel, LinScheduleSlot slot)
         {
             if (slot == null) return false;
@@ -186,6 +189,13 @@ namespace PCAN_Client.LIN_API
                 type = GetTransmitType(logicChannel, slot.Pid, type);
             if (type == LinTransmitType.Slave)
             {
+                // 主从一体驱动（单设备自测）：本机主动发 Header，响应由硬件自动应答
+                // （硬件调度表路径）或软件仿真注入（软件调度回退路径）完成。
+                if (IsMasterDriven(logicChannel))
+                {
+                    LinDebugLog.Write("[SCH] LinSendScheduleSlot(主从一体) ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " → 发 Header 驱动响应帧");
+                    return LinSendHeader(logicChannel, slot.Pid);
+                }
                 LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 被动响应，不产生调度报文");
                 return true;
             }
@@ -334,6 +344,44 @@ namespace PCAN_Client.LIN_API
                 FrameName = LinLdfHelper.GetFrameName(ldf, pid),
             };
             LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2"));
+            LinReceive(logicChannel, frame);
+        }
+        /// <summary>通道是否处于单设备主从一体驱动（ForceMasterDriven 运行期标志）。</summary>
+        internal static bool IsMasterDriven(byte logicChannel)
+        {
+            return logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count &&
+                LinConfig.Channels[logicChannel - 1].ForceMasterDriven;
+        }
+
+        /// <summary>
+        /// 主从一体软件调度回退：Header 已发出但硬件没有返回真实响应（无外部从机、硬件
+        /// 自动应答在软件调度下不生效）时，注入一条带发送页数据的仿真响应帧。
+        /// 仅主从一体驱动模式使用；真实网络模式仍注入无数据错误帧（InjectNoResponse）。
+        /// </summary>
+        internal static void SimulateSlaveResponse(byte logicChannel, byte pid)
+        {
+            var ldf = GetLdf(logicChannel);
+            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
+            var configured = GetTransmitEntry(logicChannel, pid);
+            byte[] data = new byte[dlc];
+            if (configured != null && configured.Data != null && configured.Data.Length > 0)
+            {
+                data = new byte[configured.Data.Length];
+                Array.Copy(configured.Data, data, configured.Data.Length);
+            }
+            var frame = new LinFrameRecord
+            {
+                LogicChannel = logicChannel,
+                Pid = pid,
+                Direction = LinFrameDir.Rx,
+                Dlc = (byte)data.Length,
+                Data = data,
+                ChecksumType = GetFrameChecksumKind(logicChannel, pid),
+                ChecksumRx = LinChecksum.Calculate(data, pid, GetFrameChecksumKind(logicChannel, pid) == LinChecksumKind.Enhanced),
+                ChecksumOk = true,
+                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
+            };
+            LinDebugLog.Write("[SCH] SimulateSlaveResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2") + "（主从一体软件仿真响应）");
             LinReceive(logicChannel, frame);
         }
 
