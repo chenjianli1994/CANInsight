@@ -1437,6 +1437,14 @@ namespace PCAN_Client.LIN_UI
         {
             if (e.RowIndex < 0) return;
             var row = _dgvSlots.Rows[e.RowIndex];
+            // 从机监控帧头缺失：整行红灯，优先级高于当前槽高亮。
+            if (row.Tag is LinScheduleSlot slot && slot.HeaderMissing)
+            {
+                e.CellStyle.BackColor = Color.Firebrick;
+                e.CellStyle.ForeColor = Color.White;
+                e.CellStyle.SelectionBackColor = Color.Firebrick;
+                return;
+            }
             if (row.Tag is LinScheduleSlot && GetScheduler().CurrentSlotIndex == e.RowIndex && GetScheduler().IsRunning)
             {
                 e.CellStyle.BackColor = UiTheme.SelectionBack; // 当前槽高亮
@@ -1460,9 +1468,10 @@ namespace PCAN_Client.LIN_UI
                         if (hasEnabledSlot && !CurrentChannel.ForceMasterDriven)
                         {
                             var dlg = MessageBox.Show(this,
-                                "当前发送计划全部是从机响应帧，本机不主动发送 Header。\n\n" +
-                                "· 总线已有外部主节点（真实 ECU）→ 报文会自动出现，无需启动调度表；\n" +
-                                "· 单设备自测 → 切换到“主从一体驱动”（本机发 Header 驱动响应帧，需重新连接）。\n\n" +
+                                "当前发送计划全部是从机响应帧。开始调度后将按本地周期检查外部\n" +
+                                "主节点是否发出对应帧头：缺失标红报错，收到帧头自动恢复正常。\n\n" +
+                                "· 从机监控（否）：本机不发 Header，只监控并应答外部主节点；\n" +
+                                "· 主从一体驱动（是）：单设备自测，本机发 Header 驱动响应帧（需重新连接）。\n\n" +
                                 "是否切换到主从一体驱动？",
                                 "从机模式启动调度表", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                             if (dlg == DialogResult.Yes)
@@ -1480,7 +1489,7 @@ namespace PCAN_Client.LIN_UI
                             }
                         }
                         if (!sc.Start())
-                            ShowError(sc.LastError.Length > 0 ? "从节点监听启动失败: " + sc.LastError : "从节点监听启动失败");
+                            ShowError(sc.LastError.Length > 0 ? "从机监控启动失败: " + sc.LastError : "从机监控启动失败");
                         RefreshStatusBar();
                         break;
                     }
@@ -1496,26 +1505,20 @@ namespace PCAN_Client.LIN_UI
                     sc.Suspend();
                     break;
                 case "step":
-                    // 单步：按调度槽发送原语；Slave 槽在主从一体驱动下由本机发 Header，否则被动响应。
+                    // 单步：Master/HeaderOnly 槽按发送原语单发；Slave 槽在主从一体驱动下
+                    // 由本机发 Header，否则执行一次帧头监控检查（有外部帧头→正常，缺失→标红）。
                     if (_dgvSlots.SelectedRows.Count > 0)
                     {
                         var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
                         bool masterDriven = CurrentChannel != null && CurrentChannel.ForceMasterDriven;
                         if (slot != null && slot.TransmitType == LinTransmitType.Slave && !masterDriven)
                         {
-                            ShowError("Slave 槽只配置自动响应，不会主动发送 Header；请等待外部主节点。");
-                        }
-                        else if (slot != null && !Lin_API.LinSendScheduleSlot(_channel, slot))
-                            ShowError("单步发送失败（未连接）");
-                    }
-                    break;
-                    // 单步：按调度槽发送原语；Slave 槽是被动响应，不产生 Header。
-                    if (_dgvSlots.SelectedRows.Count > 0)
-                    {
-                        var slot = (LinScheduleSlot)_dgvSlots.SelectedRows[0].Tag;
-                        if (slot != null && slot.TransmitType == LinTransmitType.Slave)
-                        {
-                            ShowError("Slave 槽只配置自动响应，不会主动发送 Header；请等待外部主节点。");
+                            bool headerSeen = Lin_API.HasFrameActivitySince(_channel, slot.Pid, 0);
+                            slot.HeaderMissing = !headerSeen;
+                            _dgvSlots.InvalidateRow(_dgvSlots.SelectedRows[0].Index);
+                            ShowError(headerSeen
+                                ? "帧头已出现: 0x" + slot.Pid.ToString("X2") + "（本机从机已自动应答）"
+                                : "帧头缺失: 0x" + slot.Pid.ToString("X2") + "（总线上无外部主节点发送该帧头）");
                         }
                         else if (slot != null && !Lin_API.LinSendScheduleSlot(_channel, slot))
                             ShowError("单步发送失败（未连接）");
@@ -1684,7 +1687,7 @@ namespace PCAN_Client.LIN_UI
         {
             var ch = CurrentChannel;
             if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave && !ch.ForceMasterDriven)
-                return "暂无报文 — 当前是从机监听模式：只在外部主节点 Header 到达后响应。单设备自测请在调度表页点击“开始调度”切换主从一体驱动";
+                return "暂无报文 — 从机监控运行中：外部主节点发出对应帧头后本机自动应答显示；未收到帧头会在调度表页标红报错";
             if (ch != null && ch.ForceMasterDriven)
                 return "暂无报文 — 主从一体驱动已启用：点击“开始调度”后本机发 Header 驱动响应帧";
             return "暂无报文 — 连接通道后，此处实时显示总线上的报文（时间/方向/ID/帧名称/数据）";
@@ -2300,8 +2303,31 @@ namespace PCAN_Client.LIN_UI
                 var ch = CurrentChannel;
                 if (ch != null && ch.ForceMasterDriven)
                     _lblSched.Text = sc.IsRunning ? "主从一体: 运行中（本机驱动响应帧）" : "主从一体: 待启动（本机驱动响应帧）";
-                else if (sc.IsPassiveListening || (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave))
-                    _lblSched.Text = "从节点: 等待外部主节点 Header";
+                else if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave)
+                {
+                    if (sc.IsRunning)
+                    {
+                        // 从机监控运行中：汇总缺失帧头（红灯），收到外部帧头后自动恢复
+                        var missing = new System.Collections.Generic.List<string>();
+                        foreach (var s in sc.Slots)
+                            if (s != null && s.Enabled && s.HeaderMissing) missing.Add("0x" + s.Pid.ToString("X2"));
+                        if (missing.Count > 0)
+                        {
+                            _lblSched.Text = "从机监控: 运行中（帧头缺失: " + string.Join(", ", missing) + "）";
+                            _lblSched.ForeColor = Color.Red;
+                        }
+                        else
+                        {
+                            _lblSched.Text = "从机监控: 运行中（等待外部帧头）";
+                            _lblSched.ForeColor = SystemColors.ControlText;
+                        }
+                    }
+                    else
+                    {
+                        _lblSched.Text = sc.IsPassiveListening ? "从机监控: 监听中（空调度表）" : "从机监控: 停止（启动后按本地周期检查外部帧头）";
+                        _lblSched.ForeColor = SystemColors.ControlText;
+                    }
+                }
                 else if (ch != null && ch.GetHardwareModeNotice().Length > 0)
                     _lblSched.Text = "调度: 混合角色（Slave 不自动应答）";
                 else

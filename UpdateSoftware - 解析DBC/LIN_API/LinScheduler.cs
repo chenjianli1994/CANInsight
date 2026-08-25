@@ -9,11 +9,14 @@ namespace PCAN_Client.LIN_API
     {
         public bool Enabled = true;
         public byte Pid;
-        /// <summary>该槽对应的发送原语；Slave 槽只配置自动响应，不由调度器主动发 Header。</summary>
+        /// <summary>该槽对应的发送原语；Slave 槽在非主从一体驱动下只监控外部帧头，不由调度器主动发 Header。</summary>
         public LinTransmitType TransmitType = LinTransmitType.Master;
         public int SlotMs = 10;
         /// <summary>运行计数（调度循环执行次数）</summary>
         public long Counter;
+        /// <summary>从机监控状态：本周期未检测到外部 Master 发出对应帧头（UI 标红）。
+        /// 仅 Slave 槽在非主从一体驱动下有意义；收到帧头后由调度器自动清除。</summary>
+        public volatile bool HeaderMissing;
     }
 
     /// <summary>
@@ -77,6 +80,8 @@ namespace PCAN_Client.LIN_API
             public LinTransmitType Type;
         }
         private readonly Dictionary<byte, PendingResponse> _pendingResponses = new Dictionary<byte, PendingResponse>();
+        /// <summary>从机监控：各 PID 上次帧头检查时刻（Slave 槽非主从一体驱动时使用）</summary>
+        private readonly Dictionary<byte, long> _lastFrameCheckMs = new Dictionary<byte, long>();
 
         // Windows 定时器和 PLIN 接收线程存在调度抖动，给真实响应留出一个完整窗口；
         // 500ms 仍远小于常见调度表周期，且不会把正常响应误判为无应答。
@@ -114,10 +119,15 @@ namespace PCAN_Client.LIN_API
             lock (_slots)
             {
                 _slots.Clear();
-                foreach (var s in slots) _slots.Add(s);
+                foreach (var s in slots)
+                {
+                    if (s != null) s.HeaderMissing = false;
+                    _slots.Add(s);
+                }
             }
             _cursor = 0;
             _pendingResponses.Clear();
+            _lastFrameCheckMs.Clear();
         }
 
         /// <summary>校验所有启用槽的时隙是否满足帧最小传输时间；返回不合法槽描述（空=全部合法）</summary>
@@ -171,13 +181,10 @@ namespace PCAN_Client.LIN_API
                 return false;
             }
 
-            // 纯 Slave 发送计划（推导硬件模式为从机）：本机没有本地调度时钟，连接时已把
-            // RESPONSE_ENABLE 配置给硬件，“开始调度”只切换到被动监听状态——报文由外部
-            // Master 的 Header 触发自动应答。单设备自测需在 UI 选择“主从一体驱动”
-            // （ForceMasterDriven，以 modMaster 重连后本机发 Header 驱动响应帧）。
-            // 即使发送项为空，也不能启动一个空的 1ms 定时器，否则会在 UI 线程/接收
-            // 线程之间制造无意义的高频回调。
-            if (channelSlave)
+            // 纯 Slave 发送计划且调度表为空：没有可监控的帧，仅保持被动监听状态
+            // （连接时已把 RESPONSE_ENABLE 配置给硬件，报文由外部 Master 的 Header
+            // 触发自动应答）。不启动空定时器，避免制造无意义的高频回调。
+            if (channelSlave && _slots.Count == 0)
             {
                 _lastError = "";
                 _passiveListening = true;
@@ -211,11 +218,17 @@ namespace PCAN_Client.LIN_API
             }
             if (!hasInitiator)
             {
-                _passiveListening = true;
+                // 从机监控模式（纯 Slave 计划，非主从一体驱动）：本地定时器只推进游标并
+                // 检查外部 Master 是否发出对应帧头（缺失标红），本机不发送任何报文。
+                // 走软件定时器路径（modSlave 无法下发硬件调度表；监控只读总线）。
                 _lastError = "";
-                RunningChanged?.Invoke(false);
-                // 纯 Slave 计划（非主从一体驱动）的“启动”只确认被动监听状态，不启动本地
-                // 定时器。报文是否出现取决于总线上是否有外部 Master 发出对应 Header。
+                _pendingResponses.Clear();
+                _lastFrameCheckMs.Clear();
+                _cursor = 0;
+                _nextDueMs = NowMs();
+                if (!_timer.Start(1, OnTick)) { _lastError = "定时器启动失败"; return false; }
+                _running = true;
+                RunningChanged?.Invoke(true);
                 return true;
             }
             _lastError = "";
@@ -251,6 +264,8 @@ namespace PCAN_Client.LIN_API
             _running = false; // 先置位：已派发的 winmm 回调在 OnTick 开头被拦截，不再多发 Header
             _passiveListening = false;
             _pendingResponses.Clear();
+            foreach (var s in _slots) if (s != null) s.HeaderMissing = false; // 停止后清除标红
+            _lastFrameCheckMs.Clear();
             if (_useHardwareSchedule) Lin_API.SuspendSchedule(_logicChannel);
             else _timer.Stop();
             RunningChanged?.Invoke(false);
@@ -262,7 +277,12 @@ namespace PCAN_Client.LIN_API
             if (_logicChannel >= 1 && _logicChannel <= LinConfig.Channels.Count &&
                 LinConfig.Channels[_logicChannel - 1].GetHardwareMode() == LinNodeMode.Slave)
             {
-                _passiveListening = true;
+                // 纯从机通道：有槽时恢复帧头监控（软件定时器，只读总线），空槽仅保持监听。
+                if (_slots.Count == 0) { _passiveListening = true; return; }
+                _nextDueMs = NowMs();
+                if (!_timer.Start(1, OnTick)) return;
+                _running = true;
+                RunningChanged?.Invoke(true);
                 return;
             }
             if (_useHardwareSchedule)
@@ -323,6 +343,23 @@ namespace PCAN_Client.LIN_API
 
             bool dispatched;
             long sendStartMs = Lin_API.SessionMs;
+            // 从机监控（Slave 槽，非主从一体驱动）：本机不发送，只检查外部 Master 是否
+            // 在该周期内发出对应帧头——有帧头则本周期正常，缺失则槽标红（UI 红灯报错），
+            // 收到帧头后由下一周期自动清除。Slave 槽的自动应答仍由连接时配置的
+            // RESPONSE_ENABLE 完成，与监控检查互不干扰。
+            if (slot.TransmitType == LinTransmitType.Slave && !Lin_API.IsMasterDriven(_logicChannel))
+            {
+                long since;
+                if (!_lastFrameCheckMs.TryGetValue(slot.Pid, out since)) since = sendStartMs;
+                slot.HeaderMissing = !Lin_API.HasFrameActivitySince(_logicChannel, slot.Pid, since);
+                _lastFrameCheckMs[slot.Pid] = sendStartMs;
+                slot.Counter++; // 监控周期计数：调度表里该帧“显示发送”
+                dispatched = true;
+                LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") +
+                    " slotMs=" + slot.SlotMs + " type=Slave 从机监控 headerMissing=" + slot.HeaderMissing);
+                SlotChanged?.Invoke(idx);
+                return;
+            }
             dispatched = Lin_API.LinSendScheduleSlot(_logicChannel, slot);
             // HeaderOnly 槽和主从一体驱动下的 Slave 槽都发出 Header，需要等待响应；
             // 前者超时按真实无应答处理，后者超时注入仿真响应（软件调度回退）。
@@ -342,8 +379,7 @@ namespace PCAN_Client.LIN_API
                     };
                 }
             }
-            // Slave 槽仅用于把自动应答配置纳入同一张表，不代表本机主动发送；
-            // 发送失败也不记为一个已完成周期。
+            // Slave 槽在主从一体驱动下由本机发 Header 驱动；发送失败也不记为一个已完成周期。
             if (dispatched && slot.TransmitType != LinTransmitType.Slave) slot.Counter++;
             LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") + " slotMs=" + slot.SlotMs + " type=" + slot.TransmitType + " dispatched=" + dispatched);
             SlotChanged?.Invoke(idx);

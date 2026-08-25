@@ -19,6 +19,10 @@ namespace PCAN_Client.LIN_API
         // 只记录真实硬件/Vector Rx，不记录软件 Tx 回显。按通道+PID保存最后一次总线活动，
         // 供主节点调度判断 Header 后是否出现从节点响应或硬件错误事件。
         private static readonly Dictionary<long, long> _lastRxMs = new Dictionary<long, long>();
+        // 该 PID 任意方向帧活动（含本机 Tx 回显与硬件错误帧）：从机监控模式用它判断
+        // 外部 Master 是否发出了对应帧头——modSlave 下本机自动应答帧按 dirPublisher 上报，
+        // 方向可能是 Tx，不能只依赖 _lastRxMs。
+        private static readonly Dictionary<long, long> _lastFrameMs = new Dictionary<long, long>();
         private static readonly object _rxActivityLock = new object();
 
         // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
@@ -324,6 +328,18 @@ namespace PCAN_Client.LIN_API
             }
         }
 
+        /// <summary>该 PID 自 sinceMs 以来是否有任意方向帧活动（Tx 回显/Rx/硬件错误帧）。
+        /// 从机监控模式：本机从机应答帧只可能由外部 Master 的 Header 触发，
+        /// 因此任意方向活动都证明帧头已出现在总线上。</summary>
+        internal static bool HasFrameActivitySince(byte logicChannel, byte pid, long sinceMs)
+        {
+            lock (_rxActivityLock)
+            {
+                long last;
+                return _lastFrameMs.TryGetValue(FrameKey(logicChannel, pid), out last) && last >= sinceMs;
+            }
+        }
+
         /// <summary>
         /// 注入从节点响应超时错误。仅由主节点调度器对非本机发布帧调用；
         /// 这表示 Header 已按调度发出但驱动没有返回可显示的 Rx/NoResponse 事件。
@@ -395,6 +411,9 @@ namespace PCAN_Client.LIN_API
             {
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
+
+                lock (_rxActivityLock)
+                    _lastFrameMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
 
                 // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显不能证明总线上出现了响应。
                 if (frame.Direction == LinFrameDir.Rx)
