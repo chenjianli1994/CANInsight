@@ -19,6 +19,10 @@ namespace PCAN_Client
         private static StreamWriter _writer;
         private static volatile bool _running;
         private static string _logPath;
+        /// <summary>文件大小轮转（阶段 5）：单文件超过阈值即轮转备份，防止现场长时间运行日志无限增长</summary>
+        private const long MaxFileBytes = 4L * 1024 * 1024;
+        private static string _currentFile;
+        private static long _writtenBytes;
 
         /// <summary>日志文件实际路径（null = 尚未启动）</summary>
         public static string LogPath
@@ -110,12 +114,19 @@ namespace PCAN_Client
                     _logPath = Path.Combine(Path.GetTempPath(), "AutoPPT_app.log");
                     _writer = new StreamWriter(_logPath, true) { AutoFlush = true };
                 }
+                _currentFile = _logPath;
+                try { _writtenBytes = new FileInfo(_logPath).Length; } catch { _writtenBytes = 0; }
                 _writer.WriteLine("=======================================================");
                 while (_running)
                 {
                     string s;
                     if (_queue.TryDequeue(out s))
                     {
+                        // 日志分级/轮转（阶段 5）：按行追加累计字节，超阈值先轮转再写，
+                        // 防止现场长时间运行（周期日志限频 + 文件上限）日志无限增长。
+                        _writtenBytes += s.Length + 2;
+                        if (_writtenBytes >= MaxFileBytes)
+                            Rotate();
                         _writer.WriteLine(s);
                         continue;
                     }
@@ -123,6 +134,23 @@ namespace PCAN_Client
                 }
                 while (_queue.TryDequeue(out string s2)) _writer.WriteLine(s2);
                 _writer.Flush();
+            }
+            catch { }
+        }
+
+        /// <summary>轮转当前日志：关闭写入器，备份为 app_debug.1.log（覆盖旧备份，保留最近一份），重新打开当前文件。</summary>
+        private static void Rotate()
+        {
+            try
+            {
+                _writer.WriteLine("===== [轮转] 文件达到 " + MaxFileBytes + " 字节，备份为 " + Path.GetFileName(_currentFile) + ".1 =====");
+                _writer.Flush();
+                _writer.Dispose();
+                string backup = _currentFile + ".1";
+                try { File.Copy(_currentFile, backup, true); } catch { }
+                try { File.Delete(_currentFile); } catch { }
+                _writer = new StreamWriter(_currentFile, true) { AutoFlush = true };
+                _writtenBytes = 0;
             }
             catch { }
         }
