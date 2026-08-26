@@ -1206,10 +1206,10 @@ namespace PCAN_Client.LIN_UI
             switch (col)
             {
                 case "colExpand": e.Value = ""; break;
-                // 方案 §4.3：计划行“次数/时间”不再兼任多义——次数=提交次数、时间=实测周期；
-                // 真实 Rx/错误次数/最后错误独立成列；无样本显示 0/--（不伪造真实结果）。
-                case "colCount": e.Value = snap.SubmittedCount.ToString(); break;
-                case "colTime": e.Value = snap.MeasuredPeriodMs > 0 ? snap.MeasuredPeriodMs.ToString() : "--"; break;
+                // 方案 §4.3：计划行“次数/时间”不再兼任多义——次数=总线帧观察数（真实 Tx+Rx 观测），
+                // 时间列不显示会话绝对时间（"--"，反模式门禁）；提交次数/真实Rx/实测周期/错误次数独立成列。
+                case "colCount": e.Value = (info != null ? info.Count : 0u).ToString(); break;
+                case "colTime": e.Value = "--"; break;
                 case "colCh": e.Value = "CH" + flat.Channel; break;
                 case "colDir":
                     e.Value = info != null ? (info.Last.Direction == LinFrameDir.Tx ? "Tx" : "Rx") : "—";
