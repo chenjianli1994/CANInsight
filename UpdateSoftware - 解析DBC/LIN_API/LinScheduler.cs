@@ -599,8 +599,9 @@ namespace PCAN_Client.LIN_API
                 }
                 if (doEmit)
                 {
+                    // 阶段 2：超时只发布运行错误事件（ResponseTimeout 进错误锁存），
+                    // 不再构造 Direction=Rx 的 NoResponse 伪帧进 LinReceive/LinFrameReceived。
                     Lin_API.NotifyTxState(_logicChannel, p.Pid, p.Type, LinTxEventKind.ResponseTimeout, "无应答");
-                    Lin_API.InjectNoResponse(_logicChannel, p.Pid);
                 }
             }
         }

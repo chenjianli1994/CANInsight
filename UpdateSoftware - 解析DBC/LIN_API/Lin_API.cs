@@ -142,11 +142,11 @@ namespace PCAN_Client.LIN_API
                         s.Type = type;
                         break;
                     case LinTxEventKind.SubmitOk:
+                        // 方案 4.2 错误锁存：普通提交只更新当前周期状态，不清除最近错误
+                        // （只有明确成功响应 ResponseComplete / 重新启用 Intent / 用户清除才清除锁存灯）。
                         s.SubmittedCount++;
                         s.LastIntentUs = (long)SessionMs * 1000;
                         s.State = LinRunStateKind.TxSubmitted;
-                        s.ErrorKind = LinErrorKind.None;
-                        s.ErrorText = "";
                         break;
                     case LinTxEventKind.SubmitFail:
                         s.State = LinRunStateKind.Error;
@@ -159,14 +159,20 @@ namespace PCAN_Client.LIN_API
                         s.LastBusUs = (long)SessionMs * 1000;
                         break;
                     case LinTxEventKind.ResponseWait:
+                        // 方案 4.2 错误锁存：等待应答不消除已锁存的 NoResponse/硬件错误
                         s.State = LinRunStateKind.WaitingResponse;
-                        s.ErrorKind = LinErrorKind.None;
-                        s.ErrorText = "";
                         break;
                     case LinTxEventKind.ResponseComplete:
+                        // 明确成功响应：真实 Rx 完成，允许清除锁存错误（红灯功能性熄灭）
                         s.State = LinRunStateKind.Completed;
                         s.ErrorKind = LinErrorKind.None;
                         s.ErrorText = "";
+                        break;
+                    case LinTxEventKind.Disabled:
+                        // 停用：状态置 Disabled，错误保持锁存（重新启用经 Intent 分支才清除），
+                        // 避免停用/取消勾选操作把已发生的 NoResponse/硬件错误静默抹掉。
+                        s.Enabled = false;
+                        s.State = LinRunStateKind.Disabled;
                         break;
                     case LinTxEventKind.ResponseTimeout:
                         s.State = LinRunStateKind.NoResponse;
@@ -186,12 +192,6 @@ namespace PCAN_Client.LIN_API
                         s.ErrorKind = LinErrorKind.Hw;
                         s.ErrorText = text.Length > 0 ? text : "当前适配器不支持该模式";
                         s.ErrorCount++;
-                        break;
-                    case LinTxEventKind.Disabled:
-                        s.Enabled = false;
-                        s.State = LinRunStateKind.Disabled;
-                        s.ErrorKind = LinErrorKind.None;
-                        s.ErrorText = "";
                         break;
                 }
             }
@@ -573,29 +573,6 @@ namespace PCAN_Client.LIN_API
             }
         }
 
-        /// <summary>
-        /// 注入从节点响应超时错误。仅由主节点调度器对非本机发布帧调用；
-        /// 这表示 Header 已按调度发出但驱动没有返回可显示的 Rx/NoResponse 事件。
-        /// </summary>
-        internal static void InjectNoResponse(byte logicChannel, byte pid)
-        {
-            var ldf = GetLdf(logicChannel);
-            byte dlc = ldf != null && ldf.Frames.ContainsKey(pid) ? ldf.Frames[pid].Dlc : (byte)8;
-            var frame = new LinFrameRecord
-            {
-                LogicChannel = logicChannel,
-                Pid = pid,
-                Direction = LinFrameDir.Rx,
-                Dlc = dlc,
-                Data = new byte[0],
-                ChecksumType = GetFrameChecksumKind(logicChannel, pid),
-                ErrorKind = LinErrorKind.NoResponse,
-                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
-            };
-            LinDebugLog.Write("[SCH] InjectNoResponse ch=" + logicChannel + " pid=0x" + pid.ToString("X2"));
-            LinReceive(logicChannel, frame);
-        }
-
         // ==================== 接收汇聚 ====================
 
         /// <summary>接收汇聚：统一时间戳 → 帧类型/名称映射（LDF）→ 事件派发
@@ -604,6 +581,15 @@ namespace PCAN_Client.LIN_API
         {
             try
             {
+                // 阶段 2 反模式门禁：NoResponse 是运行错误事件，禁止以 Direction=Rx 伪帧进入
+                // LinFrameReceived/_lastRxMs/统计。InjectNoResponse 已移除；此处做第二道防线，
+                // 即使外部误构造 NoResponse 帧也无法污染真实帧流水线或总线活动判定。
+                if (frame.ErrorKind == LinErrorKind.NoResponse)
+                {
+                    LinDebugLog.Write("[SCH] 拦截 NoResponse 伪帧 ch=" + logicChannel + " pid=0x" + frame.Pid.ToString("X2"));
+                    return;
+                }
+
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
 
@@ -612,11 +598,10 @@ namespace PCAN_Client.LIN_API
                 {
                     lock (_rxActivityLock)
                         _lastRxMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
-                    // 运行快照真实总线帧统计：NoResponse 是无应答合成标记（无总线活动），不计入
-                    if (frame.ErrorKind != LinErrorKind.NoResponse)
-                        NotifyTxState(logicChannel, frame.Pid,
-                            GetTransmitType(logicChannel, frame.Pid, LinTransmitType.Master),
-                            LinTxEventKind.BusFrame, "");
+                    // 运行快照真实总线帧统计（NoResponse 已被上面拦截，不会走到这里）
+                    NotifyTxState(logicChannel, frame.Pid,
+                        GetTransmitType(logicChannel, frame.Pid, LinTransmitType.Master),
+                        LinTxEventKind.BusFrame, "");
                 }
 
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
