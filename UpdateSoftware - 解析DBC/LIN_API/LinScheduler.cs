@@ -472,7 +472,9 @@ namespace PCAN_Client.LIN_API
 
             bool dispatched = DispatchSlot(slot, Lin_API.SessionMs);
             if (dispatched) slot.Counter++;
-            LinDebugLog.Write("[SCH] tick ch=" + _logicChannel + " idx=" + idx + " pid=0x" + slot.Pid.ToString("X2") + " slotMs=" + slot.SlotMs + " type=" + slot.TransmitType + " dispatched=" + dispatched);
+            // 周期日志限频（方案阶段 5）：tick 逐周期写曾致 app_debug.log 达 183MB；
+            // 按 1s 窗口节流，保留 start/stop/dispatch 状态变化的完整现场证据。
+            LinDebugLog.WriteTick(_logicChannel, idx, slot, dispatched);
             SlotChanged?.Invoke(idx);
         }
 
