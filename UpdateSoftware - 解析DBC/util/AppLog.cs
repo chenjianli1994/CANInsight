@@ -74,6 +74,9 @@ namespace PCAN_Client
         /// <summary>错误日志（失败/异常）</summary>
         public static void Error(string msg) { Write("ERROR ", msg); }
 
+        /// <summary>跟踪日志（诊断模式细粒度埋点；常态不调用）</summary>
+        public static void Trace(string msg) { Write("TRACE ", msg); }
+
         /// <summary>写一行日志（线程安全，异步落盘；调用方自行带 [分类] 前缀）</summary>
         public static void Write(string msg)
         {
@@ -127,6 +130,8 @@ namespace PCAN_Client
                         _writtenBytes += s.Length + 2;
                         if (_writtenBytes >= MaxFileBytes)
                             Rotate();
+                        if (_writer == null) // 轮转失败（文件被锁）时尽力重建，保证日志线程不退出
+                            TryReopenWriter();
                         _writer.WriteLine(s);
                         continue;
                     }
@@ -146,11 +151,23 @@ namespace PCAN_Client
                 _writer.WriteLine("===== [轮转] 文件达到 " + MaxFileBytes + " 字节，备份为 " + Path.GetFileName(_currentFile) + ".1 =====");
                 _writer.Flush();
                 _writer.Dispose();
+                _writer = null;
                 string backup = _currentFile + ".1";
                 try { File.Copy(_currentFile, backup, true); } catch { }
                 try { File.Delete(_currentFile); } catch { }
                 _writer = new StreamWriter(_currentFile, true) { AutoFlush = true };
                 _writtenBytes = 0;
+            }
+            catch { }
+        }
+
+        /// <summary>轮转/打开失败时重建写入器；重开成功则按实际文件大小校正字节计数。</summary>
+        private static void TryReopenWriter()
+        {
+            try
+            {
+                _writer = new StreamWriter(_currentFile, true) { AutoFlush = true };
+                try { _writtenBytes = new FileInfo(_currentFile).Length; } catch { }
             }
             catch { }
         }

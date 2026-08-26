@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 
 namespace PCAN_Client.LIN_API
 {
@@ -23,18 +24,18 @@ namespace PCAN_Client.LIN_API
 
         /// <summary>
         /// 周期派发日志（限频，方案阶段 5）：同一通道 tick 日志按 1s 时间窗节流，
-        /// 窗口内只写首条与最后一条（保留 start/stop/状态变化锚点，避免 15ms 周期逐条写
-        /// 撑爆 app_debug.log——历史曾达 183MB）。
+        /// 窗口内只写首条、其余计数、翻页时补一条抑制汇总（保留 start/stop/状态变化锚点，
+        /// 避免 15ms 周期逐条写撑爆 app_debug.log——历史曾达 183MB）。
         /// </summary>
         private static readonly object _tickLogLock = new object();
-        private static long _tickLogWindowStart;
+        private static long _tickLogWindowStart;   // Stopwatch.GetTimestamp() 基准（无回绕）
         private static int _tickLogSuppressed;
         public static void WriteTick(byte channel, int idx, object slot, bool dispatched)
         {
-            long now = Environment.TickCount & 0x7FFFFFFF; // 64 位无回绕环境直接使用
+            long now = Stopwatch.GetTimestamp(); // 单调时钟，无 24.9 天回绕（比 TickCount 掩码安全）
             lock (_tickLogLock)
             {
-                if (now - _tickLogWindowStart >= 1000)
+                if (now - _tickLogWindowStart >= Stopwatch.Frequency) // 1s 窗口（Frequency 为每秒计数）
                 {
                     if (_tickLogSuppressed > 0)
                         AppLog.Write("[SCH] tick（限频）... 1s 内抑制 " + _tickLogSuppressed + " 条");
