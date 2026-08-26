@@ -332,6 +332,22 @@ namespace PCAN_Client.LIN_UI
             _dgvFrames.Columns["colCs"].Width = 62;
             _dgvFrames.Columns.Add("colStatus", "状态");
             _dgvFrames.Columns["colStatus"].Width = 110;
+            // 阶段 3（方案 §4.3 统计口径）：计划行专用统计列——不显示会话绝对时间、
+            // 不伪造 Rx；提交次数/真实Rx/实测周期/错误次数/最后错误分别成列，不再用 LinFixedInfo.Count 兼任多义。
+            _dgvFrames.Columns.Add("colSubmit", "提交次数");
+            _dgvFrames.Columns["colSubmit"].Width = 70;
+            _dgvFrames.Columns["colSubmit"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _dgvFrames.Columns.Add("colBusRx", "真实Rx");
+            _dgvFrames.Columns["colBusRx"].Width = 60;
+            _dgvFrames.Columns["colBusRx"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _dgvFrames.Columns.Add("colPeriod", "实测周期(ms)");
+            _dgvFrames.Columns["colPeriod"].Width = 80;
+            _dgvFrames.Columns["colPeriod"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _dgvFrames.Columns.Add("colErrCnt", "错误次数");
+            _dgvFrames.Columns["colErrCnt"].Width = 70;
+            _dgvFrames.Columns["colErrCnt"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            _dgvFrames.Columns.Add("colLastErr", "最后错误");
+            _dgvFrames.Columns["colLastErr"].Width = 140;
             Controls.Add(_dgvFrames);
         }
 
@@ -1131,6 +1147,12 @@ namespace PCAN_Client.LIN_UI
                             : f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
                         break;
                     case "colStatus": e.Value = f.StatusText; break;
+                    // 阶段 3 统计列只对计划行有语义；真实帧行/聚合行显式空（VirtualMode 防残留旧值）
+                    case "colSubmit": e.Value = ""; break;
+                    case "colBusRx": e.Value = ""; break;
+                    case "colPeriod": e.Value = ""; break;
+                    case "colErrCnt": e.Value = ""; break;
+                    case "colLastErr": e.Value = ""; break;
                 }
             }
             else
@@ -1163,6 +1185,8 @@ namespace PCAN_Client.LIN_UI
                     case "colName": e.Value = "　├ " + flat.SignalName; break;
                     case "colDlc": e.Value = "bit " + flat.SigOffset; break;
                     case "colData": e.Value = FormatSigValue(sigDef, raw); break;
+                    case "colSubmit": case "colBusRx": case "colPeriod": case "colErrCnt": case "colLastErr":
+                        e.Value = ""; break;
                     default: e.Value = ""; break;
                 }
             }
@@ -1182,8 +1206,10 @@ namespace PCAN_Client.LIN_UI
             switch (col)
             {
                 case "colExpand": e.Value = ""; break;
-                case "colCount": e.Value = (info != null ? info.Count : 0u).ToString(); break;
-                case "colTime": e.Value = info != null ? (info.LastTimestampUs / 1000.0).ToString("F3") : "--"; break;
+                // 方案 §4.3：计划行“次数/时间”不再兼任多义——次数=提交次数、时间=实测周期；
+                // 真实 Rx/错误次数/最后错误独立成列；无样本显示 0/--（不伪造真实结果）。
+                case "colCount": e.Value = snap.SubmittedCount.ToString(); break;
+                case "colTime": e.Value = snap.MeasuredPeriodMs > 0 ? snap.MeasuredPeriodMs.ToString() : "--"; break;
                 case "colCh": e.Value = "CH" + flat.Channel; break;
                 case "colDir":
                     e.Value = info != null ? (info.Last.Direction == LinFrameDir.Tx ? "Tx" : "Rx") : "—";
@@ -1214,6 +1240,13 @@ namespace PCAN_Client.LIN_UI
                         : "--";
                     break;
                 case "colStatus": e.Value = SnapshotStateText(snap); break;
+                // 阶段 3 统计列（方案 §4.3）：
+                // colSubmit=提交次数、colBusRx=真实 Rx、colPeriod=实测周期、colErrCnt=错误次数、colLastErr=最后错误
+                case "colSubmit": e.Value = snap.SubmittedCount.ToString(); break;
+                case "colBusRx": e.Value = snap.BusFrameCount.ToString(); break;
+                case "colPeriod": e.Value = snap.MeasuredPeriodMs > 0 ? snap.MeasuredPeriodMs.ToString() : "--"; break;
+                case "colErrCnt": e.Value = snap.ErrorCount.ToString(); break;
+                case "colLastErr": e.Value = snap.ErrorText.Length > 0 ? snap.ErrorText : "--"; break;
             }
         }
 

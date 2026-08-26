@@ -154,7 +154,12 @@ namespace PCAN_Client.LIN_API
                         s.ErrorText = text.Length > 0 ? text : "驱动提交失败";
                         s.ErrorCount++;
                         break;
-                    case LinTxEventKind.BusFrame:
+                        // 实测周期（方案 4.3）：相同方向相同裸 PID 的相邻真实总线帧间隔；无前帧样本保持 0（UI 显示 --）
+                        if (s.LastBusUs != 0)
+                            s.MeasuredPeriodMs = ((long)SessionMs * 1000 - s.LastBusUs) / 1000;
+                        s.BusFrameCount++;
+                        s.LastBusUs = (long)SessionMs * 1000;
+                        break;
                         s.BusFrameCount++;
                         s.LastBusUs = (long)SessionMs * 1000;
                         break;
