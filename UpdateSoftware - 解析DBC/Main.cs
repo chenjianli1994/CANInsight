@@ -30,6 +30,8 @@ namespace PCAN_Client
     {
         internal PCAN_API.PCAN_API pCAN_API = null;
         internal Canoe_API.CanOe_API canoe_API = null;
+        /// <summary>LIN 监控窗体单实例（方案阶段 1）：重复点击只激活现有窗体，不新建调度器</summary>
+        private PCAN_Client.LIN_UI.LinMonitorForm _linMonitorForm;
         internal static CanSend canSend = null;
         internal static ChartFrom chartFromShow = null;
         internal static LogFileToCSV LogFileToCSV = null;
@@ -1654,7 +1656,7 @@ namespace PCAN_Client
             itemSend.Click += SendMsg_Click;
             var itemLin = new ToolStripButton("LIN 监控", ToolbarIcons.Get("wrench"));
             itemLin.Alignment = ToolStripItemAlignment.Right;
-            itemLin.Click += (s, e) => new PCAN_Client.LIN_UI.LinMonitorForm().Show();
+            itemLin.Click += (s, e) => ShowLinMonitor();
             _btnRecordStart = new ToolStripButton("录制报文", ToolbarIcons.Get("save"));
             _btnRecordStart.Alignment = ToolStripItemAlignment.Right;
             _btnRecordStart.Click += button3_Click;
@@ -1662,6 +1664,20 @@ namespace PCAN_Client
 
             this.Controls.Add(_connectionStrip);
             _connectionStrip.BringToFront();
+        }
+
+        /// <summary>
+        /// LIN 监控窗体单实例（方案阶段 1）：同一物理/逻辑 LIN 通道只能有一个监控实例。
+        /// 重复点击只激活现有窗体；窗体已关闭/释放时新建（调度器经 Lin_API 通道唯一注册表管理，不随点击泄漏）。
+        /// </summary>
+        private void ShowLinMonitor()
+        {
+            if (_linMonitorForm == null || _linMonitorForm.IsDisposed)
+                _linMonitorForm = new PCAN_Client.LIN_UI.LinMonitorForm();
+            if (!_linMonitorForm.Visible) _linMonitorForm.Show();
+            if (_linMonitorForm.WindowState == FormWindowState.Minimized)
+                _linMonitorForm.WindowState = FormWindowState.Normal;
+            _linMonitorForm.Activate();
         }
 
         /// <summary>创建报文显示工具栏（与绘图窗口一致的ToolStrip无边框风格）</summary>

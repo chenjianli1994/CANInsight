@@ -52,6 +52,7 @@ namespace PCAN_Client.LIN_UI
         private long _errorCount;
         private volatile bool _paused;
         private byte _channel;          // 当前监控通道（逻辑号）
+        /// <summary>本窗体已获取的调度器（值取自 Lin_API 通道唯一注册表；重复打开/多窗体共享同一实例，关闭时统一释放）</summary>
         private readonly Dictionary<byte, LinScheduler> _schedulers = new Dictionary<byte, LinScheduler>();
         private readonly Timer _uiTimer;
         private bool _disposed;
@@ -87,9 +88,13 @@ namespace PCAN_Client.LIN_UI
             public byte Channel;
             public string SignalName = "";   // 仅 Signal 行
             public int SigOffset = -1;       // 仅 Signal 行（LDF 起始位）
+            /// <summary>计划行（方案 3）：启用报文的固定行，状态来自运行快照，数据合并真实帧/配置</summary>
+            public bool IsPlanRow;
         }
         private readonly List<LinFlatRow> _linFlatRows = new List<LinFlatRow>();
         private readonly HashSet<long> _linExpandedKeys = new HashSet<long>();   // Fixed：按 (ch,pid) 复合键
+        /// <summary>当前计划行键（重建时填充；真实帧聚合跳过这些 PID 避免重复行）</summary>
+        private readonly HashSet<long> _linPlanKeys = new HashSet<long>();
         private readonly HashSet<int> _linExpandedFrames = new HashSet<int>();  // Scroll：按帧索引
 
         // === 刷新节流（对齐 CAN MIN_REFRESH_MS=100，最大 10fps 重建，消除每帧全量过滤的 O(n²) 卡顿） ===
@@ -136,6 +141,7 @@ namespace PCAN_Client.LIN_UI
             Lin_API.BusEvent += OnBusEvent;
             Lin_API.LinkLost += OnLinkLost;
             Lin_API.ChannelStateChanged += OnChannelStateChanged;
+            Lin_API.LinTxStateChanged += OnLinTxStateChanged;
 
             InitChannelView();
             FormClosing += (s, e) =>
@@ -143,11 +149,18 @@ namespace PCAN_Client.LIN_UI
                 _disposed = true;
                 AppLog.Write("[LIN-UI] LinMonitorForm 关闭");
                 _uiTimer.Stop();
-                foreach (var sc in _schedulers.Values) sc.Suspend();
+                // 通道唯一调度器：随窗体关闭统一释放（重复开关窗口不残留定时器/事件订阅）
+                // 逐通道释放：注册表幂等（未注册/已释放直接返回），同一通道多窗体共享同一实例也只释放一次
+                foreach (byte ch in _schedulers.Keys.ToArray())
+                {
+                    _schedulers.Remove(ch);
+                    Lin_API.ReleaseScheduler(ch, "窗体关闭");
+                }
                 Lin_API.LinFrameReceived -= OnFrameReceived;
                 Lin_API.BusEvent -= OnBusEvent;
                 Lin_API.LinkLost -= OnLinkLost;
                 Lin_API.ChannelStateChanged -= OnChannelStateChanged;
+                Lin_API.LinTxStateChanged -= OnLinTxStateChanged;
             };
         }
 
@@ -984,13 +997,23 @@ namespace PCAN_Client.LIN_UI
                 }
                 else
                 {
-                    // Fixed：聚合视图（按 PID,通道 排序；行数 ≤ 128，重建极快）
+                    // Fixed：计划行（启用项）在前 + 真实帧聚合行（跳过计划 PID 避免重复；行数 ≤ 128，重建极快）
                     if (!_linFlatRowsDirty && _linFlatRows.Count > 0) return;
                     _linFixedList.Sort((a, b) => a.Pid != b.Pid ? a.Pid.CompareTo(b.Pid) : a.Channel.CompareTo(b.Channel));
                     _linFlatRows.Clear();
+                    // 计划行（方案 3）：启用项立即出现；无真实帧时计数 0、数据列配置数据或 "--"，不伪造 Rx
+                    _linPlanKeys.Clear();
+                    var planList = Lin_API.GetEnabledRunSnapshots(_channel);
+                    foreach (var snap in planList)
+                    {
+                        if (!LinPassesFilter(snap.Pid)) continue;
+                        _linPlanKeys.Add(LinMsgKey(snap.Pid, snap.LogicChannel));
+                        _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, IsPlanRow = true, Pid = snap.Pid, Channel = snap.LogicChannel });
+                    }
                     for (int i = 0; i < _linFixedList.Count; i++)
                     {
                         var info = _linFixedList[i];
+                        if (_linPlanKeys.Contains(LinMsgKey(info.Pid, info.Channel))) continue; // 计划行已承载
                         if (!LinPassesFilter(info.Pid)) continue;
                         _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, FixedIndex = i, Pid = info.Pid, Channel = info.Channel });
                         if (_linExpandedKeys.Contains(LinMsgKey(info.Pid, info.Channel)))
@@ -1068,6 +1091,7 @@ namespace PCAN_Client.LIN_UI
             string col = _dgvFrames.Columns[e.ColumnIndex].Name;
             if (flat.Type == LinRowType.Frame)
             {
+                if (flat.IsPlanRow) { FillPlanRowValue(e, flat); return; } // 计划行：状态/数据来自快照+配置，不伪造 Rx
                 LinFrameRecord f;
                 LinFixedInfo info = null;
                 lock (_frames)
@@ -1145,6 +1169,105 @@ namespace PCAN_Client.LIN_UI
         }
 
         /// <summary>展开列绘制 ＋/－（仅该帧有 LDF 信号定义时显示）；错误列绘制红灯（校验和/同步/无应答/硬件错误），对齐 CAN 报文窗口</summary>
+        /// <summary>计划行单元格（方案 3）：状态来自运行快照；数据列优先真实帧，无帧用配置数据或 "--"，不伪造 Rx</summary>
+        private void FillPlanRowValue(DataGridViewCellValueEventArgs e, LinFlatRow flat)
+        {
+            string col = _dgvFrames.Columns[e.ColumnIndex].Name;
+            LinRunSnapshot snap = null;
+            foreach (var s in Lin_API.GetEnabledRunSnapshots(flat.Channel))
+                if (s.Pid == flat.Pid) { snap = s; break; }
+            if (snap == null) { e.Value = ""; return; }
+            LinFixedInfo info = null;
+            lock (_frames) { _linMsgIndexMap.TryGetValue(LinMsgKey(flat.Pid, flat.Channel), out info); }
+            switch (col)
+            {
+                case "colExpand": e.Value = ""; break;
+                case "colCount": e.Value = (info != null ? info.Count : 0u).ToString(); break;
+                case "colTime": e.Value = info != null ? (info.LastTimestampUs / 1000.0).ToString("F3") : "--"; break;
+                case "colCh": e.Value = "CH" + flat.Channel; break;
+                case "colDir":
+                    e.Value = info != null ? (info.Last.Direction == LinFrameDir.Tx ? "Tx" : "Rx") : "—";
+                    break;
+                case "colErr": e.Value = ""; break; // 指示灯由 CellPainting 按快照 IsError 绘制
+                case "colId": e.Value = "0x" + flat.Pid.ToString("X2"); break;
+                case "colName": e.Value = LinLdfHelper.GetFrameName(GetLdfForChannel(flat.Channel), flat.Pid); break;
+                case "colType":
+                {
+                    var ldf = GetLdfForChannel(flat.Channel);
+                    LinFrameDef def = null;
+                    if (ldf != null) ldf.Frames.TryGetValue(flat.Pid, out def);
+                    e.Value = def != null ? FrameTypeText(def.FrameType) : "—";
+                    break;
+                }
+                case "colDlc":
+                    e.Value = info != null ? info.Last.Dlc.ToString() : GetPlanDlc(flat).ToString();
+                    break;
+                case "colData":
+                    // NoResponse 是无应答合成标记（无总线数据）：数据列回退配置数据/--，不伪装真实 Rx
+                    e.Value = info != null && info.Last.ErrorKind == LinErrorKind.NoResponse
+                        ? (GetPlanDataHex(flat) ?? "--")
+                        : info != null ? info.Last.DataHex : (GetPlanDataHex(flat) ?? "--");
+                    break;
+                case "colCs":
+                    e.Value = info != null
+                        ? (info.Last.ErrorKind == LinErrorKind.Checksum ? "0x" + info.Last.ChecksumRx.ToString("X2") + "*" : "0x" + info.Last.ChecksumRx.ToString("X2"))
+                        : "--";
+                    break;
+                case "colStatus": e.Value = SnapshotStateText(snap); break;
+            }
+        }
+
+        private LinTransmitEntry GetPlanEntry(byte pid)
+        {
+            var ch = CurrentChannel;
+            return ch == null ? null : ch.FindTransmitEntry(pid);
+        }
+
+        private byte GetPlanDlc(LinFlatRow flat)
+        {
+            var entry = GetPlanEntry(flat.Pid);
+            if (entry != null && entry.Dlc > 0 && entry.Dlc <= 8) return entry.Dlc;
+            var ldf = GetLdfForChannel(flat.Channel);
+            if (ldf != null)
+            {
+                byte d = LinLdfHelper.GetFrameDlc(ldf, flat.Pid);
+                if (d > 0 && d <= 8) return d;
+            }
+            return 8;
+        }
+
+        private string GetPlanDataHex(LinFlatRow flat)
+        {
+            var entry = GetPlanEntry(flat.Pid);
+            if (entry == null || entry.Data == null || entry.Data.Length == 0) return null;
+            return BitConverter.ToString(entry.Data).Replace("-", " ");
+        }
+
+        private static string SnapshotStateText(LinRunSnapshot snap)
+        {
+            switch (snap.State)
+            {
+                case LinRunStateKind.Armed: return "已启用";
+                case LinRunStateKind.TxSubmitted: return "已提交";
+                case LinRunStateKind.WaitingResponse: return "等待应答";
+                case LinRunStateKind.WaitingExternalHeader: return "等待外部Header";
+                case LinRunStateKind.Completed: return snap.Type == LinTransmitType.Master ? "已发送" : "应答完成";
+                case LinRunStateKind.NoResponse: return "错误·无应答";
+                case LinRunStateKind.Error:
+                    switch (snap.ErrorKind)
+                    {
+                        case LinErrorKind.Checksum: return "错误·校验和";
+                        case LinErrorKind.Sync: return "错误·同步";
+                        case LinErrorKind.NoResponse: return "错误·无应答";
+                        case LinErrorKind.Hw: return "错误·硬件";
+                        default: return "错误";
+                    }
+                case LinRunStateKind.Unsupported: return "不支持";
+                case LinRunStateKind.Disabled: return "已停用";
+                default: return snap.State.ToString();
+            }
+        }
+
         private void DgvFrames_CellPainting(object sender, DataGridViewCellPaintingEventArgs e)
         {
             try
@@ -1156,6 +1279,7 @@ namespace PCAN_Client.LIN_UI
                 if (colName == "colExpand")
                 {
                     if (flat.Type != LinRowType.Frame) return;
+                    if (flat.IsPlanRow) return; // 计划行：展开经聚合行映射（FixedIndex=-1 点击无效），不画按钮
                     if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
                     e.Handled = true;
                     PaintLinCellSurface(e);
@@ -1174,6 +1298,25 @@ namespace PCAN_Client.LIN_UI
                 if (colName == "colErr")
                 {
                     if (flat.Type != LinRowType.Frame) return;
+                    if (flat.IsPlanRow)
+                    {
+                        // 计划行红灯只由运行快照驱动（NoResponse/Error/Unsupported）；等待/启用/成功态不点红
+                        LinRunSnapshot snap = null;
+                        foreach (var s in Lin_API.GetEnabledRunSnapshots(flat.Channel))
+                            if (s.Pid == flat.Pid) { snap = s; break; }
+                        if (snap == null || !snap.IsError) return;
+                        e.Handled = true;
+                        PaintLinCellSurface(e);
+                        const int d2 = 12;
+                        var rc2 = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d2) / 2,
+                            e.CellBounds.Y + (e.CellBounds.Height - d2) / 2, d2, d2);
+                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        using (var red = new SolidBrush(Color.FromArgb(226, 68, 54)))
+                            e.Graphics.FillEllipse(red, rc2);
+                        using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
+                            e.Graphics.FillEllipse(hl, rc2.X + rc2.Width / 4, rc2.Y + rc2.Height / 4, rc2.Width / 2, rc2.Height / 2);
+                        return;
+                    }
                     LinFrameRecord f;
                     lock (_frames)
                     {
@@ -1341,9 +1484,10 @@ namespace PCAN_Client.LIN_UI
             if (!_schedulers.TryGetValue(_channel, out sc))
             {
                 // PEAK 硬件调度表（SetSchedule/StartSchedule）在当前 PLIN Manager/Pro FD 环境全部
-                // errUnknown（官方签名实测），统一走软件调度（定时器 + LIN_Write），Vector 本就软件
-                sc = new LinScheduler(_channel, false);
-
+                // errUnknown（官方签名实测），统一走软件调度（定时器 + LIN_Write），Vector 本就软件。
+                // 通道唯一注册表（方案阶段 1）：同一通道全局只存在一个调度器，多窗体/重开共享；
+                // 窗体关闭时按通道统一释放，避免重复定时器与重复发送。
+                sc = Lin_API.GetOrCreateScheduler(_channel, "窗体获取");
                 sc.RunningChanged += r => { try { BeginInvoke(new Action(() => RefreshStatusBar())); } catch { } };
                 _schedulers[_channel] = sc;
             }
@@ -1356,6 +1500,9 @@ namespace PCAN_Client.LIN_UI
             if (_disposed) return;
             SyncSchedulerFromConfig();
             var sc = GetScheduler();
+            // 方案 4.2：同步运行快照——启用项 → Intent/Armed；停用/删除项 → Disabled（取消勾选即停，
+            // 计划行与勾选一致，历史真实帧仍留在日志）。运行中勾选变化也须同步（Start 早退时不覆盖）。
+            sc.SyncSnapshots();
             if (!Lin_API.IsConnected(_channel)) { sc.Suspend(); return; }
             bool hasEnabled = false;
             foreach (var s in sc.Slots)
@@ -2303,17 +2450,42 @@ namespace PCAN_Client.LIN_UI
             catch { }
         }
 
+
         private void OnChannelStateChanged(byte ch, bool connected, string error)
         {
             try
             {
                 BeginInvoke(new Action(() =>
                 {
-                    if (!connected && _schedulers.TryGetValue(ch, out var scheduler))
-                        scheduler.Stop();
+                    if (!connected)
+                    {
+                        // 断开连接：通道调度器统一停止并释放（重连后 GetScheduler 走注册表重建）
+                        if (_schedulers.TryGetValue(ch, out var scheduler))
+                        {
+                            _schedulers.Remove(ch);
+                            scheduler.Stop();
+                            Lin_API.ReleaseScheduler(ch, "连接断开");
+                        }
+                    }
                     InitChannelView();
                     RefreshStatusBar();
                     if (connected) _lblBus.Text = "总线: 已连接";
+                }));
+            }
+            catch { }
+        }
+
+        /// <summary>发送状态事件（方案 3）：计划行/状态/红灯数据源变化 → 节流重建（≤100ms 出现）</summary>
+        private void OnLinTxStateChanged(LinTxEvent ev)
+        {
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (_disposed) return;
+                    _linFlatRowsDirty = true;
+                    _linRefreshPending = true;
+                    RefreshLinMessageDisplay();
                 }));
             }
             catch { }

@@ -14,6 +14,9 @@ namespace PCAN_Client.LIN_API
         // ==================== 会话时钟（微秒，首次连接归零） ====================
         private static readonly Stopwatch _sw = Stopwatch.StartNew();
         private static ulong _epochUs;
+        /// <summary>会话时钟毫秒（测试可注入；生产默认 Stopwatch 会话归零）</summary>
+        internal static Func<long> SessionClockMs = () =>
+            (long)_sw.ElapsedMilliseconds - (long)(_epochUs / 1000);
 
         // ==================== 从节点响应活动（调度超时兜底） ====================
         // 只记录真实硬件/Vector Rx，不记录软件 Tx 回显。按通道+PID保存最后一次总线活动，
@@ -21,10 +24,47 @@ namespace PCAN_Client.LIN_API
         private static readonly Dictionary<long, long> _lastRxMs = new Dictionary<long, long>();
         private static readonly object _rxActivityLock = new object();
 
-        // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
-        private static readonly Dictionary<byte, PcanLinHardware> _pcan = new Dictionary<byte, PcanLinHardware>();
-        private static readonly Dictionary<byte, XlLinHardware> _xl = new Dictionary<byte, XlLinHardware>();
-        private static readonly object _hwLock = new object();
+        // ==================== 调度器唯一缓存（方案阶段 1） ====================
+        // 同一物理/逻辑 LIN 通道全局只有一个 LinScheduler 实例；窗体关闭/重连/切通道统一释放。
+        // 记录实例号、通道、创建/停止原因与活动定时器数量，供“无重复调度”审计。
+        // 实例号由 LinScheduler._instanceSeq 提供（阶段 1 审查 F2：删除注册表侧死字段，避免审计误导）
+        private static readonly Dictionary<byte, LinScheduler> _schedulers = new Dictionary<byte, LinScheduler>();
+        private static readonly object _schedLock = new object();
+
+        /// <summary>当前活动调度器数（诊断/测试：重复开关窗口不得泄漏）</summary>
+        internal static int ActiveSchedulerCount
+        {
+            get { lock (_schedLock) return _schedulers.Count; }
+        }
+
+        /// <summary>取通道唯一调度器；不存在则创建（创建即记录实例号与原因）。</summary>
+        internal static LinScheduler GetOrCreateScheduler(byte logicChannel, string reason)
+        {
+            lock (_schedLock)
+            {
+                LinScheduler sc;
+                if (_schedulers.TryGetValue(logicChannel, out sc)) return sc;
+                sc = new LinScheduler(logicChannel, false);
+                _schedulers[logicChannel] = sc;
+                LinDebugLog.Write("[SCH] 创建调度器 ch=" + logicChannel + " instance=" + sc.InstanceId +
+                    " reason=" + reason + " active=" + _schedulers.Count);
+                return sc;
+            }
+        }
+
+        /// <summary>释放通道调度器（幂等：未注册/已释放直接返回）。窗体关闭、断开、切通道时调用。</summary>
+        internal static void ReleaseScheduler(byte logicChannel, string reason)
+        {
+            LinScheduler sc;
+            lock (_schedLock)
+            {
+                if (!_schedulers.TryGetValue(logicChannel, out sc)) return;
+                _schedulers.Remove(logicChannel);
+            }
+            LinDebugLog.Write("[SCH] 释放调度器 ch=" + logicChannel + " instance=" + sc.InstanceId +
+                " reason=" + reason + " running=" + sc.IsRunning + " timerActive=" + sc.IsTimerActive);
+            sc.Dispose();
+        }
 
         // ==================== 事件 ====================
         /// <summary>新帧（UI 订阅刷新报文表）</summary>
@@ -35,6 +75,194 @@ namespace PCAN_Client.LIN_API
         public static event Action<byte, string> LinkLost;
         /// <summary>总线事件（通道, "Sleep"/"WakeUp"/"Overrun"）</summary>
         public static event Action<byte, string> BusEvent;
+
+        // ==================== 硬件实例缓存：逻辑通道号 → 适配器（加锁保护，重连线程与 UI 线程并发访问） ====================
+        private static readonly Dictionary<byte, PcanLinHardware> _pcan = new Dictionary<byte, PcanLinHardware>();
+        private static readonly Dictionary<byte, XlLinHardware> _xl = new Dictionary<byte, XlLinHardware>();
+        private static readonly object _hwLock = new object();
+
+        // ==================== 发送状态事件与运行快照（方案 4.2） ====================
+        /// <summary>发送状态事件（发送意图/驱动提交/真实总线帧/响应完成/超时/错误/停用；UI 阶段 3 订阅）</summary>
+        public static event Action<LinTxEvent> LinTxStateChanged;
+
+        private static readonly Dictionary<long, LinRunSnapshot> _runSnapshots = new Dictionary<long, LinRunSnapshot>();
+        private static readonly object _runLock = new object();
+
+        private static long RunKey(byte logicChannel, byte pid)
+        {
+            return ((long)logicChannel << 8) | pid;
+        }
+
+        /// <summary>取/建 (通道, 裸 PID) 运行快照</summary>
+        internal static LinRunSnapshot GetOrCreateRunSnapshot(byte logicChannel, byte pid)
+        {
+            lock (_runLock)
+            {
+                long k = RunKey(logicChannel, pid);
+                LinRunSnapshot s;
+                if (!_runSnapshots.TryGetValue(k, out s))
+                {
+                    s = new LinRunSnapshot { LogicChannel = logicChannel, Pid = pid };
+                    _runSnapshots[k] = s;
+                }
+                return s;
+            }
+        }
+        /// <summary>推进运行快照状态并广播 LinTxStateChanged（事件载荷带裸 PID；UI 据此合并计划行与灯）。
+        /// SubmitOk/ResponseWait 清除旧错误；Error 按 errorKind 记录实际错误类型。</summary>
+        internal static void NotifyTxState(byte logicChannel, byte pid, LinTransmitType type, LinTxEventKind kind,
+            string text = "", LinErrorKind errorKind = LinErrorKind.None)
+        {
+            var s = GetOrCreateRunSnapshot(logicChannel, pid);
+            lock (_runLock)
+            {
+                s.Type = type;
+                switch (kind)
+                {
+                    case LinTxEventKind.Intent:
+                        // 仅新启用（或停用后重新启用）重置状态；已启用项重复同步只刷新 Type，
+                        // 不擦除 NoResponse/Error 状态（方案 §3：错误不能被无关操作隐藏）、不虚增 BreakOnly 计数。
+                        if (!s.Enabled)
+                        {
+                            s.Enabled = true;
+                            s.Generation++;
+                            s.ErrorKind = LinErrorKind.None;
+                            s.ErrorText = "";
+                            s.LastIntentUs = (long)SessionMs * 1000;
+                            // 方案 4.1：Slave 启用 = 已武装等外部 Header；BreakOnly = 明确不支持
+                            if (type == LinTransmitType.Slave) s.State = LinRunStateKind.WaitingExternalHeader;
+                            else if (type == LinTransmitType.BreakOnly)
+                            {
+                                s.State = LinRunStateKind.Unsupported;
+                                s.ErrorKind = LinErrorKind.Hw;
+                                s.ErrorCount++;
+                            }
+                            else s.State = LinRunStateKind.Armed;
+                        }
+                        s.Type = type;
+                        break;
+                    case LinTxEventKind.SubmitOk:
+                        s.SubmittedCount++;
+                        s.LastIntentUs = (long)SessionMs * 1000;
+                        s.State = LinRunStateKind.TxSubmitted;
+                        s.ErrorKind = LinErrorKind.None;
+                        s.ErrorText = "";
+                        break;
+                    case LinTxEventKind.SubmitFail:
+                        s.State = LinRunStateKind.Error;
+                        s.ErrorKind = LinErrorKind.Hw;
+                        s.ErrorText = text.Length > 0 ? text : "驱动提交失败";
+                        s.ErrorCount++;
+                        break;
+                    case LinTxEventKind.BusFrame:
+                        s.BusFrameCount++;
+                        s.LastBusUs = (long)SessionMs * 1000;
+                        break;
+                    case LinTxEventKind.ResponseWait:
+                        s.State = LinRunStateKind.WaitingResponse;
+                        s.ErrorKind = LinErrorKind.None;
+                        s.ErrorText = "";
+                        break;
+                    case LinTxEventKind.ResponseComplete:
+                        s.State = LinRunStateKind.Completed;
+                        s.ErrorKind = LinErrorKind.None;
+                        s.ErrorText = "";
+                        break;
+                    case LinTxEventKind.ResponseTimeout:
+                        s.State = LinRunStateKind.NoResponse;
+                        s.ErrorKind = LinErrorKind.NoResponse;
+                        s.ErrorText = text.Length > 0 ? text : "无应答";
+                        s.ErrorCount++;
+                        break;
+                    case LinTxEventKind.Error:
+                        if (text.Length == 0) text = "总线错误";
+                        s.State = LinRunStateKind.Error;
+                        s.ErrorText = text;
+                        s.ErrorCount++;
+                        s.ErrorKind = errorKind != LinErrorKind.None ? errorKind : LinErrorKind.Hw;
+                        break;
+                    case LinTxEventKind.Unsupported:
+                        s.State = LinRunStateKind.Unsupported;
+                        s.ErrorKind = LinErrorKind.Hw;
+                        s.ErrorText = text.Length > 0 ? text : "当前适配器不支持该模式";
+                        s.ErrorCount++;
+                        break;
+                    case LinTxEventKind.Disabled:
+                        s.Enabled = false;
+                        s.State = LinRunStateKind.Disabled;
+                        s.ErrorKind = LinErrorKind.None;
+                        s.ErrorText = "";
+                        break;
+                }
+            }
+            var handler = LinTxStateChanged;
+            if (handler != null)
+            {
+                var ev = new LinTxEvent { LogicChannel = logicChannel, Pid = pid, Type = type, Kind = kind, Text = text };
+                foreach (Action<LinTxEvent> d in handler.GetInvocationList())
+                {
+                    try { d(ev); }
+                    catch { /* 单订阅者异常隔离 */ }
+                }
+            }
+        }
+
+
+        /// <summary>
+        /// 按当前调度槽同步运行快照：启用项建立/刷新（Intent+Armed），已移除/停用项置 Disabled。
+        /// 发送计划状态与真实总线帧状态必须分开：此处只产生计划行与状态，不伪造任何 Rx。
+        /// </summary>
+        internal static void SyncRunSnapshotsFromPlan(byte logicChannel, List<LinScheduleSlot> slots)
+        {
+            var active = new HashSet<byte>();
+            if (slots != null)
+                foreach (var slot in slots)
+                    if (slot != null && slot.Enabled && slot.Pid <= 0x3F) active.Add(slot.Pid);
+
+            var nowEnabled = new List<byte>();
+            lock (_runLock)
+            {
+                foreach (var kv in _runSnapshots)
+                {
+                    if (((kv.Key >> 8) & 0xFF) == logicChannel && kv.Value.Enabled && !active.Contains(kv.Value.Pid))
+                        nowEnabled.Add(kv.Value.Pid);
+                }
+            }
+            foreach (byte pid in nowEnabled)
+            {
+                var type = GetTransmitType(logicChannel, pid, LinTransmitType.Master);
+                NotifyTxState(logicChannel, pid, type, LinTxEventKind.Disabled, "已停用");
+            }
+            foreach (byte pid in active)
+            {
+                var type = GetTransmitType(logicChannel, pid, LinTransmitType.Master);
+                NotifyTxState(logicChannel, pid, type, LinTxEventKind.Intent, "");
+            }
+        }
+
+
+        /// <summary>设置运行快照的 HeaderOn 响应截止（微秒；0=当前不等待）</summary>
+        internal static void SetExpectedResponseDeadline(byte logicChannel, byte pid, long deadlineUs)
+        {
+            var s = GetOrCreateRunSnapshot(logicChannel, pid);
+            lock (_runLock) { s.ExpectedResponseDeadlineUs = deadlineUs; }
+        }
+
+        /// <summary>取某通道全部已启用运行快照（UI 计划行数据源；锁内拷贝，不持有引用）</summary>
+        internal static List<LinRunSnapshot> GetEnabledRunSnapshots(byte logicChannel)
+        {
+            lock (_runLock)
+            {
+                var list = new List<LinRunSnapshot>();
+                foreach (var kv in _runSnapshots)
+                {
+                    if (((kv.Key >> 8) & 0xFF) == logicChannel && kv.Value.Enabled)
+                        list.Add(kv.Value);
+                }
+                list.Sort((a, b) => a.Pid.CompareTo(b.Pid));
+                return list;
+            }
+        }
 
         /// <summary>当前是否已连接</summary>
         public static bool IsConnected(byte logicChannel)
@@ -63,6 +291,29 @@ namespace PCAN_Client.LIN_API
             LinDebugLog.Write("[CONN] LinConnect 入口 ch=" + logicChannel);
             if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return "逻辑通道号越界";
             var cfg = LinConfig.Channels[logicChannel - 1];
+
+            // 阶段 4 现场链路诊断：明确打印实际波特率（允许配置其他合法 baud，验收必须可见实际值）；
+            // LDF 通道与硬件通道标识不一致时给出警告（连接不阻断，仅定位接线/配置错位）。
+            LinDebugLog.Write("[CONN] 波特率现场校验: 配置=" + cfg.Baudrate + "（19200 为验收基准）");
+            if (cfg.Baudrate != 19200)
+                LinDebugLog.Write("[CONN] 警告: 波特率 " + cfg.Baudrate + " 非 19200 验收基准，现场核对 LIN 节点一致性");
+            string hwLabel = cfg.HwType == LinConfig.HwTypePcan ? "PEAK" : cfg.HwType == LinConfig.HwTypeCanoe ? "Vector" : "未绑定";
+            if (cfg.LdfPath != null && cfg.LdfPath.Length > 0 && cfg.HwHandle != null && cfg.HwHandle.Length > 0)
+            {
+                // 通道一致性启发式：比较文件名与 HwHandle 的【末尾数字】。先剥离版本后缀
+                // （V2.0/V1.3 等，其尾随数字是版本号不是通道号，如 LP_B13_EP1_LIN2_V2.0），
+                // 无版本后缀时取尾随数字比较；无法可靠提取通道号（无数字/仅版本号）则不告警。
+                string ldfBase = System.IO.Path.GetFileNameWithoutExtension(cfg.LdfPath);
+                var versionSuffix = System.Text.RegularExpressions.Regex.Match(ldfBase, @"[Vv]\d+(\.\d+)*\s*$");
+                System.Text.RegularExpressions.Match ldfNum = versionSuffix.Success
+                    ? System.Text.RegularExpressions.Match.Empty
+                    : System.Text.RegularExpressions.Regex.Match(ldfBase, @"(\d+)\s*$");
+                string hwTrim = cfg.HwHandle.Replace("ch ", "").Replace("CH", "").Trim();
+                var hwNum = System.Text.RegularExpressions.Regex.Match(hwTrim, @"(\d+)\s*$");
+                if (ldfNum.Success && hwNum.Success && ldfNum.Groups[1].Value != hwNum.Groups[1].Value)
+                    LinDebugLog.Write("[CONN] 警告: LDF 文件通道号 '" + ldfNum.Groups[1].Value + "'（" + ldfBase +
+                        "）与硬件通道 '" + hwNum.Groups[1].Value + "'（" + hwTrim + "，" + hwLabel + "）不一致，核对配置");
+            }
 
             // 清理旧实例（重连场景）
             LinDisconnect(logicChannel);
@@ -128,28 +379,23 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 发送 ====================
 
-        /// <summary>手动发送一帧；失败返回 false（原因经状态事件/返回值）</summary>
+        /// <summary>手动发送一帧（完整 Master 帧）；与周期发送共用 NotifyTxState 提交语义。</summary>
         public static bool LinTransmit(byte logicChannel, byte pid, byte[] data, LinChecksumKind ck)
         {
             ck = GetFrameChecksumKind(logicChannel, pid, ck);
             PcanLinHardware pcan;
             XlLinHardware xl;
+            bool ok = false;
             lock (_hwLock)
             {
-                if (_pcan.TryGetValue(logicChannel, out pcan))
-                {
-                    bool ok = pcan.Transmit(pid, data, ck);
-                    if (ok) EchoTx(logicChannel, pid, data, ck);
-                    return ok;
-                }
-                if (_xl.TryGetValue(logicChannel, out xl))
-                {
-                    bool ok = xl.Transmit(pid, data, ck);
-                    if (ok) EchoTx(logicChannel, pid, data, ck);
-                    return ok;
-                }
+                if (_pcan.TryGetValue(logicChannel, out pcan)) ok = pcan.Transmit(pid, data, ck);
+                else if (_xl.TryGetValue(logicChannel, out xl)) ok = xl.Transmit(pid, data, ck);
             }
-            return false;
+            NotifyTxState(logicChannel, pid, LinTransmitType.Master,
+                ok ? LinTxEventKind.SubmitOk : LinTxEventKind.SubmitFail,
+                ok ? "" : "手动发送提交失败（未连接或驱动错误）");
+            if (ok) EchoTx(logicChannel, pid, data, ck); // 仅本地提交回显（Tx 方向），不更新真实 Rx 活动
+            return ok;
         }
 
         /// <summary>调度表发 Header（软件调度；真实响应/无应答由硬件接收事件上报）</summary>
@@ -180,19 +426,23 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>按调度槽周期发送：Master 附本机响应，Slave/HeaderOnly 发 Header 等待总线响应。</summary>
+        /// <summary>测试钩子：置非空时 LinSendScheduleSlot 直接用其返回值代替驱动提交（无硬件时验证调度语义）</summary>
+        internal static Func<byte, LinScheduleSlot, bool> SendScheduleSlotOverride;
+
         public static bool LinSendScheduleSlot(byte logicChannel, LinScheduleSlot slot)
         {
             if (slot == null) return false;
+            var sendOverride = SendScheduleSlotOverride;
+            if (sendOverride != null) return sendOverride(logicChannel, slot);
             LinTransmitType type = slot.TransmitType;
             if (type == LinTransmitType.Master && GetTransmitEntry(logicChannel, slot.Pid) != null)
                 type = GetTransmitType(logicChannel, slot.Pid, type);
             if (type == LinTransmitType.Slave)
             {
-                // 周期发送模型：Slave 帧勾选周期发送同样由本机发 Header，响应由
-                // RESPONSE_ENABLE 自动应答（本机即该帧从机）或外部从机提供；
-                // 无响应时由调度器超时注入无应答错误帧（报文窗口报错）。
-                LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 发 Header 等待响应");
-                return LinSendHeader(logicChannel, slot.Pid);
+                // 方案 4.1：Slave 只武装本机响应并等待外部 Master Header，本机绝不主动发 Header。
+                // 调度器不应把 Slave 槽放入发送循环；此处兜底拒绝并记录，防止误调度伪装成功。
+                LinDebugLog.Write("[SCH] LinSendScheduleSlot ch=" + logicChannel + " pid=0x" + slot.Pid.ToString("X2") + " type=Slave → 拒绝本机发 Header（Slave 等待外部触发）");
+                return false;
             }
             PcanLinHardware pcan;
             XlLinHardware xl;
@@ -303,10 +553,10 @@ namespace PCAN_Client.LIN_API
             return ((long)logicChannel << 8) | pid;
         }
 
-        /// <summary>会话毫秒（首次连接归零）</summary>
+        /// <summary>会话毫秒（首次连接归零；经 SessionClockMs 可注入，测试与调度器共用同一时钟源）</summary>
         internal static long SessionMs
         {
-            get { return (long)_sw.ElapsedMilliseconds - (long)(_epochUs / 1000); }
+            get { return SessionClockMs(); }
         }
 
         /// <summary>判断 Header 发送后是否收到该 PID 的真实 Rx（含硬件错误帧）</summary>
@@ -358,6 +608,11 @@ namespace PCAN_Client.LIN_API
                 {
                     lock (_rxActivityLock)
                         _lastRxMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
+                    // 运行快照真实总线帧统计：NoResponse 是无应答合成标记（无总线活动），不计入
+                    if (frame.ErrorKind != LinErrorKind.NoResponse)
+                        NotifyTxState(logicChannel, frame.Pid,
+                            GetTransmitType(logicChannel, frame.Pid, LinTransmitType.Master),
+                            LinTxEventKind.BusFrame, "");
                 }
 
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
