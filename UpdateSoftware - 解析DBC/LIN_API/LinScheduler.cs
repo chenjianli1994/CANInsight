@@ -145,6 +145,9 @@ namespace PCAN_Client.LIN_API
 
         public bool IsRunning => _running;
 
+        /// <summary>已释放（窗体侧缓存判断：LinDisconnect 同步释放后不可再复用）</summary>
+        public bool IsDisposed => _disposed;
+
         /// <summary>当前计划只有 Slave 响应项：已武装，等待外部 Master Header，软件调度器不发 Header。</summary>
         public bool IsPassiveListening => _passiveListening;
 

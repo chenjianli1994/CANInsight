@@ -1481,8 +1481,11 @@ namespace PCAN_Client.LIN_UI
         private LinScheduler GetScheduler()
         {
             LinScheduler sc;
-            if (!_schedulers.TryGetValue(_channel, out sc))
+            // 窗体侧缓存命中的实例可能已被 LinDisconnect 同步释放（阶段 1 审查 F1 闭合），
+            // 已释放实例不可复用：缓存清除后经注册表重建（重连/下一次 sync 会拿到新实例）。
+            if (!_schedulers.TryGetValue(_channel, out sc) || sc.IsDisposed)
             {
+                if (sc != null) _schedulers.Remove(_channel);
                 // PEAK 硬件调度表（SetSchedule/StartSchedule）在当前 PLIN Manager/Pro FD 环境全部
                 // errUnknown（官方签名实测），统一走软件调度（定时器 + LIN_Write），Vector 本就软件。
                 // 通道唯一注册表（方案阶段 1）：同一通道全局只存在一个调度器，多窗体/重开共享；

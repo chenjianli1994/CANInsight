@@ -368,6 +368,10 @@ namespace PCAN_Client.LIN_API
                 if (pcan != null) pcan.Disconnect();
                 else if (xl != null) xl.Disconnect();
             }
+            // 阶段 1 审查 F1 闭合：调度器释放不依赖 UI 消息队列时序。
+            // 摘除硬件后、广播断开事件前同步释放本通道调度器（幂等：未注册/已释放直接返回）；
+            // 否则「新硬件已注册 → UI 线程执行释放回调」窗口内旧调度器仍会对新连接发 TX。
+            ReleaseScheduler(logicChannel, "连接断开");
             if (logicChannel <= LinConfig.Channels.Count)
             {
                 LinConfig.Channels[logicChannel - 1].IsConnected = false;
