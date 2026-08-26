@@ -147,6 +147,13 @@ namespace PCAN_Client.LIN_API
                 if (err != LinPlError.errOK) return "注册 PLIN 客户端失败: " + LinPlErrorCodes.ToChinese(err);
                 if (_client == LinPlApi.INVALID_LIN_HANDLE) return "注册 PLIN 客户端失败（句柄无效）";
 
+                // 结构体布局契约断言（方案 4.3）：TLINMsg=13/TLINRcvMsg=40/TLINFrameEntry=14/
+                // TLINScheduleSlot=20 及关键字段偏移。编组布局一旦漂移，ReadMulti/Write 会读回
+                // 垃圾或越界，必须在连接阶段暴露，而不是堆到"总线上有报文但零接收"排查。
+                string structContract = LinPlApi.VerifyStructContract();
+                LinDebugLog.Write("[CONN] 结构体契约: " + (structContract.Length == 0 ? "通过" : "失败: " + structContract));
+                if (structContract.Length > 0) { CleanupClient(); return "PLIN 结构体契约校验失败: " + structContract; }
+
                 // ResetClient 只清空客户端接收队列和计数，保证新客户端从空队列开始接收。
                 LinPlError rerr = LinPlApi.ResetClient(_client);
                 LinDebugLog.Write("[CONN] ResetClient → err=" + rerr);
@@ -623,9 +630,30 @@ namespace PCAN_Client.LIN_API
         public bool ResumeSchedule() => IsConnected && LinPlApi.ResumeSchedule(_client, _hw) == LinPlError.errOK;
         public bool StopSchedule() => IsConnected && LinPlApi.SuspendSchedule(_client, _hw) == LinPlError.errOK;
 
-        // ==================== 唤醒/休眠/状态 ====================
+        /// <summary>
+        /// 唤醒原语能力门禁（官方契约 PLinApi.h：LIN_XmtWakeUp 仅适用于 Slave 模式）。
+        /// 阶段 4：只有 Slave 允许调用；Master 走适配器支持的恢复流程或明确“不支持”，
+        /// 不能把失败包装成“未连接”。
+        /// </summary>
+        internal static bool ShouldUseXmtWakeUp(LinNodeMode hardwareMode)
+        {
+            return hardwareMode == LinNodeMode.Slave;
+        }
 
-        public bool WakeUp() => IsConnected && LinPlApi.XmtWakeUp(_client, _hw) == LinPlError.errOK;
+        public bool WakeUp()
+        {
+            if (!IsConnected)
+            {
+                LinDebugLog.Write("[WAKE] WakeUp 未连接，拒绝");
+                return false;
+            }
+            if (!ShouldUseXmtWakeUp(_cfg.GetHardwareMode()))
+            {
+                LinDebugLog.Write("[WAKE] 当前硬件模式不支持 XmtWakeUp: mode=" + _cfg.GetHardwareMode());
+                return false;
+            }
+            return LinPlApi.XmtWakeUp(_client, _hw) == LinPlError.errOK;
+        }
 
         /// <summary>发送休眠命令（诊断帧 0x3C 数据 0x00）</summary>
         public bool SleepCommand()
@@ -647,12 +675,26 @@ namespace PCAN_Client.LIN_API
             return LinPlHardwareState.hwsNotInitialized;
         }
 
-        // ==================== 接收线程 ====================
+        /// <summary>
+        /// ReadMulti 结果处理门槛（方案阶段 4 目标语义）：以 pCount 为准处理已填充消息；
+        /// 即使返回 errRcvQueueEmpty，只要 count &gt; 0 就必须处理（现场曾现 lastReadMultiErr=3
+        /// + lastReadCount=1 组合，errOK 门槛会丢弃已填充消息 → “节点在总线上但一条也看不到”）。
+        /// 官方契约（PLinApi.h）：LIN_ReadMulti 的 pCount 是实际填充消息数；errRcvQueueEmpty 仅表示
+        /// “本次读取时队列已空”，与“已回填的消息”不互斥。count=0 才表示本次无消息。
+        /// </summary>
+        internal static bool ShouldProcessReadMultiResult(LinPlError err, int count)
+        {
+            return count > 0;
+        }
 
         private void ReceiveLoop()
         {
             var buf = new LinPlRcvMsg[32];
+            // ReadMulti 前置初始化（方案 4.3）：每个元素的嵌套 Data 缓冲区必须预分配 8 字节——
+            // [In,Out] 编组并不保证逐元素分配 ByValArray，未初始化时驱动写回可能复制异常或返回 null。
+            for (int i = 0; i < buf.Length; i++) buf[i].Data = new byte[8];
             long lastDiagMs = Environment.TickCount;
+            long lastReadErr = -1, lastReadCount = 0;
             while (_running)
             {
                 // 每 2s 输出管理器侧计数诊断：clpMessagesOnQueue=本客户端接收队列未读消息数（ReadMulti 应能读到）；
@@ -676,16 +718,23 @@ namespace PCAN_Client.LIN_API
                             busState = st.Status.ToString() + "(" + (int)st.Status + ")";
                     }
                     catch { }
-                    LinDebugLog.Write("[RX] 诊断(2s) queue=" + onQueue + " rxTotal=" + rxTotal + " txTotal=" + txTotal + " hwBus=" + busState);
+                    // 最近一次 ReadMulti 返回码与处理条数（errOK+count=0 也如实记录：区分"读取路径正常但无消息"
+                    // 与"驱动/编组错误"）；本行持续输出本身即接收线程存活证据。
+                    LinDebugLog.Write("[RX] 诊断(2s) queue=" + onQueue + " rxTotal=" + rxTotal + " txTotal=" + txTotal +
+                        " hwBus=" + busState + " lastReadMultiErr=" + (lastReadErr < 0 ? "未调用" : lastReadErr.ToString()) +
+                        " lastReadCount=" + lastReadCount + " threadAlive=" + System.Threading.Thread.CurrentThread.IsAlive);
                 }
                 int count = 0;
                 LinPlError err = LinPlApi.ReadMulti(_client, buf, buf.Length, out count);
-                if (err == LinPlError.errOK && count > 0)
+                lastReadErr = (long)err; lastReadCount = count;
+                if (ShouldProcessReadMultiResult(err, count))
                 {
                     _consecutiveErrors = 0;
                     for (int i = 0; i < count; i++)
                     {
-                        LinDebugLog.Write("[RX] msg Type=" + buf[i].Type + " ID=" + buf[i].FrameId + " len=" + buf[i].Length +
+                        // 原始 PID（驱动返回受保护 PID）与归一化裸 ID 一并记录，供 19200 现场定位
+                        LinDebugLog.Write("[RX] msg Type=" + buf[i].Type + " rawPID=0x" + buf[i].FrameId.ToString("X2") +
+                            " normPID=0x" + LinPidCodec.ToRawId(buf[i].FrameId).ToString("X2") + " len=" + buf[i].Length +
                             " dir=" + buf[i].Direction + " ckType=" + buf[i].ChecksumType +
                             " data=" + LinDebugLog.Hex(buf[i].Data, buf[i].Length) +
                             " checksum=0x" + buf[i].Checksum.ToString("X2") +
@@ -734,11 +783,37 @@ namespace PCAN_Client.LIN_API
                 return;
             }
 
+            // 硬件边界 ID 归一化（方案 4.3）：PLIN TLINRcvMsg.FrameId 是受保护 PID（6 bit ID +
+            // 2 bit parity，PLinApi.h），而系统内部（LDF/发送计划/UI/响应超时键）一律使用裸 ID。
+            // 先解码并校验奇偶，再用裸 ID 查询发送项/LDF；原始 PID 与奇偶结果只进诊断日志。
+            byte rawWirePid = m.FrameId;
+            byte pid;
+            bool parityOk;
+            LinPidCodec.TryDecode(rawWirePid, out pid, out parityOk);
+
+            // 长度校验：协议规定 Length 1..8，越界说明编组/固件异常——拒绝复制并上报硬件错误帧，
+            // 而不是在 Array.Copy 处抛异常导致接收线程崩溃。
+            if (m.Length > 8)
+            {
+                LinDebugLog.Write("[ERR] 非法接收长度 pid=0x" + pid.ToString("X2") + " rawPID=0x" + rawWirePid.ToString("X2") + " len=" + m.Length + " errFlags=0x" + ((int)m.ErrorFlags).ToString("X8") + " → 按硬件错误帧上报");
+                Lin_API.LinReceive(_logicChannel, new LinFrameRecord
+                {
+                    LogicChannel = _logicChannel,
+                    Pid = pid,
+                    Direction = LinFrameDir.Rx,
+                    Dlc = 0,
+                    Data = new byte[0],
+                    ErrorKind = LinErrorKind.Hw,
+                    FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
+                });
+                return;
+            }
+
             // PLIN 返回的是 LDF 角色方向（Publisher/Subscriber），而不是本机 Tx/Rx。
             // 只有发送页中明确配置为本机 Publisher 的 Master/Slave 项才标为 Tx；
             // 未配置报文和 HeaderOnly 报文一律把总线数据视为 Rx。
             bool otherResponse = (m.ErrorFlags & LinPlMsgErrors.OtherResponse) != 0;
-            var configured = GetTransmitEntry(m.FrameId);
+            var configured = GetTransmitEntry(pid);
             bool localPublisher = configured != null && configured.Enabled &&
                 (configured.Type == LinTransmitType.Master || configured.Type == LinTransmitType.Slave);
             LinFrameDir frameDirection = localPublisher && !otherResponse && m.Direction == LinPlDirection.dirPublisher
@@ -747,16 +822,16 @@ namespace PCAN_Client.LIN_API
             var frame = new LinFrameRecord
             {
                 LogicChannel = _logicChannel,
-                Pid = m.FrameId,
+                Pid = pid,
                 Direction = frameDirection,
                 Dlc = m.Length,
                 Data = new byte[m.Length],
                 ChecksumType = m.ChecksumType == LinPlChecksumType.cstClassic ? LinChecksumKind.Classic : LinChecksumKind.Enhanced,
                 ChecksumRx = m.Checksum,
                 ChecksumOk = (m.ErrorFlags & LinPlMsgErrors.Checksum) == 0,
-                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, m.FrameId),
+                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
             };
-            if (m.Length > 0) Array.Copy(m.Data, frame.Data, m.Length);
+            if (m.Length > 0 && m.Data != null) Array.Copy(m.Data, frame.Data, m.Length);
 
             // 错误标志 → 错误类型（TLINMsgErrors 位）
             if ((m.ErrorFlags & LinPlMsgErrors.Checksum) != 0) frame.ErrorKind = LinErrorKind.Checksum;
