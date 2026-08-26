@@ -220,7 +220,17 @@ namespace PCAN_Client.LIN_UI
                 DoLinRefresh();
             };
             _btnWakeUp = new ToolStripButton("唤醒", ToolbarIcons.Get("plus"));
-            _btnWakeUp.Click += (s, e) => { if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接）"); };
+            _btnWakeUp.Click += (s, e) =>
+            {
+                // 阶段 4（审查建议 2）：Master 模式明确“不支持”而非“未连接”——官方契约 LIN_XmtWakeUp 仅 Slave
+                var chW = CurrentChannel;
+                if (chW != null && chW.GetHardwareMode() != LinNodeMode.Slave)
+                {
+                    ShowError("当前通道为 " + chW.GetHardwareMode() + " 模式，唤醒仅 Slave 模式支持");
+                    return;
+                }
+                if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接）");
+            };
             _btnSleep = new ToolStripButton("休眠", ToolbarIcons.Get("stop"));
             _btnSleep.Click += (s, e) => { if (!Lin_API.Sleep(_channel)) ShowError("休眠失败（未连接）"); };
 

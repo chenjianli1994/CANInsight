@@ -652,7 +652,10 @@ namespace PCAN_Client.LIN_API
                 LinDebugLog.Write("[WAKE] 当前硬件模式不支持 XmtWakeUp: mode=" + _cfg.GetHardwareMode());
                 return false;
             }
-            return LinPlApi.XmtWakeUp(_client, _hw) == LinPlError.errOK;
+            // 阶段 4（审查建议 3）：Slave 分支记录调用返回码——现场凭 [WAKE] 日志确认唤醒结果
+            var wErr = LinPlApi.XmtWakeUp(_client, _hw);
+            LinDebugLog.Write("[WAKE] XmtWakeUp mode=" + _cfg.GetHardwareMode() + " → " + wErr + " (" + (int)wErr + ")");
+            return wErr == LinPlError.errOK;
         }
 
         /// <summary>发送休眠命令（诊断帧 0x3C 数据 0x00）</summary>
@@ -744,10 +747,12 @@ namespace PCAN_Client.LIN_API
                     }
                     continue; // 立即再读，尽量排空硬件队列
                 }
-                if (err == LinPlError.errRcvQueueEmpty)
+                // 无消息分派（阶段 4 审查建议 1）：count==0 且 err∈{errOK, errRcvQueueEmpty} 是合法契约态
+                // （“本次无消息”），与驱动差异无关——走 5ms 轮询；只有 count==0 且返回其他真实驱动错误
+                // 才累计错误并触发 LinkLost（否则 errOK+count=0 空闲约 200ms 即误报链路丢失）。
+                bool noMessage = count == 0 && (err == LinPlError.errOK || err == LinPlError.errRcvQueueEmpty);
+                if (noMessage)
                 {
-                    // 队列空：5ms 轮询（PLIN 管理器接收事件句柄是 8 字节 HANDLE，
-                    // 经 out int 获取有 x64 越界写风险且需先 CreateEvent+SetClientParam，第一版用轮询）
                     Thread.Sleep(5);
                 }
                 else

@@ -772,7 +772,9 @@ namespace PCAN_Client.LIN_API
                     }
                     return "未初始化";
                 }
-                if (_xl.ContainsKey(logicChannel)) return "Active";
+                // Vector 侧无总线状态查询能力（当前封装无 XL 状态读取）：不把“已连接”谎报成“总线 Active”
+                // （阶段 4 反模式门禁 3，审查建议 4）；显示“未初始化”等待现场接入状态模型。
+                if (_xl.ContainsKey(logicChannel)) return "未初始化";
             }
             return "未连接";
         }
