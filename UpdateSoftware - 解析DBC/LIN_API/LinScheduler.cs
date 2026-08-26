@@ -563,6 +563,36 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
+        /// 硬件无应答运行事件结算（方案 §3 P0/§4.2，阶段 2 审查 F1）：
+        /// PEAK SlaveNOtResponding/Timeout、Vector XL_LIN_NOANS 是真实总线观测。
+        /// 结算最早未完成的 HeaderOnly pending 并发布 ResponseTimeout（限频复用冷却字典），
+        /// 避免与软件 deadline 双报；无 pending（Master/Slave/未调度）不报——Master 完整帧无响应期、
+        /// 纯 Slave 等待外部 Header 均不是错误。
+        /// </summary>
+        internal void SettleHardwareNoResponse(byte pid)
+        {
+            PendingEntry p = null;
+            lock (_pending)
+            {
+                foreach (var e in _pending)
+                    if (e.Pid == pid && e.Type == LinTransmitType.HeaderOnly) { p = e; break; } // 最早未完成
+                if (p != null) _pending.Remove(p); // 结算：后续 CheckPendingResponses 不再覆盖该请求
+            }
+            if (p == null) return;
+
+            // 限频：冷却期内同 PID 不重复刷屏（与软件超时同一周期语义）
+            bool doEmit;
+            lock (_activityLock)
+            {
+                long until;
+                doEmit = !_noResponseCooldownUntil.TryGetValue(pid, out until) || Lin_API.SessionMs >= until;
+                if (doEmit) _noResponseCooldownUntil[pid] = Lin_API.SessionMs + NoResponseCooldownMs;
+            }
+            if (doEmit)
+                Lin_API.NotifyTxState(_logicChannel, pid, p.Type, LinTxEventKind.ResponseTimeout, "无应答");
+        }
+
+        /// <summary>
         /// 响应超时兜底：真实 Rx（含驱动错误帧）优先作为结果，只完成对应最早未完成请求；
         /// 窗口到期且无匹配 Rx 才生成一条 NoResponse（每个 pending 只结算一次；同 PID 冷却期内限频）。
         /// </summary>

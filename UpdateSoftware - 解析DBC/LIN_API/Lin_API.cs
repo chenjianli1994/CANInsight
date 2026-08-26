@@ -575,18 +575,36 @@ namespace PCAN_Client.LIN_API
 
         // ==================== 接收汇聚 ====================
 
+        /// <summary>
+        /// 硬件无应答运行事件（方案 §3 P0/§4.2）：PEAK SlaveNOtResponding/Timeout 与 Vector XL_LIN_NOANS
+        /// 是真实总线观测。软件调度路径下经注册表通知调度器结算最早 HeaderOnly pending（一次结算、限频），
+        /// 避免与软件 deadline 双报；无 pending（Master/Slave/未调度）不报错——Master 完整帧无响应期、
+        /// 纯 Slave 等待外部 Header 均不是错误（方案验证 A/B/E 语义）。
+        /// </summary>
+        private static void HandleHardwareNoResponse(byte logicChannel, byte pid)
+        {
+            LinScheduler sc;
+            lock (_schedLock) { _schedulers.TryGetValue(logicChannel, out sc); }
+            if (sc != null && !sc.IsDisposed)
+                sc.SettleHardwareNoResponse(pid);
+            // 无调度器 / 无 pending：不构造错误（运行快照锁定由调度器结算发布；未启用 PID 无计划行）
+        }
+
         /// <summary>接收汇聚：统一时间戳 → 帧类型/名称映射（LDF）→ 事件派发
         /// 校验和判定信任硬件错误标志（PEAK ErrorFlags / Vector CRCERROR），不做软件复核——避免 cstAuto/经典校验帧误标</summary>
         public static void LinReceive(byte logicChannel, LinFrameRecord frame)
         {
             try
             {
-                // 阶段 2 反模式门禁：NoResponse 是运行错误事件，禁止以 Direction=Rx 伪帧进入
-                // LinFrameReceived/_lastRxMs/统计。InjectNoResponse 已移除；此处做第二道防线，
-                // 即使外部误构造 NoResponse 帧也无法污染真实帧流水线或总线活动判定。
+                // 阶段 2 反模式门禁（方案 §3 P0/§4.2）：NoResponse 是【运行事件】不是总线帧。
+                // PEAK SlaveNOtResponding/Timeout 与 Vector XL_LIN_NOANS 是真实硬件无应答观测，
+                // 必须转为运行事件更新快照锁存（ErrorCount++/State=NoResponse），禁止以 Direction=Rx
+                // 伪帧进入 LinFrameReceived/_lastRxMs/统计；软件调度时优先经调度器结算对应 pending，
+                // 避免与软件 deadline（下限 500ms）双报。
                 if (frame.ErrorKind == LinErrorKind.NoResponse)
                 {
-                    LinDebugLog.Write("[SCH] 拦截 NoResponse 伪帧 ch=" + logicChannel + " pid=0x" + frame.Pid.ToString("X2"));
+                    LinDebugLog.Write("[RX] 硬件无应答运行事件 ch=" + logicChannel + " pid=0x" + frame.Pid.ToString("X2"));
+                    HandleHardwareNoResponse(logicChannel, frame.Pid);
                     return;
                 }
 
