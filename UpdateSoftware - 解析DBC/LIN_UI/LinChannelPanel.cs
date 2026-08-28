@@ -53,6 +53,10 @@ namespace PCAN_Client.LIN_UI
         {
             Dock = DockStyle.Fill;
             Size = new Size(1000, 470);
+            // 链路丢失自动重连全部失败 → 弹窗告知（本面板挂在通道管理对话框上，
+            // 对话框 using 关闭时句柄销毁，必须退订静态事件防泄漏）
+            Lin_API.LinkLostFinal += OnLinkLostFinal;
+            this.HandleDestroyed += (s, e) => Lin_API.LinkLostFinal -= OnLinkLostFinal;
 
             // 后台异步枚举硬件（不阻塞 UI；完成回调填充下拉并显示错误原因）
             EnsureEnumerated();
@@ -141,6 +145,26 @@ namespace PCAN_Client.LIN_UI
             Controls.Add(_btnDisconnectAll); Controls.Add(_btnSave);
 
             LoadRows();
+        }
+
+        /// <summary>链路丢失且自动重连（2 次）全部失败：弹窗提示（句柄已销毁时跳过）</summary>
+        private void OnLinkLostFinal(byte ch, string reason)
+        {
+            if (IsDisposed || !IsHandleCreated) return;
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (IsDisposed) return;
+                    var cfg = ch >= 1 && ch <= LinConfig.Channels.Count ? LinConfig.Channels[ch - 1] : null;
+                    string name = cfg != null ? cfg.Name : "通道 " + ch;
+                    MessageBox.Show(this, name + " 链路已断开，自动重连失败。\n原因: " + reason +
+                        "\n\n请检查硬件连接（USB 线/电源）后，在通道列表中重新点击「连接」。", "LIN 连接断开",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    if (!IsDisposed) LoadRows();
+                }));
+            }
+            catch { }
         }
 
         private Button MakeButton(string text, Point loc, bool primary = false)

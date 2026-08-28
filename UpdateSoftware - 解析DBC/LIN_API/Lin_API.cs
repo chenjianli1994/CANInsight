@@ -87,6 +87,8 @@ namespace PCAN_Client.LIN_API
         public static event Action<byte, bool, string> ChannelStateChanged;
         /// <summary>链路丢失（通道, 原因）——UI 提示用，自动重连在 OnLinkLost 内进行</summary>
         public static event Action<byte, string> LinkLost;
+        /// <summary>链路丢失且自动重连（2 次）全部失败（通道, 最后一次失败原因）——UI 弹窗用</summary>
+        public static event Action<byte, string> LinkLostFinal;
         /// <summary>总线事件（通道, "Sleep"/"WakeUp"/"Overrun"）</summary>
         public static event Action<byte, string> BusEvent;
 
@@ -813,10 +815,9 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public static void OnLinkLost(byte logicChannel, string reason, object sender)
         {
-            LinDebugLog.Write("[LINK] OnLinkLost ch=" + logicChannel + " reason=" + reason + " sender=" + (sender == null ? "null" : sender.GetType().Name));
-            LinkLost?.Invoke(logicChannel, reason);
             Task.Run(async () =>
             {
+                string lastErr = "";
                 for (int attempt = 1; attempt <= 2; attempt++)
                 {
                     await Task.Delay(1000);
@@ -842,6 +843,7 @@ namespace PCAN_Client.LIN_API
                     string err = LinConnect(logicChannel);
                     LinDebugLog.Write("[LINK] 自动重连 attempt=" + attempt + " → " + (err.Length == 0 ? "成功" : "失败: " + err));
                     if (err.Length == 0) return; // 重连成功（ChannelStateChanged 已通知）
+                    lastErr = err;
                     // 重连失败：实例未写回字典，恢复亲和占位使下一次尝试可继续
                     if (hw != null)
                     {
@@ -852,6 +854,8 @@ namespace PCAN_Client.LIN_API
                         }
                     }
                 }
+                LinDebugLog.Write("[LINK] 自动重连全部失败 ch=" + logicChannel + " 最后原因: " + lastErr);
+                LinkLostFinal?.Invoke(logicChannel, lastErr);
             });
         }
 

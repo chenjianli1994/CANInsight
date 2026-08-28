@@ -140,6 +140,7 @@ namespace PCAN_Client.LIN_UI
             Lin_API.LinFrameReceived += OnFrameReceived;
             Lin_API.BusEvent += OnBusEvent;
             Lin_API.LinkLost += OnLinkLost;
+            Lin_API.LinkLostFinal += OnLinkLostFinal;
             Lin_API.ChannelStateChanged += OnChannelStateChanged;
             Lin_API.LinTxStateChanged += OnLinTxStateChanged;
 
@@ -159,6 +160,7 @@ namespace PCAN_Client.LIN_UI
                 Lin_API.LinFrameReceived -= OnFrameReceived;
                 Lin_API.BusEvent -= OnBusEvent;
                 Lin_API.LinkLost -= OnLinkLost;
+                Lin_API.LinkLostFinal -= OnLinkLostFinal;
                 Lin_API.ChannelStateChanged -= OnChannelStateChanged;
                 Lin_API.LinTxStateChanged -= OnLinTxStateChanged;
             };
@@ -2521,6 +2523,24 @@ namespace PCAN_Client.LIN_UI
             catch { }
         }
 
+        /// <summary>链路丢失且自动重连（2 次）全部失败：弹窗提示（窗口已关时跳过）</summary>
+        private void OnLinkLostFinal(byte ch, string reason)
+        {
+            if (_disposed || !IsHandleCreated) return;
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (_disposed) return;
+                    var cfg = ch >= 1 && ch <= LinConfig.Channels.Count ? LinConfig.Channels[ch - 1] : null;
+                    string name = cfg != null ? cfg.Name : "通道 " + ch;
+                    MessageBox.Show(this, name + " 链路已断开，自动重连失败。\n原因: " + reason +
+                        "\n\n请检查硬件连接（USB 线/电源）后，在「通道管理」中重新点击「连接」。", "LIN 连接断开",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }));
+            }
+            catch { }
+        }
 
         private void OnChannelStateChanged(byte ch, bool connected, string error)
         {
