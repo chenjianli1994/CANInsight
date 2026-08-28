@@ -86,6 +86,8 @@ namespace PCAN_Client.LIN_API
             {
                 string planError = _cfg.ValidateTransmitPlan();
                 if (planError.Length > 0) return planError;
+                LinDebugLog.Write("[CONN] Vector Connect 开始: 逻辑通道=" + _logicChannel + " HwHandle=" + _cfg.HwHandle +
+                    " Baud=" + _cfg.Baudrate + " TransmitEntries=" + (_cfg.TransmitEntries == null ? 0 : _cfg.TransmitEntries.Count));
                 int channelIndex = -1;
                 if (_cfg.HwHandle.StartsWith("ch ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -126,14 +128,12 @@ namespace PCAN_Client.LIN_API
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "打开 Vector LIN 端口失败: " + status;
                 portOpened = true;
 
-                // Vector 仍要求底层连接模式；通道级 Slave 选择优先，纯 Slave 发送计划
-                // 也会自动推导为 XL_LIN_SLAVE。
+                // 连接模式一律 XL_LIN_MASTER（用户决策，与 PCAN 侧一致）：全发送类型可在线切换；
+                // 纯 Slave 仿真的防误发由软件层负责（调度器跳过 Slave 槽 + SendScheduleFrame 拒绝发 Header）。
                 var linVersion = GetLinVersion();
                 var linStat = new XLClass.xl_linStatPar
                 {
-                    LINMode = _cfg.GetHardwareMode() == LinNodeMode.Slave
-                        ? XLDefine.XL_LIN_Mode.XL_LIN_SLAVE
-                        : XLDefine.XL_LIN_Mode.XL_LIN_MASTER,
+                    LINMode = XLDefine.XL_LIN_Mode.XL_LIN_MASTER,
                     baudrate = (int)_cfg.Baudrate,
                     LINVersion = linVersion,
                     reserved = 0,
@@ -175,6 +175,9 @@ namespace PCAN_Client.LIN_API
                 status = _xlDriver.XL_ActivateChannel(_portHandle, _channelMask, XLDefine.XL_BusTypes.XL_BUS_TYPE_LIN, XLDefine.XL_AC_Flags.XL_ACTIVATE_NONE);
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "激活 LIN 通道失败: " + status;
                 _active = true;
+                LinDebugLog.Write("[CONN] Vector 连接成功: 逻辑通道=" + _logicChannel + " chIdx=" + channelIndex +
+                    " mask=0x" + _channelMask.ToString("X") + " mode=" + linStat.LINMode + " baud=" + _cfg.Baudrate +
+                    " linVersion=" + linVersion + " Slave响应项=按发送项（XL_LinSetSlave 在线武装）");
 
                 _running = true;
                 _recvThread = new Thread(ReceiveLoop) { IsBackground = true, Name = $"XLLIN_Rx_CH{_logicChannel}" };
@@ -438,18 +441,25 @@ namespace PCAN_Client.LIN_API
                     OnLinMsg(evt.tagData.linMsgApi.linMsg);
                     break;
                 case XLDefine.XL_EventTags.XL_LIN_NOANS:
-                    // Header 已发，无应答
+                    // Header 已发，无应答（id 归一为裸 ID 后仅进日志/错误帧）
+                    LinDebugLog.Write("[RX] Vector NOANS id=0x" + evt.tagData.linMsgApi.linNoAns.id.ToString("X2") +
+                        " normPid=0x" + LinPidCodec.ToRawId(evt.tagData.linMsgApi.linNoAns.id).ToString("X2") + " → 无应答错误帧");
                     Lin_API.LinReceive(_logicChannel, MakeErrorFrame(evt.tagData.linMsgApi.linNoAns.id, LinErrorKind.NoResponse));
                     break;
                 case XLDefine.XL_EventTags.XL_LIN_CRCINFO:
                     // 校验和错误（id + flags）
+                    LinDebugLog.Write("[RX] Vector CRCINFO id=0x" + evt.tagData.linMsgApi.linCRCinfo.id.ToString("X2") +
+                        " normPid=0x" + LinPidCodec.ToRawId(evt.tagData.linMsgApi.linCRCinfo.id).ToString("X2") +
+                        " flags=0x" + ((int)evt.tagData.linMsgApi.linCRCinfo.flags).ToString("X8") + " → 校验和错误帧");
                     Lin_API.LinReceive(_logicChannel, MakeErrorFrame(evt.tagData.linMsgApi.linCRCinfo.id, LinErrorKind.Checksum));
                     break;
                 case XLDefine.XL_EventTags.XL_LIN_SYNCERR:
+                    LinDebugLog.Write("[RX] Vector SYNCERR → 同步错误帧");
                     Lin_API.LinReceive(_logicChannel, MakeErrorFrame(0xFF, LinErrorKind.Sync));
                     break;
                 case XLDefine.XL_EventTags.XL_LIN_ERRMSG:
                     // 总线错误事件（短路等）——总线状态事件
+                    LinDebugLog.Write("[RX] Vector ERRMSG 总线错误事件");
                     Lin_API.OnBusEvent(_logicChannel, "Error");
                     break;
                 case XLDefine.XL_EventTags.XL_LIN_WAKEUP:
@@ -465,30 +475,47 @@ namespace PCAN_Client.LIN_API
 
         private void OnLinMsg(XLClass.xl_lin_msg msg)
         {
+            // 硬件边界 ID 归一化（方案 4.3）：Vector xl_lin_msg.id 按受保护 PID 兼容处理——
+            // 统一归一化为裸 ID 后再进入 LDF/UI/响应关联；原始 ID 只进诊断日志。
+            // 若驱动实际返回裸 ID，掩码 &0x3F 为恒等，无副作用。
+            byte rawWireId = msg.id;
+            byte pid = LinPidCodec.ToRawId(rawWireId);
+            // 长度校验：dlc>8 拒绝复制并上报硬件错误帧，防止越界克隆。
+            if (msg.dlc > 8)
+            {
+                LinDebugLog.Write("[ERR] Vector 非法接收长度 pid=0x" + pid.ToString("X2") + " rawId=0x" + rawWireId.ToString("X2") + " dlc=" + msg.dlc + " → 按硬件错误帧上报");
+                Lin_API.LinReceive(_logicChannel, MakeErrorFrame(pid, LinErrorKind.Hw));
+                return;
+            }
             var frame = new LinFrameRecord
             {
                 LogicChannel = _logicChannel,
-                Pid = msg.id,
+                Pid = pid,
                 Direction = (msg.flags & XLDefine.XL_MessageFlags.XL_LIN_MSGFLAG_TX) != 0 ? LinFrameDir.Tx : LinFrameDir.Rx,
                 Dlc = msg.dlc,
                 Data = msg.data != null && msg.data.Length > 0 ? (byte[])msg.data.Clone() : new byte[0],
                 ChecksumType = LinChecksumKind.Enhanced,
                 ChecksumRx = msg.crc,
                 ChecksumOk = (msg.flags & XLDefine.XL_MessageFlags.XL_LIN_MSGFLAG_CRCERROR) == 0,
-                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, msg.id),
+                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
             };
-            if (frame.Data.Length > 8) frame.Data = (byte[])frame.Data.Clone(); // 保险
+            if (frame.Data.Length > 8) frame.Data = new byte[0]; // 保险：拒绝越界数据
             if ((msg.flags & XLDefine.XL_MessageFlags.XL_LIN_MSGFLAG_CRCERROR) != 0)
                 frame.ErrorKind = LinErrorKind.Checksum;
+            LinDebugLog.Write("[RX] Vector id=0x" + rawWireId.ToString("X2") + " normPid=0x" + pid.ToString("X2") +
+                " len=" + msg.dlc + " dir=" + frame.Direction + " crc=0x" + msg.crc.ToString("X2") +
+                " flags=0x" + ((int)msg.flags).ToString("X8"));
             Lin_API.LinReceive(_logicChannel, frame);
         }
 
         private LinFrameRecord MakeErrorFrame(byte pid, LinErrorKind kind)
         {
+            // NOANS/CRCINFO 事件的 id 归一为裸 ID；SYNCERR 无帧 ID（0xFF 哨兵）保持原样显示。
+            byte norm = pid == 0xFF ? pid : LinPidCodec.ToRawId(pid);
             return new LinFrameRecord
             {
                 LogicChannel = _logicChannel,
-                Pid = pid,
+                Pid = norm,
                 Direction = LinFrameDir.Rx,
                 Dlc = 0,
                 Data = new byte[0],
@@ -496,7 +523,7 @@ namespace PCAN_Client.LIN_API
                 ChecksumRx = 0,
                 ChecksumOk = false,
                 ErrorKind = kind,
-                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
+                FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, norm),
             };
         }
     }

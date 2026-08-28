@@ -222,14 +222,9 @@ namespace PCAN_Client.LIN_UI
             _btnWakeUp = new ToolStripButton("唤醒", ToolbarIcons.Get("plus"));
             _btnWakeUp.Click += (s, e) =>
             {
-                // 阶段 4（审查建议 2）：Master 模式明确“不支持”而非“未连接”——官方契约 LIN_XmtWakeUp 仅 Slave
-                var chW = CurrentChannel;
-                if (chW != null && chW.GetHardwareMode() != LinNodeMode.Slave)
-                {
-                    ShowError("当前通道为 " + chW.GetHardwareMode() + " 模式，唤醒仅 Slave 模式支持");
-                    return;
-                }
-                if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接）");
+                // 连接恒 modMaster：PCAN 的 XmtWakeUp 官方契约仅 Slave 模式，硬件层门禁
+                // ShouldUseXmtWakeUp 会拒绝并记 [WAKE] 日志；Vector 的 XL_LinWakeUp 不分模式直接执行。
+                if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接或当前适配器模式不支持唤醒）");
             };
             _btnSleep = new ToolStripButton("休眠", ToolbarIcons.Get("stop"));
             _btnSleep.Click += (s, e) => { if (!Lin_API.Sleep(_channel)) ShowError("休眠失败（未连接）"); };
@@ -1867,8 +1862,8 @@ namespace PCAN_Client.LIN_UI
         private string EmptyFrameHint()
         {
             var ch = CurrentChannel;
-            if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave)
-                return "暂无报文 — 纯监听：当前没有启用周期发送的报文，本机只应答外部主节点发出的帧头。在发送列表勾选启用即可周期发送";
+            if (ch != null && ch.TransmitEntries != null && ch.TransmitEntries.Count == 0)
+                return "暂无报文 — 在发送页签添加报文并勾选启用后，此处实时显示发送/接收的报文（时间/方向/ID/帧名称/数据）";
             return "暂无报文 — 连接通道并在发送列表勾选启用后，此处实时显示发送/接收的报文（时间/方向/ID/帧名称/数据）";
         }
 
@@ -2494,12 +2489,8 @@ namespace PCAN_Client.LIN_UI
             {
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
-                var ch = CurrentChannel;
-                // 周期发送模型：无启用发送项 → 从机纯监听；有启用项 → 按周期发送。
-                if (ch != null && ch.GetHardwareMode() == LinNodeMode.Slave)
-                    _lblSched.Text = sc.IsRunning ? "从机: 运行中（纯监听，只应答外部主节点）" : "从机: 停止（无启用发送项，纯监听）";
-                else
-                    _lblSched.Text = sc.IsRunning ? "调度: 运行中（周期发送）" : "调度: 停止";
+                // 连接模式恒 modMaster：运行状态只看调度器（无启用项时调度器不运行）。
+                _lblSched.Text = sc.IsRunning ? "调度: 运行中（周期发送）" : "调度: 停止";
             }
             else
             {

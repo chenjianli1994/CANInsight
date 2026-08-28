@@ -526,22 +526,14 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 发送类型在线切换门禁：当前连接的硬件模式不支持目标类型时返回中文原因（空=允许）。
-        /// 硬件模式（PCAN modMaster/modSlave、Vector XL_LIN_MASTER/SLAVE）是连接时确定的能力：
-        /// 纯 Slave 连接下本机不能发 Header，Master/HeaderOnly 需断开重连（重连时按发送计划推导模式）；
-        /// Master 连接下切到任何类型都支持（Slave 响应由 RESPONSE_ENABLE/XL_LinSetSlave 在线武装）。
+        /// 发送类型在线切换门禁：目标类型超出当前适配器能力时返回中文原因（空=允许）。
+        /// 连接模式恒为 modMaster（用户决策）后，Master/HeaderOnly/Slave 三类型均在线可切；
+        /// 仅 BreakOnly 因 PLIN/XL 驱动均无独立 Break 原语而始终拒绝。
         /// </summary>
         public static string CanSwitchTransmitType(byte logicChannel, byte pid, LinTransmitType newType)
         {
             if (newType == LinTransmitType.BreakOnly)
                 return "当前 PCAN/Vector 适配器不支持独立 BreakOnly 原语";
-            if (!IsConnected(logicChannel)) return "";
-            bool needsMaster = newType == LinTransmitType.Master || newType == LinTransmitType.HeaderOnly;
-            if (!needsMaster) return "";
-            if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return "";
-            var cfg = LinConfig.Channels[logicChannel - 1];
-            if (cfg.GetHardwareMode() == LinNodeMode.Slave)
-                return "当前为纯从机连接（本机不发 Header），不能在线切换为 Master/HeaderOnly；请先取消该帧勾选、断开重连后再修改";
             return "";
         }
 

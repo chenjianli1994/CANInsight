@@ -93,19 +93,13 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 返回驱动连接所需的基础模式。通道面板不再提供主从选择（发送模式定义在报文级）；
-        /// PLIN/XL 硬件是通道级主从二选一，这里按发送计划透明推导：
-        /// - 有启用发送项（Master/Slave/HeaderOnly 任意类型）→ modMaster：周期发送需要
-        ///   本机发 Header；Slave 项的响应由 RESPONSE_ENABLE 自动应答或外部从机提供
-        /// - 无启用发送项 → modSlave：纯监听，仅应答外部 Master 发出的 Header
+        /// 驱动连接模式：一律 modMaster（用户决策：接受误发 Header 的总线风险换取
+        /// 全类型在线切换能力）。本机是否发 Header 由发送项类型决定：仅 Master/HeaderOnly
+        /// 槽进入调度循环，Slave 项只武装本机响应（RESPONSE_ENABLE/XL_LinSetSlave）等待外部 Header。
         /// </summary>
         public LinNodeMode GetHardwareMode()
         {
-            // 周期发送模型：勾选启用即由本机发 Header，因此任何启用项都要求 modMaster。
-            // 纯被动（无启用项）才以 modSlave 打开，只应答外部主节点。
-            foreach (var entry in TransmitEntries ?? new List<LinTransmitEntry>())
-                if (entry != null && entry.Enabled) return LinNodeMode.Master;
-            return LinNodeMode.Slave;
+            return LinNodeMode.Master;
         }
 
         public bool HasEnabledSlaveEntries
@@ -154,6 +148,8 @@ namespace PCAN_Client.LIN_API
                     if (!configuredPids.Add(entry.Pid))
                         return "发送页不能配置重复 PID: 0x" + entry.Pid.ToString("X2") + "；每个 LIN ID 只能有一个本机角色";
                     if (!entry.Enabled) continue;
+                    if (entry.SlotMs <= 0)
+                        return "发送项 PID 0x" + entry.Pid.ToString("X2") + " 的周期时隙必须大于 0ms";
                     if (entry.Type == LinTransmitType.BreakOnly)
                         return "发送项 PID 0x" + entry.Pid.ToString("X2") + " 使用 BreakOnly，但当前 PCAN/Vector 适配器不提供独立 Break 原语";
                 }
