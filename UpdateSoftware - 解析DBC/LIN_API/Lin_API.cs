@@ -66,6 +66,20 @@ namespace PCAN_Client.LIN_API
             sc.Dispose();
         }
 
+        /// <summary>类型在线切换后重配运行中的调度器：仅重算运行快照并清除该 PID 在途
+        /// pending/冷却（不重启调度循环；若纯 Slave 化导致无活跃槽，由调度器自行回收定时器）。</summary>
+        internal static void ReconfigureRunningScheduler(byte logicChannel, string reason)
+        {
+            LinScheduler sc;
+            lock (_schedLock)
+            {
+                if (!_schedulers.TryGetValue(logicChannel, out sc)) return;
+                if (!sc.IsRunning) return;
+            }
+            LinDebugLog.Write("[SCH] 在线重配调度器 ch=" + logicChannel + " instance=" + sc.InstanceId + " reason=" + reason);
+            sc.SyncSnapshots();
+        }
+
         // ==================== 事件 ====================
         /// <summary>新帧（UI 订阅刷新报文表）</summary>
         public static event Action<LinFrameRecord> LinFrameReceived;
@@ -509,6 +523,26 @@ namespace PCAN_Client.LIN_API
                 if (_xl.TryGetValue(logicChannel, out xl)) return xl.ConfigureTransmitEntry(pid, type, entry.Data, entry.Dlc);
             }
             return false;
+        }
+
+        /// <summary>
+        /// 发送类型在线切换门禁：当前连接的硬件模式不支持目标类型时返回中文原因（空=允许）。
+        /// 硬件模式（PCAN modMaster/modSlave、Vector XL_LIN_MASTER/SLAVE）是连接时确定的能力：
+        /// 纯 Slave 连接下本机不能发 Header，Master/HeaderOnly 需断开重连（重连时按发送计划推导模式）；
+        /// Master 连接下切到任何类型都支持（Slave 响应由 RESPONSE_ENABLE/XL_LinSetSlave 在线武装）。
+        /// </summary>
+        public static string CanSwitchTransmitType(byte logicChannel, byte pid, LinTransmitType newType)
+        {
+            if (newType == LinTransmitType.BreakOnly)
+                return "当前 PCAN/Vector 适配器不支持独立 BreakOnly 原语";
+            if (!IsConnected(logicChannel)) return "";
+            bool needsMaster = newType == LinTransmitType.Master || newType == LinTransmitType.HeaderOnly;
+            if (!needsMaster) return "";
+            if (logicChannel < 1 || logicChannel > LinConfig.Channels.Count) return "";
+            var cfg = LinConfig.Channels[logicChannel - 1];
+            if (cfg.GetHardwareMode() == LinNodeMode.Slave)
+                return "当前为纯从机连接（本机不发 Header），不能在线切换为 Master/HeaderOnly；请先取消该帧勾选、断开重连后再修改";
+            return "";
         }
 
         /// <summary>旧调用兼容：使用已配置项类型；无配置时按 Slave 处理。</summary>

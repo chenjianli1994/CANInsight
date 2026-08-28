@@ -601,6 +601,7 @@ namespace PCAN_Client.LIN_UI
             _dgvSend.Columns["colSendData"].Width = 250;
             _dgvSend.CellContentClick += DgvSend_CellContentClick;
             _dgvSend.CellDoubleClick += DgvSend_CellDoubleClick;
+            _dgvSend.CellBeginEdit += DgvSend_CellBeginEdit;
             _dgvSend.CellValueChanged += DgvSend_CellValueChanged;
             // 单元格值格式化/转换失败时静默跳过，不弹 DataGridView 默认错误对话框
             // （如 CheckBox 列被旧数据赋了非 bool 值）。
@@ -775,13 +776,35 @@ namespace PCAN_Client.LIN_UI
             }
         }
 
+        /// <summary>发送项类型锁定判定：勾选启用（正在发送）期间不允许更改发送模式，
+        /// 下拉置灰；取消勾选（停止发送）后才能修改。锁定与连接状态无关（勾选即发模型）。</summary>
+        private static bool IsTypeLocked(LinTransmitEntry entry)
+        {
+            return entry != null && entry.Enabled;
+        }
 
+        /// <summary>发送类型单元格置灰样式（勾选启用期间锁定，对齐"正在发送不允许改模式"）</summary>
+        private void ApplySendTypeLockStyles()
+        {
+            for (int i = 0; i < _dgvSend.Rows.Count; i++)
+            {
+                var entry = _dgvSend.Rows[i].Tag as LinTransmitEntry;
+                bool locked = IsTypeLocked(entry);
+                var cell = _dgvSend.Rows[i].Cells["colSendType"];
+                cell.ReadOnly = locked;
+                cell.Style.BackColor = locked ? Color.FromArgb(235, 235, 235) : Color.Empty;
+            }
+        }
 
-
-
-
-
-
+        /// <summary>类型单元格编辑拦截：勾选启用（正在发送）期间禁止进入下拉编辑</summary>
+        private void DgvSend_CellBeginEdit(object sender, DataGridViewCellCancelEventArgs e)
+        {
+            if (e.RowIndex < 0 || _dgvSend.Columns[e.ColumnIndex].Name != "colSendType") return;
+            var entry = _dgvSend.Rows[e.RowIndex].Tag as LinTransmitEntry;
+            if (!IsTypeLocked(entry)) return;
+            e.Cancel = true;
+            ShowError("该报文正在发送，取消勾选停止发送后才能更改发送模式");
+        }
 
         /// <summary>初始化页签操作通道（报文表显示全部通道，按「通道」列区分；页签操作第一个已配置通道）</summary>
         private void InitChannelView()
@@ -1875,6 +1898,7 @@ namespace PCAN_Client.LIN_UI
                 }
             }
             finally { _suppressSendWriteback = false; }
+            ApplySendTypeLockStyles();
         }
 
         // ==================== 从节点/发布页签 ====================
@@ -2359,6 +2383,7 @@ namespace PCAN_Client.LIN_UI
                     LinConfig.SaveLinConfig();
                     SyncSchedulerSlots(); // 勾选即发、取消即停（连接时自动启停调度器）
                     RefreshRespGrid();
+                    ApplySendTypeLockStyles();
                     break;
                 case "colSendPid":
                     byte newPid;
@@ -2388,21 +2413,30 @@ namespace PCAN_Client.LIN_UI
                     break;
                 case "colSendType":
                     var newType = ParseTransmitType(row.Cells["colSendType"].Value);
-                    if (newType != entry.Type && Lin_API.IsConnected(_channel))
+                    if (newType != entry.Type)
                     {
-                        Lin_API.LinDisconnect(_channel);
-                        CurrentChannel.ConnectError = "发送类型已修改，请重新连接";
+                        // 门禁：目标类型超出当前连接能力（纯 Slave 连接切 Master/HeaderOnly、BreakOnly）时拒绝并还原
+                        string deny = Lin_API.CanSwitchTransmitType(_channel, entry.Pid, newType);
+                        if (deny.Length > 0)
+                        {
+                            ShowError(deny);
+                            row.Cells["colSendType"].Value = TransmitTypeText(entry.Type);
+                            break;
+                        }
+                        entry.Type = newType;
+                        int typeEntryIndex = CurrentChannel == null ? -1 : CurrentChannel.TransmitEntries.IndexOf(entry);
+                        if (typeEntryIndex >= 0 && typeEntryIndex < GetScheduler().Slots.Count)
+                            GetScheduler().Slots[typeEntryIndex].TransmitType = newType;
+                        if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, entry.Dlc, newType))
+                        {
+                            ShowError("发送类型下发失败");
+                            row.Cells["colSendType"].Value = TransmitTypeText(entry.Type);
+                            break;
+                        }
+                        LinConfig.SaveLinConfig();
+                        SyncSchedulerSlots(); // 在线切换：类型变更即时生效（勾选运行中即按新类型发送）
+                        Lin_API.ReconfigureRunningScheduler(_channel, "发送类型切换 pid=0x" + entry.Pid.ToString("X2"));
                     }
-                    entry.Type = newType;
-                    int typeEntryIndex = CurrentChannel == null ? -1 : CurrentChannel.TransmitEntries.IndexOf(entry);
-                    if (typeEntryIndex >= 0 && typeEntryIndex < GetScheduler().Slots.Count)
-                        GetScheduler().Slots[typeEntryIndex].TransmitType = newType;
-                    if (newType == LinTransmitType.BreakOnly)
-                        ShowError("当前 PCAN/Vector 适配器不支持独立 BreakOnly 原语");
-                    else if (Lin_API.IsConnected(_channel) && !Lin_API.UpdateTransmitData(_channel, entry.Pid, entry.Data, entry.Dlc, newType))
-                        ShowError("发送类型下发失败");
-                    LinConfig.SaveLinConfig();
-                    SyncSchedulerSlots();
                     RefreshRespGrid();
                     break;
                 case "colSendDlc":
