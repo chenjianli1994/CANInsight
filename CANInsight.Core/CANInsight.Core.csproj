@@ -34,18 +34,32 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\UpdateSoftware - 解析DBC\Lib\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="PCANBasic.NET">
       <HintPath>..\UpdateSoftware - 解析DBC\Lib\PCANBasic.NET.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BaseParamter.cs" />
     <Compile Include="BaudrateConfig.cs" />
     <Compile Include="CAN_API\HwChannelInfo.cs" />
+    <Compile Include="CAN_Data\DbcHelper.cs" />
+    <Compile Include="CAN_Data\ExceptionHandler.cs" />
+    <Compile Include="CAN_Data\FileLoader.cs" />
     <Compile Include="CAN_Data\blf\BinlogReadWrite.cs" />
     <Compile Include="CAN_Data\blf\BLFAPI.cs" />
     <Compile Include="CAN_Data\blf\CANEntity.cs" />
+    <Compile Include="Chart\CanBusChannel.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="ReportAuto\ReportTemplate.cs" />
+    <Compile Include="Scheduling\MultimediaTimer.cs" />
+    <Compile Include="util\FrameCrcCal.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

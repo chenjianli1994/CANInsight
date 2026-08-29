@@ -302,7 +302,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AutoSizeFormClass.cs" />
-    <Compile Include="BaseParamter.cs" />
     <Compile Include="CanSend.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -320,9 +319,6 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="CAN_Data\CAN_Data.cs" />
-    <Compile Include="CAN_Data\DbcHelper.cs" />
-    <Compile Include="CAN_Data\ExceptionHandler.cs" />
-    <Compile Include="CAN_Data\FileLoader.cs" />
     <Compile Include="LIN_API\LinChecksum.cs" />
     <Compile Include="LIN_API\LinPidCodec.cs" />
     <Compile Include="LIN_API\LinRunState.cs" />
@@ -354,7 +350,6 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Chart\ToolbarIcons.cs" />
-    <Compile Include="ReportAuto\ReportTemplate.cs" />
     <Compile Include="ReportAuto\ChartCapturer.cs" />
     <Compile Include="ReportAuto\SignalStatsCalculator.cs" />
     <Compile Include="ReportAuto\PptReportBuilder.cs" />
@@ -376,7 +371,6 @@
     <Compile Include="Chart\SignalSelector.designer.cs">
       <DependentUpon>SignalSelector.cs</DependentUpon>
     </Compile>
-    <Compile Include="Chart\CanBusChannel.cs" />
     <Compile Include="Chart\LogFileListDialog.cs" />
     <Compile Include="DataLog\LogFileToCSV.cs">
       <SubType>Form</SubType>
@@ -410,7 +404,6 @@
     <Compile Include="ResistanceSleep.cs" />
     <Compile Include="util\AppLog.cs" />
     <Compile Include="util\Delay.cs" />
-    <Compile Include="util\FrameCrcCal.cs" />
     <Compile Include="util\SelfUpdater.cs" />
     <Compile Include="util\UiTheme.cs" />
     <EmbeddedResource Include="CanSend.resx">
@@ -516,10 +509,9 @@
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
   <Target Name="CleanBundledArtifacts" AfterTargets="Build">
     <ItemGroup>
-      <_RedundantFiles Include="$(OutDir)*.dll" />
+      <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)CANInsight.Core.dll" />
       <_RedundantFiles Include="$(OutDir)*.xml" />
       <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
-      <_RedundantFiles Remove="$(OutDir)CANInsight.Core.dll" />
       <_RedundantFiles Include="$(OutDir)costura-win-x64\*.dll" />
       <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
     </ItemGroup>
@@ -530,7 +522,7 @@
   <!-- Release 编译后自动生成 version.txt（内容取自 BaseParamter.softVersion），供局域网自更新发布使用 -->
   <Target Name="GenerateVersionTxt" AfterTargets="CleanBundledArtifacts" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
-      <_SoftVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\BaseParamter.cs')), 'softVersion = "([^"]+)"').Groups[1].Value)</_SoftVersion>
+      <_SoftVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\CANInsight.Core\BaseParamter.cs')), 'softVersion = "([^"]+)"').Groups[1].Value)</_SoftVersion>
     </PropertyGroup>
     <WriteLinesToFile File="$(OutDir)version.txt" Lines="$(_SoftVersion)" Overwrite="true" />
     <Message Text="已生成 version.txt：$(_SoftVersion)" Importance="high" />

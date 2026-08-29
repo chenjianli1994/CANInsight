@@ -1496,7 +1496,7 @@ namespace PCAN_Client
 
         private void ChartFrom_FormClosed(object sender, FormClosedEventArgs e)
         {
-            Main.ChartShowOpenFlag = false;
+            CAN_Data.DbcHelper.ChartShowOpenFlag = false;
 
             // 主动触发GC回收大块内存（gen2）
             GC.Collect();
@@ -1507,7 +1507,7 @@ namespace PCAN_Client
         {
             _playbackTimer.Stop();
             multiChartFromScheduler.Stop();
-            Main.ChartShowOpenFlag = false;
+            CAN_Data.DbcHelper.ChartShowOpenFlag = false;
 
             // 快照当前绘图区信号列表+选中工况名（下次启动恢复关闭前状态，含未点"保存工况"的改动）
             SaveLastSessionSnapshot();
@@ -2979,7 +2979,7 @@ namespace PCAN_Client
         private void ChartFrom_Load(object sender, EventArgs e)
         {
             Channels = new List<ChannelData>();
-            Main.ChartShowOpenFlag = true;
+            CAN_Data.DbcHelper.ChartShowOpenFlag = true;
             // 启动时已从BusChannels.json恢复全局通道配置,同步按钮文字
             if (_busChannels.Count > 0)
                 _btnBusConfig.Text = $"通道配置({_busChannels.Count})";

@@ -39,9 +39,19 @@ namespace PCAN_Client
                     return Assembly.Load(assemblyData);
                 }
             };
-            PrepareEmbeddedNativeLibraries();
-            //ExtractEmbeddedDLL();
-            HideRelatedFiles();
+            // === Core 数据层事件订阅与发送注入（外部接口化：数据层已迁入 CANInsight.Core） ===
+            PCAN_Client.CAN_Data.DbcHelper.SignalChartPoint += (msgId, sigIdx, val, cycle, ch) =>
+            {
+                var cf = PCAN_Client.Main.chartFromShow;
+                if (cf == null || cf.IsDisposed) return;
+                try { cf.AddPoint(msgId, sigIdx, val, cycle, ch); } catch { }
+            };
+            PCAN_Client.CAN_Data.DbcHelper.DbcLoaded += () =>
+            {
+                try { if (PCAN_Client.Main.canSendOpenFlag && PCAN_Client.Main.canSend != null && !PCAN_Client.Main.canSend.IsDisposed) PCAN_Client.Main.canSend.UpdateDbcTreeview(); } catch { }
+                try { if (PCAN_Client.Main.main != null && !PCAN_Client.Main.main.IsDisposed) PCAN_Client.Main.main.UpdateDbcTreeview(); } catch { }
+            };
+            PCAN_Client.CAN_Data.DbcHelper.CanTransmitHandler = CAN_API.CAN_API.CanTransmit;
             // 未处理异常统一落盘（问题排查关键数据；WinForms 线程异常同时挂 ThreadException）
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
