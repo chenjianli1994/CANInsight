@@ -52,6 +52,32 @@ namespace PCAN_Client
                 try { if (PCAN_Client.Main.main != null && !PCAN_Client.Main.main.IsDisposed) PCAN_Client.Main.main.UpdateDbcTreeview(); } catch { }
             };
             PCAN_Client.CAN_Data.DbcHelper.CanTransmitHandler = CAN_API.CAN_API.CanTransmit;
+            // === CAN 后端事件订阅（阶段3：接收链路已迁入 Core，此处把事件接回 GUI 显示/录制实现） ===
+            PCAN_Client.CAN_API.CAN_API.FrameReceived += (msg, ts, isTx, ch) =>
+            {
+                try { PCAN_Client.Main.main.RecordCanMessage(msg, ts, isTx, true, ch); } catch { }
+            };
+            PCAN_Client.CAN_API.CAN_API.RealtimeRawRecorded += (id, data, blfCh) =>
+            {
+                try { ChartFrom.RecordRealtimeRawMessage(id, data, blfCh); } catch { }
+            };
+            PCAN_Client.CAN_API.CAN_API.BlfWriteRequest += (id, data, ts, blfCh) =>
+            {
+                try { DataLog.Log.AddCanMessageToWrite(id, data, ts, blfCh); } catch { }
+            };
+            PCAN_Client.CAN_API.CAN_API.BlfFlushRequest += () =>
+            {
+                try { DataLog.Log.ContinuousWriteWorker(); } catch { }
+            };
+            PCAN_Client.CAN_API.CAN_API.AscWriteRequest += (text, addr) =>
+            {
+                try { DataLog.Log.saveLog(text, addr); } catch { }
+            };
+            PCAN_Client.CAN_API.CAN_API.CanoeTxLinkDead += () =>
+            {
+                try { PCAN_Client.Main.main.OnCanoeTxLinkDead(); } catch { }
+            };
+            PCAN_Client.CAN_API.RecordingState.RecordChannelFilter = DataLog.LoggingSet.IsRecordChannel;
             // 未处理异常统一落盘（问题排查关键数据；WinForms 线程异常同时挂 ThreadException）
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {

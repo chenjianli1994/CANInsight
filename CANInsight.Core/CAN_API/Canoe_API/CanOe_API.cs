@@ -2,17 +2,18 @@ using PCAN_Client.CAN_API;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
 using vxlapi_NET; // Import the XL Driver Library
 
 namespace PCAN_Client.Canoe_API
 {
-    internal class CanOe_API
+    public class CanOe_API
     {
-        private MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
+        private MultiMessageCANScheduler _recvScheduler = new MultiMessageCANScheduler(null);
+        private const string RecvActionName = "CANoe_Receive";
 
         public XLDriver xlDriver = new XLDriver();
         public XLClass.xl_event xlEvent = new XLClass.xl_event();
@@ -20,7 +21,7 @@ namespace PCAN_Client.Canoe_API
         public ulong appChannelMask = 0;
         /// <summary>当前实际打开（已激活）的通道mask，仅CANOE_Open成功时写入、CANOE_Close清零；
         /// 识别"已连接"判定专用——不能用appChannelMask（FindAllChannel枚举时会把它污染为最后一路CAN通道）</summary>
-        internal ulong OpenedChannelMask = 0;
+        public ulong OpenedChannelMask = 0;
         public List<ulong> ChannelMaskList = new List<ulong>();
         public Boolean aliveFlag = false;
         public Boolean CanFDFlag = false;
@@ -84,7 +85,7 @@ namespace PCAN_Client.Canoe_API
             OpenedChannelMask = 0; // 实际连接通道集合清零（识别"已连接"判定用）
             try
             {
-                multiMessageCANScheduler.Stop();
+                StopReceiveScheduler();
                 aliveFlag = false;
                 XLDefine.XL_Status status = xlDriver.XL_ClosePort(portHandle);
                 status = xlDriver.XL_DeactivateChannel(portHandle, appChannelMask);
@@ -182,7 +183,7 @@ namespace PCAN_Client.Canoe_API
             CanoeCanReceive();
 #else
             // 启动调度器
-            multiMessageCANScheduler.Start();
+            StartReceiveScheduler();
 #endif
             return true;
         }
@@ -190,7 +191,7 @@ namespace PCAN_Client.Canoe_API
         /// <summary>增量连接单个硬件通道：port未开时完整打开；已开时合并mask重开port
         /// （XL限制：port的channelMask在OpenPort时固定，Activate mask外通道会被拒绝，只能重开）
         /// 通道模式/波特率按该行配置生效，无行配置时按经典CAN默认处理</summary>
-        internal bool ActivateChannel(byte hw)
+        public bool ActivateChannel(byte hw)
         {
             if (hw < 1 || hw > 64) return false;
             ulong bit = 1UL << (hw - 1);
@@ -207,7 +208,7 @@ namespace PCAN_Client.Canoe_API
         }
 
         /// <summary>增量断开单个硬件通道；全部断开后关闭port（aliveFlag=false、接收回调移除）</summary>
-        internal bool DeactivateChannel(byte hw)
+        public bool DeactivateChannel(byte hw)
         {
             if (hw < 1 || hw > 64 || !aliveFlag) return false;
             ulong bit = 1UL << (hw - 1);
@@ -332,7 +333,7 @@ namespace PCAN_Client.Canoe_API
                 if (aliveFlag && !_txLinkDeadNotified && ++_consecutiveTxFailures >= 10)
                 {
                     _txLinkDeadNotified = true;
-                    Main.main.OnCanoeTxLinkDead();
+                    CAN_API.CAN_API.RaiseCanoeTxLinkDead();
                 }
                 return false;
             }
@@ -458,116 +459,77 @@ namespace PCAN_Client.Canoe_API
             }
             catch
             {
-                MessageBox.Show("接收错误");
+                Debug.WriteLine("[CANoe] 接收错误");
             }
         }
 
-        public class MultiMessageCANScheduler
+        /// <summary>启动接收轮询（自建 1ms 调度器，注册本实例回调）</summary>
+        private void StartReceiveScheduler()
         {
-            bool callbackFlag;
-            XLDefine.XL_Status status;
-            XLClass.XLcanRxEvent xLcanRxEvent = new XLClass.XLcanRxEvent();
+            _recvScheduler.AddAction(SchedulerCallback, RecvActionName, 1);
+            _recvScheduler.Start();
+        }
 
-            public void Start()
-            {
-                callbackFlag = false;
-                Main.main.multiMessageCANScheduler.AddAction(SchedulerCallback, "CANoe_Receive", 1);
-            }
+        /// <summary>停止接收轮询</summary>
+        private void StopReceiveScheduler()
+        {
+            _recvScheduler.RemoveAction(RecvActionName);
+            _recvScheduler.Stop();
+        }
 
-            public void Stop()
-            {
-                Main.main.multiMessageCANScheduler.RemoveAction("CANoe_Receive");
-                callbackFlag = false;
-            }
+        private bool callbackFlag;
+        private XLDefine.XL_Status status;
+        private XLClass.XLcanRxEvent xLcanRxEvent = new XLClass.XLcanRxEvent();
 
-            private void SchedulerCallback()
+        private void SchedulerCallback()
+        {
+            try
             {
-                try
+                if (callbackFlag) return;
+                callbackFlag = true;
+                int count = 100;
+                while (count > 0 && aliveFlag)
                 {
-                    //if (false == Main.main.canoe_API.aliveFlag ||
-                    //    0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive)
-                    //{
-                    //    if(0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive)
-                    //    {
-                    //        //Main.main.CANoeConnect();
-                    //    }
-                    //    else
-                    //    {
-                    //        Stop();
-                    //    }
-                    //    return;
-                    //}
-                    if (callbackFlag)
+                    count--;
+                    status = xlDriver.XL_CanReceive(portHandle, ref xLcanRxEvent);
+                    if (status == XLDefine.XL_Status.XL_SUCCESS)
                     {
-                        return;
-                    }
-                    callbackFlag = true;
-                    int count = 100;
-                    while (count > 0 && Main.main.canoe_API.aliveFlag)
-                    {
-                        count--;
-                        //if (false == Main.main.canoe_API.aliveFlag ||
-                        //    0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive)
-                        //{
-                        //    if (0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive)
-                        //    {
-                        //        //Main.main.CANoeConnect();
-                        //    }
-                        //    else
-                        //    {
-                        //        Stop();
-                        //    }
-                        //    return;
-                        //}
-                        status = Main.main.canoe_API.xlDriver.XL_CanReceive(Main.main.canoe_API.portHandle, ref xLcanRxEvent);
-                            if (status == XLDefine.XL_Status.XL_SUCCESS)
+                        if (0x1F != xLcanRxEvent.tagData.canRxOkMsg.canId)
+                        {
+                            if ((xLcanRxEvent.tag == XLDefine.XL_CANFD_RX_EventTags.XL_CAN_EV_TAG_RX_OK) && (0 != xLcanRxEvent.tagData.canRxOkMsg.data.Length) && (0 != xLcanRxEvent.tagData.canRxOkMsg.canId))
                             {
-                                if (0x1F != xLcanRxEvent.tagData.canRxOkMsg.canId)
+                                conoeData datas = new conoeData();
+                                datas.data = new byte[GetActualDataLength(xLcanRxEvent.tagData.canRxOkMsg.dlc)];
+                                Array.Copy(xLcanRxEvent.tagData.canRxOkMsg.data, 0, datas.data, 0, datas.data.Length);
+                                datas.ID = xLcanRxEvent.tagData.canRxOkMsg.canId;
+                                datas.len = GetActualDataLength(xLcanRxEvent.tagData.canRxOkMsg.dlc);
+                                //datas.len = (8 <= datas.len) ? 8 : datas.len;
+                                datas.time = xLcanRxEvent.timeStamp / 1000;
+                                // Vector XL API: 扩展帧的 IDE 位编码在 id 的 bit 31
+                                TPCANMessageType msgType = ((datas.ID & 0x80000000) != 0 || datas.ID > 0x7FF)
+                                    ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
+                                    : TPCANMessageType.PCAN_MESSAGE_STANDARD;
+                                if (msgType == TPCANMessageType.PCAN_MESSAGE_STANDARD && datas.ID > 0x7FF)
+                                    msgType = TPCANMessageType.PCAN_MESSAGE_EXTENDED;
+                                // XL事件channelIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号（混合硬件时限定CANoe类型反查消除同号歧义）
+                                byte logicCh = BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypeCanoe, (byte)(xLcanRxEvent.channelIndex + 1));
+                                lock (CAN_API.CAN_API._receiveCanDataLock)
                                 {
-                                    if ((xLcanRxEvent.tag == XLDefine.XL_CANFD_RX_EventTags.XL_CAN_EV_TAG_RX_OK) && (0 != xLcanRxEvent.tagData.canRxOkMsg.data.Length) && (0 != xLcanRxEvent.tagData.canRxOkMsg.canId))
-                                    {
-                                        conoeData datas = new conoeData();
-                                        datas.data = new byte[GetActualDataLength(xLcanRxEvent.tagData.canRxOkMsg.dlc)];
-                                        Array.Copy(xLcanRxEvent.tagData.canRxOkMsg.data, 0, datas.data, 0, datas.data.Length);
-                                        datas.ID = xLcanRxEvent.tagData.canRxOkMsg.canId;
-                                        datas.len = GetActualDataLength(xLcanRxEvent.tagData.canRxOkMsg.dlc);
-                                        //datas.len = (8 <= datas.len) ? 8 : datas.len;
-                                        datas.time = xLcanRxEvent.timeStamp / 1000;
-                                        // Vector XL API: 扩展帧的 IDE 位编码在 id 的 bit 31
-                                        TPCANMessageType msgType = ((datas.ID & 0x80000000) != 0 || datas.ID > 0x7FF)
-                                            ? TPCANMessageType.PCAN_MESSAGE_EXTENDED
-                                            : TPCANMessageType.PCAN_MESSAGE_STANDARD;
-                                        if (msgType == TPCANMessageType.PCAN_MESSAGE_STANDARD && datas.ID > 0x7FF)
-                                            msgType = TPCANMessageType.PCAN_MESSAGE_EXTENDED;
-                                        // XL事件channelIndex为0-based，映射为1-based硬件通道号后再转逻辑通道号（混合硬件时限定CANoe类型反查消除同号歧义）
-                                        byte logicCh = BaseParamter.GetLogicChannelByHw(BaseParamter.HwTypeCanoe, (byte)(xLcanRxEvent.channelIndex + 1));
-                                        lock (CAN_API.CAN_API._receiveCanDataLock)
-                                        {
-                                            CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        /* empty */
-                                    }
-                                }
-                                else
-                                {
-                                    /* empty */
+                                    CAN_API.CAN_API.CanReceive(datas.ID, (ushort)datas.len, datas.data, msgType, datas.time, logicCh);
                                 }
                             }
-                            else
-                            {
-                                break; // 无事件（队列空）：立即退出本轮轮询，避免空闲时每ms 100次P/Invoke忙等
-                            }
+                        }
                     }
-
-                    callbackFlag = false;
+                    else
+                    {
+                        break; // 无事件（队列空）：立即退出本轮轮询，避免空闲时每ms 100次P/Invoke忙等
+                    }
                 }
-                catch
-                {
-                    callbackFlag = false;
-                }
+                callbackFlag = false;
+            }
+            catch
+            {
+                callbackFlag = false;
             }
         }
     }

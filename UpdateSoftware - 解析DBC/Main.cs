@@ -28,8 +28,10 @@ namespace PCAN_Client
 {
     public partial class Main : Form
     {
-        internal PCAN_API.PCAN_API pCAN_API = null;
-        internal Canoe_API.CanOe_API canoe_API = null;
+        /// <summary>PCAN 后端实例（Core 管理，本属性为代理）</summary>
+        internal PCAN_API.PCAN_API pCAN_API => CAN_API.CAN_API.PcanApi;
+        /// <summary>CANoe 后端实例（Core 管理，本属性为代理）</summary>
+        internal Canoe_API.CanOe_API canoe_API => CAN_API.CAN_API.CanoeApi;
         /// <summary>LIN 监控窗体单实例（方案阶段 1）：重复点击只激活现有窗体，不新建调度器</summary>
         private PCAN_Client.LIN_UI.LinMonitorForm _linMonitorForm;
         internal static CanSend canSend = null;
@@ -39,8 +41,8 @@ namespace PCAN_Client
         internal static Main main = new Main();
         internal List<ulong> Canoe_Channel;
 
-        internal static Boolean canoeOpenFlag = false;
-        internal static Boolean pcanOpenFlag = false;
+        internal static Boolean canoeOpenFlag { get => CAN_API.CAN_API.CanoeOpenFlag; set => CAN_API.CAN_API.CanoeOpenFlag = value; }
+        internal static Boolean pcanOpenFlag { get => CAN_API.CAN_API.PcanOpenFlag; set => CAN_API.CAN_API.PcanOpenFlag = value; }
         internal static XLClass.xl_driver_config driverConfig = null;
 
         string[] ByteOrder = { "Intel", "Motorola" };
@@ -2107,14 +2109,6 @@ namespace PCAN_Client
             {
                 this.BeginInvoke(new EventHandler(delegate
                 {
-                    if (null == pCAN_API)
-                    {
-                        pCAN_API = new PCAN_API.PCAN_API();
-                    }
-                    else
-                    {
-                        /* empty */
-                    }
                     if (button1.Text.Equals("已连接"))
                     {
                         pCAN_API.PCAN_ChannelUninitialize();
@@ -2243,14 +2237,6 @@ namespace PCAN_Client
         {
             Boolean flag = false;
             int channel = 0;
-            if (null == Main.main.pCAN_API)
-            {
-                Main.main.pCAN_API = new PCAN_API.PCAN_API();
-            }
-            else
-            {
-                /* empty */
-            }
             List<string> PCAN_Channel = Main.main.pCAN_API.GetPCAN_ChannelRefresh(force);
             _lastPcanHwList = ParsePcanHwList(PCAN_Channel); // 结构化识别缓存（通道管理窗口数据源）
             if(comboBox1.Items.Count == PCAN_Channel.Count)
@@ -2308,14 +2294,6 @@ namespace PCAN_Client
 
         private void GetCanoe_ComRefresh()
         {
-            if (null == canoe_API)
-            {
-                canoe_API = new Canoe_API.CanOe_API();
-            }
-            else
-            {
-                /* empty */
-            }
             driverConfig = canoe_API.FindAllChannel(10, false); // 探测不依赖全局模式（通道级配置驱动）
 
             // 结构化识别缓存（通道管理窗口数据源）；已打开mask内的通道标记"已连接"
@@ -2416,14 +2394,6 @@ namespace PCAN_Client
             {
                 this.BeginInvoke((EventHandler)(delegate
                 {
-                    if (null == canoe_API)
-                    {
-                        canoe_API = new Canoe_API.CanOe_API();
-                    }
-                    else
-                    {
-                        /* empty */
-                    }
                     if (button5.Text.Equals("已连接"))
                     {
                         canoe_API.CANOE_Close();

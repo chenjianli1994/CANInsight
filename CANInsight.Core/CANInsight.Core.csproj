@@ -40,6 +40,10 @@
       <HintPath>..\UpdateSoftware - 解析DBC\Lib\Newtonsoft.Json.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="vxlapi_NET">
+      <HintPath>..\UpdateSoftware - 解析DBC\Lib\Vector Canoe\vxlapi_NET.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="PCANBasic.NET">
       <HintPath>..\UpdateSoftware - 解析DBC\Lib\PCANBasic.NET.dll</HintPath>
       <Private>False</Private>
@@ -49,6 +53,11 @@
     <Compile Include="BaseParamter.cs" />
     <Compile Include="BaudrateConfig.cs" />
     <Compile Include="CAN_API\HwChannelInfo.cs" />
+    <Compile Include="CAN_API\CAN_API.cs" />
+    <Compile Include="CAN_API\RecordingState.cs" />
+    <Compile Include="CAN_API\Canoe_API\CanOe_API.cs" />
+    <Compile Include="CAN_API\PCAN_API\PCAN_API.cs" />
+    <Compile Include="CoreHardwareAccess.cs" />
     <Compile Include="CAN_Data\DbcHelper.cs" />
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
     <Compile Include="CAN_Data\FileLoader.cs" />

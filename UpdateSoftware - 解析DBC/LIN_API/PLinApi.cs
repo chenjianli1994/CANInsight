@@ -225,7 +225,8 @@ namespace PCAN_Client.LIN_API
     /// <summary>串行化同一进程内对 PEAK CAN/LIN 驱动的枚举、初始化和释放。</summary>
     internal static class PeakHardwareAccess
     {
-        internal static readonly object SyncRoot = new object();
+        // 委托到 Core 锁：CAN(PCAN_API/CanOe_API)与 LIN 共享同一互斥锁
+        internal static readonly object SyncRoot = PCAN_Client.CoreHardwareAccess.SyncRoot;
     }
 
     /// <summary>

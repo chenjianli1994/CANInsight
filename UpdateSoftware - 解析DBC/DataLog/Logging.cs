@@ -16,11 +16,11 @@ namespace PCAN_Client.DataLog
 {
     public partial class Logging : Form
     {
-        public static string NowASCFileAddr = "";
-        public static string NowBLFFileAddr_str = "";
+        public static string NowASCFileAddr { get => PCAN_Client.CAN_API.RecordingState.NowAscFileAddr; set => PCAN_Client.CAN_API.RecordingState.NowAscFileAddr = value; }
+        public static string NowBLFFileAddr_str { get => PCAN_Client.CAN_API.RecordingState.NowBlfFileAddrStr; set => PCAN_Client.CAN_API.RecordingState.NowBlfFileAddrStr = value; }
         public static IntPtr NowBLFFileAddr = IntPtr.Zero;
         public static IntPtr NowBLFFileHandle = IntPtr.Zero;
-        public static Boolean SaveFlag = false;
+        public static Boolean SaveFlag { get => PCAN_Client.CAN_API.RecordingState.SaveFlag; set => PCAN_Client.CAN_API.RecordingState.SaveFlag = value; }
         internal static Logging log = new Logging();
 
         internal static string SaveCSVPath = "";

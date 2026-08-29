@@ -1,4 +1,4 @@
-﻿using Peak.Can.Basic;
+using Peak.Can.Basic;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -21,7 +21,7 @@ namespace PCAN_Client.DataLog
         public static int Frequency = 10;
         public static LoggingSet loggingSet = new LoggingSet();
         public static string SaveFileType = "ASC";
-        public static int SaveFileType_int = 0;
+        public static int SaveFileType_int { get => PCAN_Client.CAN_API.RecordingState.SaveFileTypeInt; set => PCAN_Client.CAN_API.RecordingState.SaveFileTypeInt = value; }
         public static string BINFilepath = "";
         public static bool changeFlag = false;
 

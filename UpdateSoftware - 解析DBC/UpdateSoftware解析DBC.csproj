@@ -313,8 +313,6 @@
     </Compile>
     <Compile Include="ScriptEngine\ScriptModel.cs" />
     <Compile Include="ScriptEngine\ScriptRunner.cs" />
-    <Compile Include="CAN_API\Canoe_API\CanOe_API.cs" />
-    <Compile Include="CAN_API\CAN_API.cs" />
     <Compile Include="CAN_API\ChannelManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -398,7 +396,6 @@
     <Compile Include="Main.Designer.cs">
       <DependentUpon>Main.cs</DependentUpon>
     </Compile>
-    <Compile Include="CAN_API\PCAN_API\PCAN_API.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ResistanceSleep.cs" />
@@ -478,10 +475,18 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Lib\PCANBasic.NET.dll" />
-    <Content Include="icon.ico" />
-    <EmbeddedResource Include="costura-win-x64\binlog.dll" />
-    <EmbeddedResource Include="costura-win-x64\PLinApi.dll" />
-    <EmbeddedResource Include="Lib\CSScriptLibrary.dll" />
+    <Content Include="Lib\PCANBasic.NET.dll">
+      <Link>PCANBasic.NET.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Lib\Newtonsoft.Json.dll">
+      <Link>Newtonsoft.Json.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Lib\Vector Canoe\vxlapi_NET.dll">
+      <Link>vxlapi_NET.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="ReportAuto\templates\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -509,7 +514,7 @@
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
   <Target Name="CleanBundledArtifacts" AfterTargets="Build">
     <ItemGroup>
-      <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)CANInsight.Core.dll" />
+      <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)CANInsight.Core.dll;$(OutDir)PCANBasic.NET.dll;$(OutDir)vxlapi_NET.dll;$(OutDir)Newtonsoft.Json.dll" />
       <_RedundantFiles Include="$(OutDir)*.xml" />
       <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
       <_RedundantFiles Include="$(OutDir)costura-win-x64\*.dll" />

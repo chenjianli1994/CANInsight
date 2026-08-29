@@ -1,23 +1,19 @@
 using PCAN_Client.CAN_API;
-using PCAN_Client.UTIL;
 using Peak.Can.Basic.BackwardCompatibility;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Runtime.Remoting.Channels;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Forms;
-using System.Windows.Forms.DataVisualization.Charting;
 
 
 namespace PCAN_Client.PCAN_API
 {
-    internal class PCAN_API
+    public class PCAN_API
     {
-        private MultiMessageCANScheduler multiMessageCANScheduler = new MultiMessageCANScheduler();
+        private MultiMessageCANScheduler _recvScheduler = new MultiMessageCANScheduler(null);
+        private const string RecvActionName = "PCAN_Receive";
 
         ushort PCAN_DeviceChannel = 255;
         /// <summary>多通道连接：逻辑通道号 → PCAN句柄（通道配置驱动的批量连接；为空时走PCAN_DeviceChannel单连接兼容路径）</summary>
@@ -74,12 +70,12 @@ namespace PCAN_Client.PCAN_API
 
         public void PCAN_ChannelUninitialize()
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
-                    multiMessageCANScheduler.Stop();
-                    Main.main.pCAN_API.PCAN_ReceiveThreadAlive = 0;
+                    StopReceiveScheduler();
+                    PCAN_ReceiveThreadAlive = 0;
                     foreach (var kv in _connectedChannels)
                     {
                         PCANBasic.Uninitialize(kv.Value);
@@ -97,7 +93,7 @@ namespace PCAN_Client.PCAN_API
         /// </summary>
         public int ConnectMulti()
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
@@ -131,7 +127,7 @@ namespace PCAN_Client.PCAN_API
                     if (_connectedChannels.Count > 0)
                     {
                         PCAN_ReceiveThreadAlive = 1;
-                        multiMessageCANScheduler.Start();
+                        StartReceiveScheduler();
                     }
                     return _connectedChannels.Count;
                 }
@@ -146,19 +142,20 @@ namespace PCAN_Client.PCAN_API
         }
 
         /// <summary>逻辑通道是否已连接（多通道字典）</summary>
-        internal bool IsLogicChannelConnected(byte logicChannel) => _connectedChannels.ContainsKey(logicChannel);
+        /// <summary>逻辑通道是否已连接（多通道字典）</summary>
+        public bool IsLogicChannelConnected(byte logicChannel) => _connectedChannels.ContainsKey(logicChannel);
 
         /// <summary>硬件通道号（USBBUS序号1-16）是否已连接（识别缓存"已连接"状态本地判定用，不做硬件访问）</summary>
-        internal bool IsHwChannelConnected(byte hw)
+        public bool IsHwChannelConnected(byte hw)
         {
             if (hw < 1 || hw > 16) return false;
             return _connectedChannels.ContainsValue(PCAN_DeviceChannelBuf[hw - 1]);
         }
 
         /// <summary>增量连接单个逻辑通道（多通道模式）：按该行 CAN/CANFD 模式与波特率档位Initialize绑定的硬件句柄并加入已连接字典；首个通道连接时启动接收调度</summary>
-        internal bool ConnectOne(int logicIndex)
+        public bool ConnectOne(int logicIndex)
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
@@ -181,7 +178,7 @@ namespace PCAN_Client.PCAN_API
                     if (PCAN_ReceiveThreadAlive == 0)
                     {
                         PCAN_ReceiveThreadAlive = 1;
-                        multiMessageCANScheduler.Start();
+                        StartReceiveScheduler();
                     }
                     return true;
                 }
@@ -189,9 +186,9 @@ namespace PCAN_Client.PCAN_API
         }
 
         /// <summary>增量断开单个逻辑通道；全部断开后停止接收调度。返回剩余已连接通道数</summary>
-        internal int DisconnectOne(int logicIndex)
+        public int DisconnectOne(int logicIndex)
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
@@ -204,7 +201,7 @@ namespace PCAN_Client.PCAN_API
                     if (_connectedChannels.Count == 0)
                     {
                         PCAN_ReceiveThreadAlive = 0;
-                        multiMessageCANScheduler.Stop();
+                        StopReceiveScheduler();
                     }
                     return _connectedChannels.Count;
                 }
@@ -212,7 +209,7 @@ namespace PCAN_Client.PCAN_API
         }
 
         /// <summary>已连接的（逻辑通道号,句柄）枚举，供接收轮询</summary>
-        internal IEnumerable<KeyValuePair<byte, ushort>> ConnectedChannels => _connectedChannels;
+        public IEnumerable<KeyValuePair<byte, ushort>> ConnectedChannels => _connectedChannels;
         /// <summary>
         /// 枚举 PCAN-Basic 报告的已连接通道。识别阶段只读 PCAN_ATTACHED_CHANNELS，
         /// 不调用 Initialize/Uninitialize，避免重置 PCAN-USB Pro FD 的 CAN 状态并干扰 PLIN Manager。
@@ -220,7 +217,7 @@ namespace PCAN_Client.PCAN_API
         /// </summary>
         public List<string> GetPCAN_ChannelRefresh(bool force = false)
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
@@ -371,7 +368,7 @@ namespace PCAN_Client.PCAN_API
 
         public Boolean Connect(Boolean CanFDFlag)
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 lock (_detectLock)
                 {
@@ -398,7 +395,7 @@ namespace PCAN_Client.PCAN_API
                         {
                             PCAN_ReceiveThreadAlive = 1;
                             // 启动调度器
-                            multiMessageCANScheduler.Start();
+                            StartReceiveScheduler();
 #if false
                             if (null == action)
                             {
@@ -427,7 +424,7 @@ namespace PCAN_Client.PCAN_API
                         PCANBasic.Uninitialize(PCAN_DeviceChannel);
                         if (TPCANStatus.PCAN_ERROR_OK != result)
                         {
-                            MessageBox.Show("连接错误");
+                            Debug.WriteLine("[PCAN] 连接错误");
                             return false;
                         }
                         return false;
@@ -486,9 +483,9 @@ namespace PCAN_Client.PCAN_API
         }
         /// <summary>发送数据。channel为逻辑通道号：多通道连接时路由到对应句柄，未连接该通道时回退当前单连接句柄；
         /// FD 格式按该通道配置判定（单通道兼容场景回退全局默认模式）</summary>
-        internal TPCANStatus PCAN_SendData(TPCANMsg tPCANMsg, byte channel = 1)
+        public TPCANStatus PCAN_SendData(TPCANMsg tPCANMsg, byte channel = 1)
         {
-            lock (LIN_API.PeakHardwareAccess.SyncRoot)
+            lock (CoreHardwareAccess.SyncRoot)
             {
                 ushort handle = GetHandleForChannel(channel);
                 if (BaseParamter.GetChannelCanFdByLogic(channel))
@@ -521,12 +518,12 @@ namespace PCAN_Client.PCAN_API
             {
                 if (CanFDFlag)
                 {
-                    lock (LIN_API.PeakHardwareAccess.SyncRoot)
+                    lock (CoreHardwareAccess.SyncRoot)
                         result = PCANBasic.ReadFD(PCAN_DeviceChannel, out msgFD, out TimestampBuffer);
                 }
                 else
                 {
-                    lock (LIN_API.PeakHardwareAccess.SyncRoot)
+                    lock (CoreHardwareAccess.SyncRoot)
                         result = PCANBasic.Read(PCAN_DeviceChannel, out msg, out timesamp);
                 }
                 if (TPCANStatus.PCAN_ERROR_OK == result)
@@ -555,146 +552,132 @@ namespace PCAN_Client.PCAN_API
             }
         }
 
-        public class MultiMessageCANScheduler
+        /// <summary>启动接收轮询（自建 1ms 调度器，注册本实例回调）</summary>
+        private void StartReceiveScheduler()
         {
-            /// <summary>单次1ms回调最多处理的接收帧数（多通道/单通道共用；剩余帧留待下个回调，硬件FIFO缓冲）</summary>
-            private const int MAX_FRAMES_PER_TICK = 200;
-            bool callbackFlag;
-            TPCANTimestamp timesamp = new TPCANTimestamp();
-            TPCANMsgFD msgFD = new TPCANMsgFD();
-            TPCANMsg msg = new TPCANMsg();
-            long time_us;
-            ulong TimestampBuffer = 0;
-            TPCANStatus result;
+            _recvScheduler.AddAction(SchedulerCallback, RecvActionName, 1);
+            _recvScheduler.Start();
+        }
 
-            public void Start()
+        /// <summary>停止接收轮询</summary>
+        private void StopReceiveScheduler()
+        {
+            _recvScheduler.RemoveAction(RecvActionName);
+            _recvScheduler.Stop();
+        }
+
+        /// <summary>单次1ms回调最多处理的接收帧数（多通道/单通道共用；剩余帧留待下个回调，硬件FIFO缓冲）</summary>
+        private const int MAX_FRAMES_PER_TICK = 200;
+        private bool callbackFlag;
+        private TPCANTimestamp timesamp = new TPCANTimestamp();
+        private TPCANMsgFD msgFD = new TPCANMsgFD();
+        private TPCANMsg msg = new TPCANMsg();
+        private long time_us;
+        private ulong TimestampBuffer = 0;
+        private TPCANStatus result;
+
+        private void SchedulerCallback()
+        {
+            try
+            {
+                if (callbackFlag)
+                {
+                    return;
+                }
+                callbackFlag = true;
+
+                if (_connectedChannels.Count > 0)
+                {
+                    // 多通道模式：轮询所有已连接句柄，按各自逻辑通道号上报。
+                    // 限帧：单次1ms回调最多处理MAX_FRAMES_PER_TICK帧，剩余留待下个回调（硬件队列缓冲，总吞吐不变）
+                    int framesThisTick = 0;
+                    while (0 != PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
+                    {
+                        bool anyData = false;
+                        foreach (var kv in _connectedChannels)
+                        {
+                            if (framesThisTick >= MAX_FRAMES_PER_TICK) break;
+                            if (BaseParamter.GetChannelCanFdByLogic(kv.Key)) // kv.Key=逻辑通道号，按该通道模式选择读取API
+                            {
+                                lock (CoreHardwareAccess.SyncRoot)
+                                    result = PCANBasic.ReadFD(kv.Value, out msgFD, out TimestampBuffer);
+                            }
+                            else
+                            {
+                                lock (CoreHardwareAccess.SyncRoot)
+                                    result = PCANBasic.Read(kv.Value, out msg, out timesamp);
+                            }
+                            if (TPCANStatus.PCAN_ERROR_OK != result) continue;
+                            anyData = true;
+                            framesThisTick++;
+                            if (BaseParamter.GetChannelCanFdByLogic(kv.Key))
+                            {
+                                time_us = (long)TimestampBuffer;
+                                lock (CAN_API.CAN_API._receiveCanDataLock)
+                                {
+                                    CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us, kv.Key);
+                                }
+                            }
+                            else
+                            {
+                                time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
+                                lock (CAN_API.CAN_API._receiveCanDataLock)
+                                {
+                                    CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE, (ulong)time_us, kv.Key);
+                                }
+                            }
+                        }
+                        if (!anyData) break;
+                    }
+                }
+                else
+                {
+                    // 单通道兼容路径（同样限帧）
+                    int framesThisTick = 0;
+                    while (0 != PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
+                    {
+                        if (CanFDFlag)
+                        {
+                            lock (CoreHardwareAccess.SyncRoot)
+                                result = PCANBasic.ReadFD(PCAN_DeviceChannel, out msgFD, out TimestampBuffer);
+                        }
+                        else
+                        {
+                            lock (CoreHardwareAccess.SyncRoot)
+                                result = PCANBasic.Read(PCAN_DeviceChannel, out msg, out timesamp);
+                        }
+                        if (TPCANStatus.PCAN_ERROR_OK == result)
+                        {
+                            framesThisTick++;
+                            if (CanFDFlag)
+                            {
+                                time_us = (long)TimestampBuffer;
+                                lock (CAN_API.CAN_API._receiveCanDataLock)
+                                {
+                                    CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us, GetCurrentLogicChannel());
+                                }
+                            }
+                            else
+                            {
+                                time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
+                                lock (CAN_API.CAN_API._receiveCanDataLock)
+                                {
+                                    CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE, (ulong)time_us, GetCurrentLogicChannel());
+                                }
+                            }
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                callbackFlag = false;
+            }
+            catch
             {
                 callbackFlag = false;
-                Main.main.multiMessageCANScheduler.AddAction(SchedulerCallback, "PCAN_Receive", 1);
-            }
-
-            public void Stop()
-            {
-                Main.main.multiMessageCANScheduler.RemoveAction("PCAN_Receive");
-            }
-
-            private void SchedulerCallback()
-            {
-                try
-                {
-                    if (callbackFlag)
-                    {
-                        return;
-                    }
-                    callbackFlag = true;
-                    //if (0 == Main.main.pCAN_API.PCAN_ReceiveThreadAlive || true == Main.main.canoe_API.aliveFlag)
-                    //{
-                    //    if (true == Main.main.canoe_API.aliveFlag)
-                    //    {
-                    //        //Main.main.PCAN_Connect();
-                    //    }
-                    //    else
-                    //    {
-                    //        //Stop();
-                    //    }
-                    //    Main.main.pCAN_API.PCAN_ReceiveThreadAlive = 0;
-                    //}
-
-                    var api = Main.main.pCAN_API;
-                    if (api._connectedChannels.Count > 0)
-                    {
-                        // 多通道模式：轮询所有已连接句柄，按各自逻辑通道号上报。
-                        // 限帧：单次1ms回调最多处理MAX_FRAMES_PER_TICK帧，剩余留待下个回调（硬件队列缓冲，总吞吐不变），
-                        // 防止高负载时排空超时阻塞同回调线程上的其他动作（周期发送/CANoe接收/图表仿真）
-                        int framesThisTick = 0;
-                        while (0 != api.PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
-                        {
-                            bool anyData = false;
-                            foreach (var kv in api._connectedChannels)
-                            {
-                                if (framesThisTick >= MAX_FRAMES_PER_TICK) break;
-                                if (BaseParamter.GetChannelCanFdByLogic(kv.Key)) // kv.Key=逻辑通道号，按该通道模式选择读取API
-                                {
-                                    lock (LIN_API.PeakHardwareAccess.SyncRoot)
-                                        result = PCANBasic.ReadFD(kv.Value, out msgFD, out TimestampBuffer);
-                                }
-                                else
-                                {
-                                    lock (LIN_API.PeakHardwareAccess.SyncRoot)
-                                        result = PCANBasic.Read(kv.Value, out msg, out timesamp);
-                                }
-                                if (TPCANStatus.PCAN_ERROR_OK != result) continue;
-                                anyData = true;
-                                framesThisTick++;
-                                if (BaseParamter.GetChannelCanFdByLogic(kv.Key))
-                                {
-                                    time_us = (long)TimestampBuffer;
-                                    lock (CAN_API.CAN_API._receiveCanDataLock)
-                                    {
-                                        CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us, kv.Key);
-                                    }
-                                }
-                                else
-                                {
-                                    time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
-                                    lock (CAN_API.CAN_API._receiveCanDataLock)
-                                    {
-                                        CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE, (ulong)time_us, kv.Key);
-                                    }
-                                }
-                            }
-                            if (!anyData) break;
-                        }
-                    }
-                    else
-                    {
-                        // 单通道兼容路径（同样限帧）
-                        int framesThisTick = 0;
-                        while (0 != Main.main.pCAN_API.PCAN_ReceiveThreadAlive && framesThisTick < MAX_FRAMES_PER_TICK)
-                        {
-                            if (Main.main.pCAN_API.CanFDFlag)
-                            {
-                                lock (LIN_API.PeakHardwareAccess.SyncRoot)
-                                    result = PCANBasic.ReadFD(Main.main.pCAN_API.PCAN_DeviceChannel, out msgFD, out TimestampBuffer);
-                            }
-                            else
-                            {
-                                lock (LIN_API.PeakHardwareAccess.SyncRoot)
-                                    result = PCANBasic.Read(Main.main.pCAN_API.PCAN_DeviceChannel, out msg, out timesamp);
-                            }
-                            if (TPCANStatus.PCAN_ERROR_OK == result)
-                            {
-                                framesThisTick++;
-                                if (Main.main.pCAN_API.CanFDFlag)
-                                {
-                                    time_us = (long)TimestampBuffer;
-                                    lock (CAN_API.CAN_API._receiveCanDataLock)
-                                    {
-                                        CAN_API.CAN_API.CanReceive(msgFD.ID, (ushort)GetReceiveDataDlc(msgFD.DLC), msgFD.DATA, msgFD.MSGTYPE, (ulong)time_us, Main.main.pCAN_API.GetCurrentLogicChannel());
-                                    }
-                                }
-                                else
-                                {
-                                    time_us = timesamp.micros + timesamp.millis * 1000 + timesamp.millis_overflow * 0x100000000 * 1000;
-                                    lock (CAN_API.CAN_API._receiveCanDataLock)
-                                    {
-                                        CAN_API.CAN_API.CanReceive(msg.ID, msg.LEN, msg.DATA, msg.MSGTYPE,(ulong)time_us, Main.main.pCAN_API.GetCurrentLogicChannel());
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                    }
-
-                    callbackFlag = false;
-                }
-                catch
-                {
-                    callbackFlag = false;
-                }
             }
         }
     }
