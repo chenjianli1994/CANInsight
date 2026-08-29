@@ -323,6 +323,8 @@
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
     <Compile Include="CAN_Data\FileLoader.cs" />
     <Compile Include="LIN_API\LinChecksum.cs" />
+    <Compile Include="LIN_API\LinPidCodec.cs" />
+    <Compile Include="LIN_API\LinRunState.cs" />
     <Compile Include="LIN_API\LinFrameRecord.cs" />
     <Compile Include="LIN_API\LinChannel.cs" />
     <Compile Include="LIN_API\LinConfig.cs" />

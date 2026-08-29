@@ -150,7 +150,7 @@ namespace PCAN_Client.LIN_API
     [StructLayout(LayoutKind.Sequential)]
     internal struct LinPlMsg
     {
-        /// <summary>帧 ID（0-63，不含校验位）</summary>
+        /// <summary>受保护 PID（Frame ID 6 bit + Parity 2 bit；发送前经 LinPidCodec.ToProtectedPid）</summary>
         public byte FrameId;
         /// <summary>数据长度（1-8）</summary>
         public byte Length;
@@ -165,7 +165,7 @@ namespace PCAN_Client.LIN_API
     internal struct LinPlRcvMsg
     {
         public LinPlMsgType Type;
-        /// <summary>帧 ID（0-63）</summary>
+        /// <summary>受保护 PID（Frame ID 6 bit + Parity 2 bit；接收后经 LinPidCodec 归一化为裸 ID 再进入内部模型）</summary>
         public byte FrameId;
         public byte Length;
         public LinPlDirection Direction;
@@ -184,7 +184,7 @@ namespace PCAN_Client.LIN_API
     [StructLayout(LayoutKind.Sequential)]
     internal struct LinPlFrameEntry
     {
-        /// <summary>帧 ID（0-63）</summary>
+        /// <summary>裸帧 ID（0-63，不含奇偶校验位）</summary>
         public byte FrameId;
         public byte Length;
         public LinPlDirection Direction;
@@ -358,7 +358,40 @@ namespace PCAN_Client.LIN_API
         [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_GetPID")]
         internal static extern LinPlError GetPID(ref byte pFrameId);
 
-        [DllImport("PLinApi.dll", CallingConvention = CallingConvention.StdCall, EntryPoint = "LIN_GetSystemTime")]
-        internal static extern LinPlError GetSystemTime(out UInt64 pTargetTime);
+        // ==================== 结构体布局契约 ====================
+
+        /// <summary>
+        /// 校验官方结构体布局与字段偏移（PLinApi.h #pragma pack(8)）：
+        /// TLINMsg=13、TLINRcvMsg=40、TLINFrameEntry=14、TLINScheduleSlot=20。
+        /// 逐个 Marshal.SizeOf/OffsetOf 断言；返回空表示通过，否则返回首个不符项中文描述。
+        /// 连接前调用：编组布局一旦漂移，ReadMulti/Write 会读回垃圾或越界，此断言把故障
+        /// 提前到连接阶段暴露，而非堆到"零接收"排查。
+        /// </summary>
+        internal static string VerifyStructContract()
+        {
+            var sb = new System.Text.StringBuilder();
+            void Fail(string what, int got, int expect)
+            {
+                if (sb.Length > 0) sb.Append("；");
+                sb.Append(what).Append("=").Append(got).Append("，期望 ").Append(expect);
+            }
+            if (Marshal.SizeOf(typeof(LinPlMsg)) != 13) Fail("TLINMsg.SizeOf", Marshal.SizeOf(typeof(LinPlMsg)), 13);
+            if (Marshal.SizeOf(typeof(LinPlRcvMsg)) != 40) Fail("TLINRcvMsg.SizeOf", Marshal.SizeOf(typeof(LinPlRcvMsg)), 40);
+            if (Marshal.SizeOf(typeof(LinPlFrameEntry)) != 14) Fail("TLINFrameEntry.SizeOf", Marshal.SizeOf(typeof(LinPlFrameEntry)), 14);
+            if (Marshal.SizeOf(typeof(LinPlScheduleSlot)) != 20) Fail("TLINScheduleSlot.SizeOf", Marshal.SizeOf(typeof(LinPlScheduleSlot)), 20);
+            if ((int)Marshal.OffsetOf(typeof(LinPlMsg), "Data") != 4) Fail("TLINMsg.Data", (int)Marshal.OffsetOf(typeof(LinPlMsg), "Data"), 4);
+            if ((int)Marshal.OffsetOf(typeof(LinPlMsg), "Checksum") != 12) Fail("TLINMsg.Checksum", (int)Marshal.OffsetOf(typeof(LinPlMsg), "Checksum"), 12);
+            if ((int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "Data") != 5) Fail("TLINRcvMsg.Data", (int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "Data"), 5);
+            if ((int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "Checksum") != 13) Fail("TLINRcvMsg.Checksum", (int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "Checksum"), 13);
+            if ((int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "ErrorFlags") != 16) Fail("TLINRcvMsg.ErrorFlags", (int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "ErrorFlags"), 16);
+            if ((int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "TimeStamp") != 24) Fail("TLINRcvMsg.TimeStamp", (int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "TimeStamp"), 24);
+            if ((int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "hHw") != 32) Fail("TLINRcvMsg.hHw", (int)Marshal.OffsetOf(typeof(LinPlRcvMsg), "hHw"), 32);
+            if ((int)Marshal.OffsetOf(typeof(LinPlFrameEntry), "Flags") != 4) Fail("TLINFrameEntry.Flags", (int)Marshal.OffsetOf(typeof(LinPlFrameEntry), "Flags"), 4);
+            if ((int)Marshal.OffsetOf(typeof(LinPlFrameEntry), "InitialData") != 6) Fail("TLINFrameEntry.InitialData", (int)Marshal.OffsetOf(typeof(LinPlFrameEntry), "InitialData"), 6);
+            if ((int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "FrameId") != 4) Fail("TLINScheduleSlot.FrameId", (int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "FrameId"), 4);
+            if ((int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "CountResolve") != 12) Fail("TLINScheduleSlot.CountResolve", (int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "CountResolve"), 12);
+            if ((int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "Handle") != 16) Fail("TLINScheduleSlot.Handle", (int)Marshal.OffsetOf(typeof(LinPlScheduleSlot), "Handle"), 16);
+            return sb.ToString();
+        }
     }
 }

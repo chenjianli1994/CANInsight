@@ -27,13 +27,10 @@ namespace PCAN_Client.LIN_API
             return (byte)(~sum & 0xFF);
         }
 
-        /// <summary>由裸帧 ID 计算 LIN 受保护 ID（ID6/ID7 为奇偶校验位）。</summary>
+        /// <summary>由裸帧 ID 计算 LIN 受保护 ID（ID6/ID7 为奇偶校验位）。委托 LinPidCodec，保证单一实现。</summary>
         public static byte GetProtectedId(byte pid)
         {
-            byte id = (byte)(pid & 0x3F);
-            byte p0 = (byte)(((id >> 0) ^ (id >> 1) ^ (id >> 2) ^ (id >> 4)) & 1);
-            byte p1 = (byte)((((id >> 1) ^ (id >> 3) ^ (id >> 4) ^ (id >> 5) ^ 1) & 1));
-            return (byte)(id | (p0 << 6) | (p1 << 7));
+            return LinPidCodec.ToProtectedPid(pid);
         }
 
         /// <summary>

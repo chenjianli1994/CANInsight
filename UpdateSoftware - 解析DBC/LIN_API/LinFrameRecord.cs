@@ -106,7 +106,7 @@ namespace PCAN_Client.LIN_API
         public ulong TimestampUs;
         /// <summary>逻辑 LIN 通道号（1 起）</summary>
         public byte LogicChannel;
-        /// <summary>受保护帧 ID（PID，0x00-0x3F）</summary>
+        /// <summary>裸帧 ID（0x00-0x3F，不含奇偶校验位；奇偶位只在硬件边界生成/剥离，见 LinPidCodec）</summary>
         public byte Pid;
         /// <summary>方向</summary>
         public LinFrameDir Direction;

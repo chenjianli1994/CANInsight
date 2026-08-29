@@ -1,6 +1,4 @@
-# Build output
-bin/
-obj/
+​.build-check/
 
 # NuGet restore output (use packages.config to restore)
 packages/
