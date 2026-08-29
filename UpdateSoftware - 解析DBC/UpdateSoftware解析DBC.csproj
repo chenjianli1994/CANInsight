@@ -377,7 +377,6 @@
     <Compile Include="DataLog\LogFileToCSV.Designer.cs">
       <DependentUpon>LogFileToCSV.cs</DependentUpon>
     </Compile>
-    <Compile Include="DataLog\Log.cs" />
     <Compile Include="DataLog\Logging.cs">
       <SubType>Form</SubType>
     </Compile>

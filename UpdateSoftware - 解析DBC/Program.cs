@@ -63,15 +63,15 @@ namespace PCAN_Client
             };
             PCAN_Client.CAN_API.CAN_API.BlfWriteRequest += (id, data, ts, blfCh) =>
             {
-                try { DataLog.Log.AddCanMessageToWrite(id, data, ts, blfCh); } catch { }
+                try { CAN_Data.Recorder.AddCanMessageToWrite(id, data, ts, blfCh); } catch { }
             };
             PCAN_Client.CAN_API.CAN_API.BlfFlushRequest += () =>
             {
-                try { DataLog.Log.ContinuousWriteWorker(); } catch { }
+                try { CAN_Data.Recorder.FlushCanWriteQueue(); } catch { }
             };
             PCAN_Client.CAN_API.CAN_API.AscWriteRequest += (text, addr) =>
             {
-                try { DataLog.Log.saveLog(text, addr); } catch { }
+                try { CAN_Data.Recorder.saveLog(text, addr); } catch { }
             };
             PCAN_Client.CAN_API.CAN_API.CanoeTxLinkDead += () =>
             {

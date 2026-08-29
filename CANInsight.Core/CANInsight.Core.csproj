@@ -61,6 +61,7 @@
     <Compile Include="CAN_Data\DbcHelper.cs" />
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
     <Compile Include="CAN_Data\FileLoader.cs" />
+    <Compile Include="CAN_Data\Recorder.cs" />
     <Compile Include="CAN_Data\blf\BinlogReadWrite.cs" />
     <Compile Include="CAN_Data\blf\BLFAPI.cs" />
     <Compile Include="CAN_Data\blf\CANEntity.cs" />

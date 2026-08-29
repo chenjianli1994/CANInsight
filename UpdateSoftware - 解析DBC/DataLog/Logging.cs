@@ -92,46 +92,20 @@ namespace PCAN_Client.DataLog
             }
             else
             {
-                // 关闭旧的BLF句柄（文件溢出时创建新文件）
-                if (NowBLFFileHandle != IntPtr.Zero)
-                {
-                    // 只刷队列数据，不检查文件大小（防止递归触发newFile）
-                    Log.ContinuousWriteWorker();
-                    BLFAPI.BLCloseHandle(NowBLFFileHandle);
-                    NowBLFFileHandle = IntPtr.Zero;
-                }
-                Log.SetTimeUs(0);
-                NowBLFFileAddr_str = LoggingSet.FileAddress + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".blf";
                 if (SaveCSVPath.Equals("") && LoggingSet.saveExcelFlag)
                 {
                     SaveCSVPath = Path.ChangeExtension(NowBLFFileAddr_str, ".csv");
                     highSpeedExcelWriter = new HighSpeedExcelWriter(SaveCSVPath);
                 }
-                /*********************创建BLF文件**********************/
-                IntPtr blfHandle = BLFAPI.BLCreateFileW(NowBLFFileAddr_str, GENERIC.GENERIC_WRITE);
-                if (blfHandle == IntPtr.Zero)
+                // BLF 文件创建/写队列/连续写线程/分割 由 Core Recorder 统一管理
+                string path = CAN_Data.Recorder.StartBlf(LoggingSet.FileAddress);
+                if (string.IsNullOrEmpty(path))
                 {
-                    System.Diagnostics.Debug.WriteLine($"创建BLF文件失败: {NowBLFFileAddr_str}");
+                    System.Diagnostics.Debug.WriteLine("创建BLF文件失败");
                     SaveFlag = false;
                     return;
                 }
-                BLFAPI.BLSetApplication(blfHandle, BLAppID.BL_APPID_CANALYZER, 3, 0, 1);
-                int timeSize = Marshal.SizeOf<SYSTEMTIME>();
-                IntPtr timePtr = Marshal.AllocHGlobal(timeSize);
-                SYSTEMTIME systemTime = new SYSTEMTIME();
-                DateTime now = DateTime.Now;
-                systemTime.wYear = (UInt16)now.Year;
-                systemTime.wMonth = (UInt16)now.Month;
-                systemTime.wDay = (UInt16)now.Day;
-                systemTime.wHour = (UInt16)now.Hour;
-                systemTime.wMinute = (UInt16)now.Minute;
-                systemTime.wSecond = (UInt16)now.Second;
-                Marshal.StructureToPtr(systemTime, timePtr, false);
-                BLFAPI.BLSetMeasurementStartTime(blfHandle, timePtr);
-                Marshal.FreeHGlobal(timePtr);
-                BLFAPI.BLSetWriteOptions(blfHandle, 0, 0); // 减少内部缓存，确保及时写入
-                NowBLFFileHandle = blfHandle;
-                System.Diagnostics.Debug.WriteLine($"BLF文件创建成功: {NowBLFFileAddr_str}, handle={NowBLFFileHandle}");
+                NowBLFFileAddr_str = path;
             }
 
             SaveFlag = true;
@@ -266,13 +240,8 @@ namespace PCAN_Client.DataLog
             timer2.Stop();
             timer3.Stop();
             NowASCFileAddr = "";
-            // 关闭BLF文件句柄并刷新剩余数据
-            if (NowBLFFileHandle != IntPtr.Zero)
-            {
-                Log.ContinuousWriteWorker();
-                BLFAPI.BLCloseHandle(NowBLFFileHandle);
-                NowBLFFileHandle = IntPtr.Zero;
-            }
+            // BLF 文件关闭/队列刷新由 Core Recorder 统一管理
+            CAN_Data.Recorder.StopBlf();
             SaveFlag = false;
             ResistanceSleep.ResotreSleep();
         }
