@@ -800,7 +800,7 @@ namespace PCAN_Client.CAN_Data
 
             return result;
         }
-        private static ulong ExtractRawValue(byte[] data, Signal signal)
+        public static ulong ExtractRawValue(byte[] data, Signal signal)
         {
             int startBit = (int)signal.startBit;
             int size = (int)signal.signalSize;
@@ -934,8 +934,8 @@ namespace PCAN_Client.CAN_Data
             return (cmdValue - signal.offset) / signal.factor;
         }
 
-        // 单个信号编码到字节数组
-        private static void EncodeSingleSignal(byte[] data, Signal signal, long rawValue)
+        // 单个信号编码到字节数组（E2E CRC/计数器位写入复用）
+        public static void EncodeSingleSignal(byte[] data, Signal signal, long rawValue)
         {
             int startBit = (int)signal.startBit;
             int size = (int)signal.signalSize;
