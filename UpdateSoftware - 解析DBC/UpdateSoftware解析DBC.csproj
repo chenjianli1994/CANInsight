@@ -295,9 +295,14 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\CANInsight.Core\CANInsight.Core.csproj">
+      <Project>{F9E7B2C4-8A1D-4B3E-9C5F-6D2E8A1B4C7D}</Project>
+      <Name>CANInsight.Core</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="AutoSizeFormClass.cs" />
     <Compile Include="BaseParamter.cs" />
-    <Compile Include="BaudrateConfig.cs" />
     <Compile Include="CanSend.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -311,13 +316,9 @@
     <Compile Include="ScriptEngine\ScriptRunner.cs" />
     <Compile Include="CAN_API\Canoe_API\CanOe_API.cs" />
     <Compile Include="CAN_API\CAN_API.cs" />
-    <Compile Include="CAN_API\HwChannelInfo.cs" />
     <Compile Include="CAN_API\ChannelManagerForm.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="CAN_Data\blf\BinlogReadWrite.cs" />
-    <Compile Include="CAN_Data\blf\BLFAPI.cs" />
-    <Compile Include="CAN_Data\blf\CANEntity.cs" />
     <Compile Include="CAN_Data\CAN_Data.cs" />
     <Compile Include="CAN_Data\DbcHelper.cs" />
     <Compile Include="CAN_Data\ExceptionHandler.cs" />
@@ -518,6 +519,7 @@
       <_RedundantFiles Include="$(OutDir)*.dll" />
       <_RedundantFiles Include="$(OutDir)*.xml" />
       <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
+      <_RedundantFiles Remove="$(OutDir)CANInsight.Core.dll" />
       <_RedundantFiles Include="$(OutDir)costura-win-x64\*.dll" />
       <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
     </ItemGroup>

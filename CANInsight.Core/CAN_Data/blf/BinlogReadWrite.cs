@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace PCAN_Client.CAN_Data.blf
 {
-    internal class BinlogReadWrite
+    public class BinlogReadWrite
     {
         //throw Exception
         public static List<MessageBase> readBLF(string path)
