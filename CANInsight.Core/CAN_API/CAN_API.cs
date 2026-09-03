@@ -19,7 +19,6 @@ namespace PCAN_Client.CAN_API
         static Stopwatch sw = new Stopwatch();
         static ulong time_us_last = 0;
         static long startTime;
-        static readonly long refersh = (long)(0.5 * 1000 * 1000); /* 100ms */
 
         // 添加批量处理相关的成员变量
         private static readonly StringBuilder _ascBuffer = new StringBuilder();
@@ -135,10 +134,7 @@ namespace PCAN_Client.CAN_API
         {
             ulong time_us;
             TPCANMsg msg = new TPCANMsg();
-            TPCANTimestamp timesamp = new TPCANTimestamp();
             sw.Start();
-            string tempStr;
-            FileInfo fileInfo = null;
 
             CanTransmitLastTicks = sw.ElapsedTicks;
 

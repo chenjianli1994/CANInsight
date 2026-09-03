@@ -31,7 +31,6 @@ namespace PCAN_Client
 {        
     public partial class CanSend : Form
     {
-        bool aliveFlag = true;
         internal enum dataGridView2ColumnEnum
         {
             MessageID = 0,
@@ -687,7 +686,6 @@ namespace PCAN_Client
             }
 
             RebuildMessagesTable();
-            aliveFlag = true;
 
 
             //// 创建多消息调度器
@@ -880,7 +878,7 @@ namespace PCAN_Client
                     ("SignalName", "信号名"), ("Value", "物理值"), ("RawValue", "原始值"));
 
                 dataGridView1.Refresh();
-            }catch (Exception ex) { }
+            } catch { }
 
         }
 
@@ -1118,7 +1116,6 @@ namespace PCAN_Client
 
         private void CanSend_FormClosed(object sender, FormClosedEventArgs e)
         {
-            aliveFlag = false;
             DisposeScriptRunner(); // 停脚本+移除"CAN_Script"调度动作+退订接收事件
             multiMessageCANScheduler.Dispose();
             Main.canSend = null;
@@ -1571,7 +1568,6 @@ namespace PCAN_Client
             private class CANMessageScheduleQueue
             {
                 private readonly SortedSet<CANMessageSchedule> _sortedSet;
-                private long _sequenceNumber = 0; // 用于处理相同触发时间的元素
 
                 public int Count => _sortedSet.Count;
 

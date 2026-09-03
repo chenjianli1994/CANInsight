@@ -24,7 +24,6 @@ namespace PCAN_Client.ReportAuto
         private string _currentPath;        // 当前累积报告(读写)
         private PresentationDocument _reportDoc;
         private bool _firstPageFilled = false;
-        private bool _disposed = false;
 
         public int PageCount
         {
@@ -484,6 +483,6 @@ namespace PCAN_Client.ReportAuto
             _firstPageFilled = false;
         }
 
-        public void Dispose() { Close(); _disposed = true; }
+        public void Dispose() { Close(); }
     }
 }

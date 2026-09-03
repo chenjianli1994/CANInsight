@@ -106,7 +106,6 @@ namespace PCAN_Client
         private double _loadingBatchMaxTime = 0;
         private int _loadingProcessedCount = 0;
         private int _lastPopupShownCount = -1;       // 上次弹窗显示的数量，避免闪烁
-        private bool _loadingComplete = false;
         private ToolStripMenuItem menuItemSelectAll;
         private ToolStripMenuItem menuItemDeselectAll;
         private ToolStripMenuItem menuItemDelete;
@@ -139,7 +138,6 @@ namespace PCAN_Client
         private long _streamingTotalCount;                       // 流式模式下报文总数（仅用于状态显示）
         private double _fileMaxTime = 0;                         // 文件中的最大时间戳
         private bool _isFileMode = false;                        // 是否为文件模式（已加载文件数据）
-        private volatile bool _loadingCancelled;                  // 加载取消标记（内存模式）
         private volatile bool _cancelPlayback;                     // 停止播放标记（流式模式）
         private volatile bool _cacheWhileStreaming;               // 内存模式首次播放：边读边缓存
         private string _playbackModeText = "实时数据";            // 播放时确定的模式文本（用于指示器显示）
@@ -4126,7 +4124,6 @@ namespace PCAN_Client
                     channel.Clear();
             }
             _currentTime = 0;
-            _loadingComplete = false;
             _isLoadingFile = true;
             _rawMessages = null;
 
@@ -4142,7 +4139,6 @@ namespace PCAN_Client
             int thresholdMB = GetStreamingThresholdMB();
             _streamingMode = (totalSizeMB > thresholdMB);
             _isFileMode = true;
-            _loadingComplete = true;
             _fileMaxTime = 0;
 
             _isLoadingFile = false;
@@ -4733,7 +4729,6 @@ namespace PCAN_Client
 
         public class dateread
         {
-            private string sourceFilePath = "";
             public double[] saveExcelTimeBuf = new double[8] { 0.1, 0.5, 1, 2, 3, 4, 5, 10 };
             public bool saveExcelFlag = false;
             public bool saveAscFlag = false;

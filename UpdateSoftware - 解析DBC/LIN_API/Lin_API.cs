@@ -815,6 +815,7 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public static void OnLinkLost(byte logicChannel, string reason, object sender)
         {
+            LinkLost?.Invoke(logicChannel, reason); // 通知 UI 链路丢失（自动重连在下方进行）
             Task.Run(async () =>
             {
                 string lastErr = "";

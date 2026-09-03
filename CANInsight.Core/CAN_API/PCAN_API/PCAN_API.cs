@@ -24,8 +24,6 @@ namespace PCAN_Client.PCAN_API
         Boolean CanFDFlag = false;
         string bitrateFD = "f_clock_mhz=60, nom_brp=12, nom_tseg1=7, nom_tseg2=2, nom_sjw=1, data_brp=3, data_tseg1=7, data_tseg2=2, data_sjw=1"; /* 500k + 2M */
 
-        Action action = null;
-
         //[DllImport("winmm")]
         //static extern void timeBeginPeriod(int t);
         //[DllImport("winmm")]

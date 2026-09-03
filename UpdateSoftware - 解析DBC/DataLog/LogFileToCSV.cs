@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Data;
 using System.Drawing;
 using System.IO;
@@ -846,7 +846,6 @@ namespace PCAN_Client.DataLog
 
             // 使用更大的缓冲区提高读取性能
             const int BUFFER_SIZE = 512 * 1024; // 512KB缓冲区
-            const int BATCH_SIZE = 2000; // 批量处理2000条消息
 
             using (FileStream ascFileStream = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, BUFFER_SIZE))
             using (StreamReader reader = new StreamReader(ascFileStream, Encoding.UTF8, true, BUFFER_SIZE))

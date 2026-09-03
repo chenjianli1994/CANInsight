@@ -42,7 +42,6 @@ namespace PCAN_Client
         private Pen _zoomPen = new Pen(Color.Blue, 1) { DashStyle = DashStyle.Dash };
         private Brush _zoomBrush = new SolidBrush(Color.FromArgb(50, Color.Blue));
         private readonly object _lockObj = new object();
-        private int _activePanelIndex = -1;
         private double _globalXMin = 0;
         private double _globalXMax = 10;
         private bool _autoScroll = false;

@@ -90,9 +90,9 @@ namespace PCAN_Client.Canoe_API
                 XLDefine.XL_Status status = xlDriver.XL_ClosePort(portHandle);
                 status = xlDriver.XL_DeactivateChannel(portHandle, appChannelMask);
             }
-            catch (Exception e)
+            catch
             {
-                //MessageBox.Show(e.ToString());
+                // 关闭异常不阻断释放流程
             }
         }
         /// <summary>打开CANoe port并激活mask内通道。CanFDFlag为mask内无通道配置行的兜底模式：

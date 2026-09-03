@@ -102,7 +102,6 @@ namespace PCAN_Client.CAN_Data
         }
         public void CANDataDeal(uint ID, ushort len, byte[] data, ulong us, byte channel = 1)
         {
-            int index = 0;
             int index2 = 0;
             string rawValue = "";
             DbcHelper routedHelper;
@@ -181,7 +180,7 @@ namespace PCAN_Client.CAN_Data
                                     }
                                 }
                             }
-                            catch (Exception ex)
+                            catch
                             {
                                 if (false == (message.signals[index2].unitStr.Equals("\"\"")) &&
                                    (false == (message.signals[index2].unitStr.Equals("-"))))
@@ -844,7 +843,7 @@ namespace PCAN_Client.CAN_Data
                     double physicalValue = ConvertToPhysicalValue(canData, signal);
                     result.Add(signal.signalName, physicalValue);
                 }
-                catch (Exception ex)
+                catch
                 {
                     //Console.WriteLine($"解析信号 {signal.signalName} 失败: {ex.Message}");
                 }
