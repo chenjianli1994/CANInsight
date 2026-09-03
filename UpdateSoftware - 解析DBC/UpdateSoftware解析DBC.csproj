@@ -492,22 +492,19 @@
   </Target>
   <Import Project="..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets" Condition="Exists('..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets')" />
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
-  <!-- 内树依赖DLL扁平化拷贝到输出根目录（Lib\... 在项目目录树内，不能用 Link，改用构建后 Copy 保持输出根目录的平铺 DLL） -->
-  <Target Name="CopyFlatRuntimeDlls" AfterTargets="Build">
-    <Copy SourceFiles="Lib\PCANBasic.NET.dll;Lib\Newtonsoft.Json.dll;Lib\Vector Canoe\vxlapi_NET.dll"
-          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
-  </Target>
+  <!-- 主程序CANInsight.exe由Costura单exe打包(自包含), 输出根目录只需exe/config/模板/运行时文件,
+      清理所有散落的DLL/XML/PDB, 与publish_update.ps1的"无未打包DLL/XML/PDB"校验一致 -->
   <Target Name="CleanBundledArtifacts" AfterTargets="Build">
     <ItemGroup>
-      <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)CANInsight.Core.dll;$(OutDir)PCANBasic.NET.dll;$(OutDir)vxlapi_NET.dll;$(OutDir)Newtonsoft.Json.dll" />
+      <_RedundantFiles Include="$(OutDir)*.dll" />
+      <_RedundantFiles Include="$(OutDir)*.pdb" />
       <_RedundantFiles Include="$(OutDir)*.xml" />
       <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
       <_RedundantFiles Include="$(OutDir)costura-win-x64\*.dll" />
-      <_RedundantFiles Include="$(OutDir)CANInsight.pdb" />
     </ItemGroup>
     <Delete Files="@(_RedundantFiles)" />
     <RemoveDir Directories="$(OutDir)costura-win-x64" Condition="Exists('$(OutDir)costura-win-x64')" />
-    <Message Text="清理输出目录冗余 DLL/XML/PDB" Importance="high" />
+    <Message Text="清理输出目录冗余 DLL/PDB/XML" Importance="high" />
   </Target>
   <!-- Release 编译后自动生成 version.txt（内容取自 BaseParamter.softVersion），供局域网自更新发布使用 -->
   <Target Name="GenerateVersionTxt" AfterTargets="CleanBundledArtifacts" Condition="'$(Configuration)' == 'Release'">
