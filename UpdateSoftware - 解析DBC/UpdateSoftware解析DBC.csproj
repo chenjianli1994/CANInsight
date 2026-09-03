@@ -474,18 +474,9 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Lib\PCANBasic.NET.dll" />
-    <Content Include="Lib\PCANBasic.NET.dll">
-      <Link>PCANBasic.NET.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Lib\Newtonsoft.Json.dll">
-      <Link>Newtonsoft.Json.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Lib\Vector Canoe\vxlapi_NET.dll">
-      <Link>vxlapi_NET.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <Content Include="Lib\PCANBasic.NET.dll" />
+    <Content Include="Lib\Newtonsoft.Json.dll" />
+    <Content Include="Lib\Vector Canoe\vxlapi_NET.dll" />
     <Content Include="ReportAuto\templates\**\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -511,6 +502,11 @@
   </Target>
   <Import Project="..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets" Condition="Exists('..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets')" />
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
+  <!-- 内树依赖DLL扁平化拷贝到输出根目录（Lib\... 在项目目录树内，不能用 Link，改用构建后 Copy 保持输出根目录的平铺 DLL） -->
+  <Target Name="CopyFlatRuntimeDlls" AfterTargets="Build">
+    <Copy SourceFiles="Lib\PCANBasic.NET.dll;Lib\Newtonsoft.Json.dll;Lib\Vector Canoe\vxlapi_NET.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
   <Target Name="CleanBundledArtifacts" AfterTargets="Build">
     <ItemGroup>
       <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)CANInsight.Core.dll;$(OutDir)PCANBasic.NET.dll;$(OutDir)vxlapi_NET.dll;$(OutDir)Newtonsoft.Json.dll" />
