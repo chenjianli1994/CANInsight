@@ -640,12 +640,17 @@ namespace PCAN_Client
                 }
             }
 
-            // 圆点绘制：数据量少时显示（限制数量保证性能）
+            // 数据点绘制：点密度不超过每像素1个时显示（避免糊成一片），抽样上限300个保证性能
             bool showDots = totalPoints <= plotWidth || totalPoints <= 100;
-            if (showDots && totalPoints <= 500)
+            if (showDots)
             {
                 SolidBrush brush = GetCachedBrush(channel.Color);
-                int dotInterval = totalPoints > 200 ? totalPoints / 200 : 1;
+                // 半透明深色描边：浅色曲线(黄/白等)在白底上也清晰可辨
+                Pen outlinePen = GetCachedPen(Color.FromArgb(90, 0, 0, 0), 1f);
+                int dotInterval = pointsCount > 300 ? pointsCount / 300 : 1;
+                // 半径随渲染缩放等比放大(报告截图/高DPI一致)，默认2px(直径5px)
+                int dotRadius = Math.Max(1, (int)Math.Round(1.5f * _renderScale));
+                int dotDiameter = dotRadius * 2 + 1;
 
                 for (int i = 0; i < pointsCount; i += dotInterval)
                 {
@@ -655,7 +660,10 @@ namespace PCAN_Client
                     {
                         int screenX = ValueToScreenX(point.X, rect);
                         int screenY = ValueToScreenY(point.Y, yMin, yMax, rect);
-                        g.FillEllipse(brush, screenX - 1, screenY - 1, 3, 3);
+                        int dotX = screenX - dotRadius;
+                        int dotY = screenY - dotRadius;
+                        g.FillEllipse(brush, dotX, dotY, dotDiameter, dotDiameter);
+                        g.DrawEllipse(outlinePen, dotX, dotY, dotDiameter, dotDiameter);
                     }
                 }
             }
