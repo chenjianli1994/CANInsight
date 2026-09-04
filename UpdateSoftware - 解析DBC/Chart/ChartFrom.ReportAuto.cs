@@ -123,7 +123,8 @@ namespace PCAN_Client
             ReportAutoService.SetTemplatePath(templatePath);
             System.Diagnostics.Debug.WriteLine($"[ReportAuto] exe目录: {baseDir}");
             System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板原始路径: {templatePath}");
-            System.Diagnostics.Debug.WriteLine($"[ReportAuto] 模板实际路径: {ReportAutoService.GetTemplatePath()}");
+            // 注意:此处不调用GetTemplatePath()——那会立即触发DLP可读性验证(打开+cmd解密),
+            // 拖慢启动。验证按设计延迟到首次实际使用模板(AddReportPage)时执行。
         }
 
         /// <summary>按候选位置寻找默认单页模板</summary>
