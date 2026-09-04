@@ -18,6 +18,7 @@ namespace PCAN_Client
         private void InitializeComponent()
         {
             this.chkSelectAll = new System.Windows.Forms.CheckBox();
+            this.btnAddSelected = new System.Windows.Forms.Button();
             this.tableLayoutPanel1 = new System.Windows.Forms.TableLayoutPanel();
             this.panelTop = new System.Windows.Forms.Panel();
             this.lblTitle = new System.Windows.Forms.Label();
@@ -74,6 +75,7 @@ namespace PCAN_Client
             this.panelTop.Controls.Add(this.lblTitle);
             this.panelTop.Controls.Add(this.txtSearch);
             this.panelTop.Controls.Add(this.lblSearch);
+            this.panelTop.Controls.Add(this.btnAddSelected);
             this.panelTop.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panelTop.Location = new System.Drawing.Point(3, 3);
             this.panelTop.Name = "panelTop";
@@ -121,6 +123,16 @@ namespace PCAN_Client
             // 
             this.splitContainer1.Panel2.Controls.Add(this.dgvSignals);
             this.splitContainer1.Panel2.Controls.Add(this.chkSelectAll);
+            // btnAddSelected
+            // 
+            this.btnAddSelected.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
+            this.btnAddSelected.Location = new System.Drawing.Point(404, 5);
+            this.btnAddSelected.Name = "btnAddSelected";
+            this.btnAddSelected.Size = new System.Drawing.Size(100, 21);
+            this.btnAddSelected.TabIndex = 3;
+            this.btnAddSelected.Text = "添加选中信号";
+            this.btnAddSelected.UseVisualStyleBackColor = true;
+            this.btnAddSelected.Click += new System.EventHandler(this.btnAddSelected_Click);
             // 
             // chkSelectAll
             // 
@@ -328,5 +340,6 @@ namespace PCAN_Client
         private System.Windows.Forms.DataGridViewTextBoxColumn colSignalIndex;
         private System.Windows.Forms.DataGridViewCheckBoxColumn colSelect;
         private System.Windows.Forms.CheckBox chkSelectAll;
+        private System.Windows.Forms.Button btnAddSelected;
     }
 }

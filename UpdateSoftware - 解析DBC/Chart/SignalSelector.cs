@@ -376,6 +376,48 @@ namespace PCAN_Client
             }
         }
 
+        /// <summary>
+        /// 批量添加:把信号列表中选中的行(支持按住Ctrl/Shift多选)加入已选列表。
+        /// 通过设置勾选列触发CellValueChanged完成添加,与勾选/双击走同一逻辑(天然去重)。
+        /// </summary>
+        private void btnAddSelected_Click(object sender, EventArgs e)
+        {
+            if (dgvSignals.SelectedRows.Count == 0)
+            {
+                MessageBox.Show("请先在信号列表中选择要添加的信号（可按住Ctrl/Shift多选）！",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // 单选模式(占位符绑信号):一个占位符只能绑一个信号,只添加第一个选中行
+            var rows = SingleSelect
+                ? new List<DataGridViewRow> { dgvSignals.SelectedRows[0] }
+                : dgvSignals.SelectedRows.Cast<DataGridViewRow>().ToList();
+
+            _suppressUpdateList = true;
+            int added = 0;
+            foreach (var row in rows)
+            {
+                if (row.Tag is SigCtx)
+                {
+                    bool cur = Convert.ToBoolean(row.Cells[colSelect.Name].Value ?? false);
+                    if (!cur)
+                    {
+                        row.Cells[colSelect.Name].Value = true; // 触发CellValueChanged完成添加
+                        added++;
+                    }
+                }
+            }
+            _suppressUpdateList = false;
+            UpdateSelectedList();
+
+            if (added == 0)
+            {
+                MessageBox.Show("选中的信号已在已选列表中！", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+
         private void btnConfirm_Click(object sender, EventArgs e)
         {
             if (selectedSignals.Count == 0)
