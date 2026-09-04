@@ -492,11 +492,18 @@
   </Target>
   <Import Project="..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets" Condition="Exists('..\packages\Costura.Fody.6.0.0\build\Costura.Fody.targets')" />
   <Import Project="..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets" Condition="Exists('..\packages\System.ValueTuple.4.6.1\build\net471\System.ValueTuple.targets')" />
-  <!-- 主程序CANInsight.exe由Costura单exe打包(自包含), 输出根目录只需exe/config/模板/运行时文件,
-      清理所有散落的DLL/XML/PDB, 与publish_update.ps1的"无未打包DLL/XML/PDB"校验一致 -->
+  <!-- 内树依赖DLL扁平化拷贝到输出根目录（Lib\... 在项目目录树内，不能用 Link，改用构建后 Copy）。
+       PCANBasic.NET/Newtonsoft.Json/vxlapi_NET 为 Private=False 引用，Costura 不内嵌；
+       binlog.dll 为 BLF 录制的 native 依赖（Core BLFAPI P/Invoke），均需散落在 exe 旁 -->
+  <Target Name="CopyFlatRuntimeDlls" AfterTargets="Build">
+    <Copy SourceFiles="Lib\PCANBasic.NET.dll;Lib\Newtonsoft.Json.dll;Lib\Vector Canoe\vxlapi_NET.dll;costura-win-x64\binlog.dll"
+          DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <!-- Costura 内嵌了 CANInsight.Core/OpenXml/System.*，输出只需 exe/config/模板 + 上述三个运行时必需 DLL。
+       清理其余散落 DLL/PDB/XML（保留 ChartPresets.xml 与运行时必需三个 DLL） -->
   <Target Name="CleanBundledArtifacts" AfterTargets="Build">
     <ItemGroup>
-      <_RedundantFiles Include="$(OutDir)*.dll" />
+      <_RedundantFiles Include="$(OutDir)*.dll" Exclude="$(OutDir)PCANBasic.NET.dll;$(OutDir)Newtonsoft.Json.dll;$(OutDir)vxlapi_NET.dll;$(OutDir)binlog.dll" />
       <_RedundantFiles Include="$(OutDir)*.pdb" />
       <_RedundantFiles Include="$(OutDir)*.xml" />
       <_RedundantFiles Remove="$(OutDir)ChartPresets.xml" />
@@ -504,7 +511,7 @@
     </ItemGroup>
     <Delete Files="@(_RedundantFiles)" />
     <RemoveDir Directories="$(OutDir)costura-win-x64" Condition="Exists('$(OutDir)costura-win-x64')" />
-    <Message Text="清理输出目录冗余 DLL/PDB/XML" Importance="high" />
+    <Message Text="清理输出目录冗余 DLL/PDB/XML（保留运行时必需三个 DLL）" Importance="high" />
   </Target>
   <!-- Release 编译后自动生成 version.txt（内容取自 BaseParamter.softVersion），供局域网自更新发布使用 -->
   <Target Name="GenerateVersionTxt" AfterTargets="CleanBundledArtifacts" Condition="'$(Configuration)' == 'Release'">
