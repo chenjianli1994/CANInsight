@@ -2379,6 +2379,24 @@ namespace PCAN_Client
             StartBackfillBatch(newChannels, onComplete);
         }
 
+        /// <summary>后台线程安全地调度到UI线程:窗口已关闭则直接丢弃(补采结果无意义)</summary>
+        private void SafeBeginInvoke(Action action)
+        {
+            if (IsDisposed) return;
+            try
+            {
+                BeginInvoke(action);
+            }
+            catch (ObjectDisposedException)
+            {
+                // 窗口已关闭,丢弃
+            }
+            catch (InvalidOperationException)
+            {
+                // 句柄未创建/已销毁,丢弃
+            }
+        }
+
         private void StartBackfillBatch(List<ChannelData> batch, Action onComplete)
         {
             // 数据源:内存模式扫缓存帧;流式模式后台重新遍历文件;实时模式无历史数据直接回调
@@ -2413,7 +2431,7 @@ namespace PCAN_Client
                         if (frames % 50000 == 0)
                         {
                             long f = frames;
-                            BeginInvoke(new Action(() =>
+                            SafeBeginInvoke(new Action(() =>
                                 _statusLabel.Text = $"状态: 补采信号数据中... 已处理 {f / 10000} 万帧"));
                         }
                     }
@@ -2422,13 +2440,14 @@ namespace PCAN_Client
                 {
                     System.Diagnostics.Debug.WriteLine("[Backfill] 补采异常: " + ex.Message);
                 }
-                BeginInvoke(new Action(() => FinishBackfillBatch(onComplete)));
+                SafeBeginInvoke(new Action(() => FinishBackfillBatch(onComplete)));
             });
         }
 
         /// <summary>一批补采完成(回UI线程):有排队通道则继续下一批,否则收尾并回调</summary>
         private void FinishBackfillBatch(Action onComplete)
         {
+            if (IsDisposed) return; // 窗口已关闭,丢弃结果
             List<ChannelData> next = null;
             Action nextCb = null;
             lock (_backfillPending)
@@ -2466,6 +2485,7 @@ namespace PCAN_Client
         /// <summary>补采进行/结束的界面状态切换(进度条+取消按钮)</summary>
         private void SetBackfillUiState(bool running)
         {
+            if (IsDisposed) return; // 窗口已关闭,不再操作界面
             if (running)
             {
                 _progressBar.Style = ProgressBarStyle.Marquee;
