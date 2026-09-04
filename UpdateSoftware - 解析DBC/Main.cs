@@ -3130,11 +3130,19 @@ namespace PCAN_Client
             {
                 // 获取第一个选中项（在单选模式下就是双击的项）
                 ListViewItem selectedItem = listView1.SelectedItems[0];
-                if (null == chartFromShow || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
+                // 绘图窗口不存在、已销毁或已关闭 → 重新创建并显示；已存在但隐藏/最小化 → 确保可见并置前
+                if (null == chartFromShow || chartFromShow.IsDisposed || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
                 {
-                    //ChartShowOpenFlag = true;
                     chartFromShow = new ChartFrom();
                     chartFromShow.Show();
+                }
+                else
+                {
+                    if (chartFromShow.WindowState == FormWindowState.Minimized)
+                        chartFromShow.WindowState = FormWindowState.Normal;
+                    chartFromShow.Show();
+                    chartFromShow.BringToFront();
+                    chartFromShow.Activate();
                 }
                 //chartShow.AddOrRemoveChart(SelectMessageIndex, selectedItem.Text);
             }
@@ -3146,17 +3154,20 @@ namespace PCAN_Client
 
         private void button6_Click(object sender, EventArgs e)
         {
-            //if (null == signalChartShow || false == ChartShowOpenFlag)
-            //{
-            //    ChartShowOpenFlag = true;
-            //    signalChartShow = new SignalChartShow();
-            //    signalChartShow.Show();
-            //}
-            if (null == chartFromShow || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
+            // 绘图窗口不存在、已销毁或已关闭 → 重新创建并显示
+            if (null == chartFromShow || chartFromShow.IsDisposed || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
             {
-                //ChartShowOpenFlag = true;
                 chartFromShow = new ChartFrom();
                 chartFromShow.Show();
+            }
+            // 窗口已存在但可能被隐藏/最小化/置后 → 确保可见并置前
+            else
+            {
+                if (chartFromShow.WindowState == FormWindowState.Minimized)
+                    chartFromShow.WindowState = FormWindowState.Normal;
+                chartFromShow.Show();
+                chartFromShow.BringToFront();
+                chartFromShow.Activate();
             }
         }
 
