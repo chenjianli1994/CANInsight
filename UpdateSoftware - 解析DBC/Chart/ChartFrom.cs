@@ -62,6 +62,8 @@ namespace PCAN_Client
         private ToolStripDropDownButton _toolSignalGroup;   // 信号组(加载/保存)下拉
         private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
+        private ToolStripComboBox _toolLineWidthComboBox;   // 全局线宽选择(对所有信号同时生效)
+        private int _globalLineWidth = 2;                   // 当前全局线宽(新通道默认继承)
         private ToolStripDropDownButton _toolMore;
         private ToolStripTextBox _txtStartTime;
         private ToolStripTextBox _txtEndTime;
@@ -74,11 +76,6 @@ namespace PCAN_Client
         private Label _speedLabel;        // 倍速标签
         private DataGridView _channelGrid;
         private int _channelDragRowIndex = -1;
-        // 线宽选择菜单:复用实例+Timer延迟显示(与ChartControl测量线菜单同模式,避免点击失效)
-        private ContextMenuStrip _lineWidthMenu;
-        private Timer _lineWidthMenuTimer;
-        private int _lineWidthMenuRow = -1;
-        private Rectangle _lineWidthMenuBounds;
         private Rectangle _channelDragBoxFromMouseDown = Rectangle.Empty;
         private int _channelDropInsertIndex = -1;
         private GroupBox _controlGroup;
@@ -432,6 +429,7 @@ namespace PCAN_Client
             this._toolStart = new System.Windows.Forms.ToolStripButton();
             this._toolStop = new System.Windows.Forms.ToolStripButton();
             this._toolSpeedComboBox = new System.Windows.Forms.ToolStripComboBox();
+            this._toolLineWidthComboBox = new System.Windows.Forms.ToolStripComboBox();
             this._toolShowAll = new System.Windows.Forms.ToolStripButton();
             this._toolAutoScroll = new System.Windows.Forms.ToolStripButton();
             this._toolClear = new System.Windows.Forms.ToolStripButton();
@@ -670,6 +668,9 @@ namespace PCAN_Client
             this._analysisToolStrip.GripStyle = System.Windows.Forms.ToolStripGripStyle.Hidden;
             this._analysisToolStrip.ImageScalingSize = new System.Drawing.Size(20, 20);
             this._analysisToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
+            new System.Windows.Forms.ToolStripLabel("线宽:"),
+            this._toolLineWidthComboBox,
+            new System.Windows.Forms.ToolStripSeparator(),
             new System.Windows.Forms.ToolStripLabel("区间:"),
             this._txtStartTime,
             new System.Windows.Forms.ToolStripLabel("~"),
@@ -748,6 +749,15 @@ namespace PCAN_Client
             this._toolSpeedComboBox.Size = new System.Drawing.Size(80, 25);
             this._toolSpeedComboBox.ToolTipText = "播放倍速";
             this._toolSpeedComboBox.SelectedIndexChanged += new System.EventHandler(this._toolSpeedComboBox_SelectedIndexChanged);
+            //
+            // _toolLineWidthComboBox
+            //
+            this._toolLineWidthComboBox.AutoSize = false;
+            this._toolLineWidthComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this._toolLineWidthComboBox.Name = "_toolLineWidthComboBox";
+            this._toolLineWidthComboBox.Size = new System.Drawing.Size(64, 25);
+            this._toolLineWidthComboBox.ToolTipText = "曲线线宽(对所有信号同时生效)";
+            this._toolLineWidthComboBox.SelectedIndexChanged += new System.EventHandler(this._toolLineWidthComboBox_SelectedIndexChanged);
             //
             // _toolShowAll
             //
@@ -1095,6 +1105,13 @@ namespace PCAN_Client
                 _toolSpeedComboBox.Items.Add(item);
             }
 
+            // 全局线宽:1~5px,默认2px,选中即应用到所有通道
+            foreach (int w in new int[] { 1, 2, 3, 4, 5 })
+            {
+                _toolLineWidthComboBox.Items.Add(w + " px");
+            }
+            _toolLineWidthComboBox.SelectedIndex = _globalLineWidth - 1;
+
             // 信号组下拉:加载/保存成对
             _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("加载信号组", null, _btnLoadPreset_Click));
             _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("保存信号组", null, _btnSavePreset_Click));
@@ -1276,17 +1293,6 @@ namespace PCAN_Client
             colorColumn.ReadOnly = true;
             colorColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
-            DataGridViewTextBoxColumn widthColumn = new DataGridViewTextBoxColumn();
-            widthColumn.Name = "LineWidth";
-            widthColumn.HeaderText = "线宽";
-            widthColumn.Width = 44;
-            widthColumn.MinimumWidth = 44;
-            widthColumn.Resizable = DataGridViewTriState.False;
-            widthColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            widthColumn.ReadOnly = true;
-            widthColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
-            widthColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
             DataGridViewTextBoxColumn signalColumn = new DataGridViewTextBoxColumn();
             signalColumn.Name = "Signal";
             signalColumn.HeaderText = "信号";
@@ -1316,7 +1322,6 @@ namespace PCAN_Client
 
             _channelGrid.Columns.Add(visibleColumn);
             _channelGrid.Columns.Add(colorColumn);
-            _channelGrid.Columns.Add(widthColumn);
             _channelGrid.Columns.Add(signalColumn);
             _channelGrid.Columns.Add(valueColumn);
             _channelGrid.Columns.Add(deltaColumn);
@@ -1336,10 +1341,9 @@ namespace PCAN_Client
                 {
                     channel.Visible = false;
                 }
-                int rowIndex = _channelGrid.Rows.Add(isChecked, string.Empty, channel.LineWidth.ToString(), GetChannelDisplayName(channel), string.Empty, string.Empty);
+                int rowIndex = _channelGrid.Rows.Add(isChecked, string.Empty, GetChannelDisplayName(channel), string.Empty, string.Empty);
                 _channelGrid.Rows[rowIndex].Tag = channel;
                 _channelGrid.Rows[rowIndex].Cells["Color"].ToolTipText = "点击修改颜色";
-                _channelGrid.Rows[rowIndex].Cells["LineWidth"].ToolTipText = "点击修改线宽";
                 _channelGrid.Rows[rowIndex].Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
                 displayIndex++;
             }
@@ -1513,13 +1517,6 @@ namespace PCAN_Client
         private void ChartFrom_FormClosed(object sender, FormClosedEventArgs e)
         {
             CAN_Data.DbcHelper.ChartShowOpenFlag = false;
-
-            // 释放线宽菜单资源
-            _lineWidthMenuTimer?.Stop();
-            _lineWidthMenuTimer?.Dispose();
-            _lineWidthMenuTimer = null;
-            _lineWidthMenu?.Dispose();
-            _lineWidthMenu = null;
 
             // 主动触发GC回收大块内存（gen2）
             GC.Collect();
@@ -2030,6 +2027,20 @@ namespace PCAN_Client
             }
 
             SyncToolbarStateFromLegacyControls();
+        }
+
+        /// <summary>全局线宽改变:应用到所有通道并刷新绘图(新通道创建时继承_globalLineWidth)</summary>
+        private void _toolLineWidthComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_toolLineWidthComboBox.SelectedIndex < 0) return;
+            _globalLineWidth = _toolLineWidthComboBox.SelectedIndex + 1;
+
+            if (Channels == null || _chartControl == null) return;
+            foreach (var ch in Channels)
+            {
+                if (ch != null) ch.LineWidth = _globalLineWidth;
+            }
+            _chartControl.Invalidate();
         }
 
         /// <summary>
@@ -2992,9 +3003,11 @@ namespace PCAN_Client
                         Color color = colors[channelCount % colors.Length];
                         string channelName = TruncateName($"{signal.SignalName} ({signal.SignalComment})");
 
-                        Channels.Add(new ChannelData(channelName, color, DateTime.Now, signal.EnumDefinitions, signal.Unit,
+                        ChannelData newCh = new ChannelData(channelName, color, DateTime.Now, signal.EnumDefinitions, signal.Unit,
                             (double)(signal.CycleTime / 1000.0f), (int)signal.MsgId, signal.MsgIndex, signal.SignalIndex,
-                            signal.SignalName, signal.BusChannelIndex));
+                            signal.SignalName, signal.BusChannelIndex);
+                        newCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
+                        Channels.Add(newCh);
                         _chartControl.SetChannels(Channels);
 
                         // 从通道DBC取报文对象，注册调度并设置ChartShowFlag
@@ -3065,10 +3078,6 @@ namespace PCAN_Client
             {
                 ChangeChannelColorAtRow(e.RowIndex);
             }
-            else if (columnName == "LineWidth")
-            {
-                ChangeChannelLineWidthAtRow(e.RowIndex);
-            }
         }
 
         private void _channelGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -3080,65 +3089,6 @@ namespace PCAN_Client
 
             bool isChecked = GetChannelRowChecked(e.RowIndex);
             SetChannelRowChecked(e.RowIndex, !isChecked);
-        }
-
-        /// <summary>
-        /// 弹出线宽选择菜单并应用到通道,同时更新网格显示与绘图区
-        /// </summary>
-        private void ChangeChannelLineWidthAtRow(int rowIndex)
-        {
-            ChannelData channel = GetChannelFromRow(rowIndex);
-            if (channel == null) return;
-
-            _lineWidthMenuRow = rowIndex;
-            _lineWidthMenuBounds = _channelGrid.GetCellDisplayRectangle(
-                _channelGrid.Columns["LineWidth"].Index, rowIndex, false);
-
-            // 复用同一个菜单实例(与ChartControl测量线菜单同模式):每次新建+Closed释放
-            // 会与DataGridView的输入处理产生竞态,导致菜单显示后点击被当作"菜单外"。
-            if (_lineWidthMenu == null)
-            {
-                _lineWidthMenu = new ContextMenuStrip();
-                foreach (int width in new int[] { 1, 2, 3, 4, 5 })
-                {
-                    ToolStripMenuItem item = new ToolStripMenuItem(width + " px");
-                    item.Tag = width;
-                    item.Click += (s, ev) => ApplyLineWidth((int)item.Tag);
-                    _lineWidthMenu.Items.Add(item);
-                }
-            }
-            // 同步勾选状态:当前线宽项打勾
-            foreach (ToolStripMenuItem item in _lineWidthMenu.Items)
-            {
-                item.Checked = ((int)item.Tag == channel.LineWidth);
-            }
-
-            // 不能同步Show(CellClick的MouseUp事件流会让菜单立即关闭),也不能用BeginInvoke
-            // (与网格输入处理竞态导致点击无效)。用Timer延迟到当前输入事件流完全结束后再显示,
-            // 与ChartControl测量线菜单(已验证可用)完全一致。
-            if (_lineWidthMenuTimer == null)
-            {
-                _lineWidthMenuTimer = new Timer();
-                _lineWidthMenuTimer.Interval = Math.Max(200, SystemInformation.DoubleClickTime);
-                _lineWidthMenuTimer.Tick += (s, ev) =>
-                {
-                    _lineWidthMenuTimer.Stop();
-                    _lineWidthMenu?.Show(_channelGrid, _lineWidthMenuBounds.Left, _lineWidthMenuBounds.Bottom);
-                };
-            }
-            _lineWidthMenuTimer.Stop();
-            _lineWidthMenuTimer.Start();
-        }
-
-        /// <summary>应用线宽:更新通道、网格显示与绘图区</summary>
-        private void ApplyLineWidth(int width)
-        {
-            if (_lineWidthMenuRow < 0) return;
-            ChannelData channel = GetChannelFromRow(_lineWidthMenuRow);
-            if (channel == null) return;
-            channel.LineWidth = width;
-            _channelGrid.Rows[_lineWidthMenuRow].Cells["LineWidth"].Value = width.ToString();
-            _chartControl.Invalidate();
         }
 
         private void _channelGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
@@ -4599,11 +4549,13 @@ namespace PCAN_Client
                 }
                 catch { }
 
-                Channels.Add(new ChannelData(channelName, color, DateTime.Now,
+                ChannelData presetCh = new ChannelData(channelName, color, DateTime.Now,
                     enumDefs, signal.Unit,
                     signal.CycleTime / 1000.0, (int)signal.MsgId,
                     signal.MsgIndex, signal.SignalIndex, signal.SignalName,
-                    signal.BusChannelIndex));
+                    signal.BusChannelIndex);
+                presetCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
+                Channels.Add(presetCh);
                 multiChartFromScheduler.AddMessage(msg, signal.CycleTime, (byte)(busIdx + 1));
 
                 // 设置ChartShowFlag到通道DBC实例
