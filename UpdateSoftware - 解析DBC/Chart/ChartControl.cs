@@ -648,9 +648,10 @@ namespace PCAN_Client
                 // 半透明深色描边：浅色曲线(黄/白等)在白底上也清晰可辨
                 Pen outlinePen = GetCachedPen(Color.FromArgb(90, 0, 0, 0), 1f);
                 int dotInterval = pointsCount > 300 ? pointsCount / 300 : 1;
-                // 半径随渲染缩放等比放大(报告截图/高DPI一致)，默认2px(直径5px)
-                int dotRadius = Math.Max(1, (int)Math.Round(1.5f * _renderScale));
-                int dotDiameter = dotRadius * 2 + 1;
+                // 数据点直径跟随通道设置(默认5px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
+                float dotSizePx = Math.Max(1, channel.DotSize) * _renderScale;
+                int dotDiameter = Math.Max(1, (int)Math.Round(dotSizePx));
+                int dotRadius = dotDiameter / 2;
 
                 for (int i = 0; i < pointsCount; i += dotInterval)
                 {

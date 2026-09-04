@@ -64,6 +64,8 @@ namespace PCAN_Client
         private ToolStripComboBox _toolSpeedComboBox;
         private ToolStripComboBox _toolLineWidthComboBox;   // 全局线宽选择(对所有信号同时生效)
         private int _globalLineWidth = 2;                   // 当前全局线宽(新通道默认继承)
+        private ToolStripComboBox _toolDotSizeComboBox;     // 全局数据点大小选择(对所有信号同时生效)
+        private int _globalDotSize = 5;                     // 当前全局数据点直径px(新通道默认继承)
         private ToolStripDropDownButton _toolMore;
         private ToolStripTextBox _txtStartTime;
         private ToolStripTextBox _txtEndTime;
@@ -430,6 +432,7 @@ namespace PCAN_Client
             this._toolStop = new System.Windows.Forms.ToolStripButton();
             this._toolSpeedComboBox = new System.Windows.Forms.ToolStripComboBox();
             this._toolLineWidthComboBox = new System.Windows.Forms.ToolStripComboBox();
+            this._toolDotSizeComboBox = new System.Windows.Forms.ToolStripComboBox();
             this._toolShowAll = new System.Windows.Forms.ToolStripButton();
             this._toolAutoScroll = new System.Windows.Forms.ToolStripButton();
             this._toolClear = new System.Windows.Forms.ToolStripButton();
@@ -670,6 +673,8 @@ namespace PCAN_Client
             this._analysisToolStrip.Items.AddRange(new System.Windows.Forms.ToolStripItem[] {
             new System.Windows.Forms.ToolStripLabel("线宽:"),
             this._toolLineWidthComboBox,
+            new System.Windows.Forms.ToolStripLabel("点:"),
+            this._toolDotSizeComboBox,
             new System.Windows.Forms.ToolStripSeparator(),
             new System.Windows.Forms.ToolStripLabel("区间:"),
             this._txtStartTime,
@@ -758,6 +763,15 @@ namespace PCAN_Client
             this._toolLineWidthComboBox.Size = new System.Drawing.Size(64, 25);
             this._toolLineWidthComboBox.ToolTipText = "曲线线宽(对所有信号同时生效)";
             this._toolLineWidthComboBox.SelectedIndexChanged += new System.EventHandler(this._toolLineWidthComboBox_SelectedIndexChanged);
+            //
+            // _toolDotSizeComboBox
+            //
+            this._toolDotSizeComboBox.AutoSize = false;
+            this._toolDotSizeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this._toolDotSizeComboBox.Name = "_toolDotSizeComboBox";
+            this._toolDotSizeComboBox.Size = new System.Drawing.Size(56, 25);
+            this._toolDotSizeComboBox.ToolTipText = "数据点大小(对所有信号同时生效)";
+            this._toolDotSizeComboBox.SelectedIndexChanged += new System.EventHandler(this._toolDotSizeComboBox_SelectedIndexChanged);
             //
             // _toolShowAll
             //
@@ -1111,6 +1125,13 @@ namespace PCAN_Client
                 _toolLineWidthComboBox.Items.Add(w + " px");
             }
             _toolLineWidthComboBox.SelectedIndex = _globalLineWidth - 1;
+
+            // 全局数据点大小:1~5px,默认5px,选中即应用到所有通道
+            foreach (int d in new int[] { 1, 2, 3, 4, 5 })
+            {
+                _toolDotSizeComboBox.Items.Add(d + " px");
+            }
+            _toolDotSizeComboBox.SelectedIndex = _globalDotSize - 1;
 
             // 信号组下拉:加载/保存成对
             _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("加载信号组", null, _btnLoadPreset_Click));
@@ -2027,6 +2048,20 @@ namespace PCAN_Client
             }
 
             SyncToolbarStateFromLegacyControls();
+        }
+
+        /// <summary>全局数据点大小改变:应用到所有通道并刷新绘图(新通道创建时继承_globalDotSize)</summary>
+        private void _toolDotSizeComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_toolDotSizeComboBox.SelectedIndex < 0) return;
+            _globalDotSize = _toolDotSizeComboBox.SelectedIndex + 1;
+
+            if (Channels == null || _chartControl == null) return;
+            foreach (var ch in Channels)
+            {
+                if (ch != null) ch.DotSize = _globalDotSize;
+            }
+            _chartControl.Invalidate();
         }
 
         /// <summary>全局线宽改变:应用到所有通道并刷新绘图(新通道创建时继承_globalLineWidth)</summary>
@@ -3007,6 +3042,7 @@ namespace PCAN_Client
                             (double)(signal.CycleTime / 1000.0f), (int)signal.MsgId, signal.MsgIndex, signal.SignalIndex,
                             signal.SignalName, signal.BusChannelIndex);
                         newCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
+                        newCh.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                         Channels.Add(newCh);
                         _chartControl.SetChannels(Channels);
 
@@ -4555,6 +4591,7 @@ namespace PCAN_Client
                     signal.MsgIndex, signal.SignalIndex, signal.SignalName,
                     signal.BusChannelIndex);
                 presetCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
+                presetCh.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                 Channels.Add(presetCh);
                 multiChartFromScheduler.AddMessage(msg, signal.CycleTime, (byte)(busIdx + 1));
 

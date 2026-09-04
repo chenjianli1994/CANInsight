@@ -38,6 +38,8 @@ namespace PCAN_Client
         public List<ChannelPoint> Points { get; set; }
         public bool Visible { get; set; }
         public int LineWidth { get; set; }
+        /// <summary>数据点直径(px,1~5),全局设置,所有通道一致</summary>
+        public int DotSize { get; set; }
         public System.Drawing.Drawing2D.DashStyle DashStyle { get; set; }
         public double CycleTime { get; set; }
         public double LastReceiveTime { get; set; }
@@ -78,6 +80,7 @@ namespace PCAN_Client
             Points = new List<ChannelPoint>();
             Visible = true;
             LineWidth = 2;
+            DotSize = 5;   // 默认5px直径(与历史硬编码视觉一致)
             DashStyle = System.Drawing.Drawing2D.DashStyle.Solid;
             CycleTime = cycleTime;
             LastReceiveTime = 0;

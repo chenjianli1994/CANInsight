@@ -497,6 +497,8 @@ namespace PCAN_Client
                     preset.SignalName ?? "",
                     preset.BusChannelIndex);
                 ch.Visible = preset.Visible;
+                ch.LineWidth = _globalLineWidth;   // 继承当前全局线宽
+                ch.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                 Channels.Add(ch);
             }
 
