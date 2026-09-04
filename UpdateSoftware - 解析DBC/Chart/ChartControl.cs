@@ -510,11 +510,13 @@ namespace PCAN_Client
             List<ChannelPoint> pointsInRange = channel.GetPointsInRange(startIdx, endIdx);
             int pointsCount = pointsInRange.Count;
 
+            // 线宽跟随通道设置(默认2px),并按渲染缩放等比缩放,保证报告截图/高DPI下一致
+            float lineWidth = Math.Max(1, channel.LineWidth) * _renderScale;
             using (GraphicsPath solidPath = new GraphicsPath())
             using (GraphicsPath dashPath = new GraphicsPath())
-            using (Pen dashPen = new Pen(channel.Color, 1.5f * _renderScale))
+            using (Pen dashPen = new Pen(channel.Color, lineWidth))
             {
-                Pen solidPen = GetCachedPen(channel.Color, 1.5f * _renderScale);
+                Pen solidPen = GetCachedPen(channel.Color, lineWidth);
                 dashPen.DashStyle = DashStyle.Dash;
                 dashPen.DashPattern = new float[] { 5f, 3f };
 

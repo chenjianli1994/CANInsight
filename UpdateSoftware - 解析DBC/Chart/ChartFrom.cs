@@ -74,6 +74,11 @@ namespace PCAN_Client
         private Label _speedLabel;        // 倍速标签
         private DataGridView _channelGrid;
         private int _channelDragRowIndex = -1;
+        // 线宽选择菜单:复用实例+Timer延迟显示(与ChartControl测量线菜单同模式,避免点击失效)
+        private ContextMenuStrip _lineWidthMenu;
+        private Timer _lineWidthMenuTimer;
+        private int _lineWidthMenuRow = -1;
+        private Rectangle _lineWidthMenuBounds;
         private Rectangle _channelDragBoxFromMouseDown = Rectangle.Empty;
         private int _channelDropInsertIndex = -1;
         private GroupBox _controlGroup;
@@ -1271,6 +1276,17 @@ namespace PCAN_Client
             colorColumn.ReadOnly = true;
             colorColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
 
+            DataGridViewTextBoxColumn widthColumn = new DataGridViewTextBoxColumn();
+            widthColumn.Name = "LineWidth";
+            widthColumn.HeaderText = "线宽";
+            widthColumn.Width = 44;
+            widthColumn.MinimumWidth = 44;
+            widthColumn.Resizable = DataGridViewTriState.False;
+            widthColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+            widthColumn.ReadOnly = true;
+            widthColumn.SortMode = DataGridViewColumnSortMode.NotSortable;
+            widthColumn.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
             DataGridViewTextBoxColumn signalColumn = new DataGridViewTextBoxColumn();
             signalColumn.Name = "Signal";
             signalColumn.HeaderText = "信号";
@@ -1300,6 +1316,7 @@ namespace PCAN_Client
 
             _channelGrid.Columns.Add(visibleColumn);
             _channelGrid.Columns.Add(colorColumn);
+            _channelGrid.Columns.Add(widthColumn);
             _channelGrid.Columns.Add(signalColumn);
             _channelGrid.Columns.Add(valueColumn);
             _channelGrid.Columns.Add(deltaColumn);
@@ -1319,9 +1336,10 @@ namespace PCAN_Client
                 {
                     channel.Visible = false;
                 }
-                int rowIndex = _channelGrid.Rows.Add(isChecked, string.Empty, GetChannelDisplayName(channel), string.Empty, string.Empty);
+                int rowIndex = _channelGrid.Rows.Add(isChecked, string.Empty, channel.LineWidth.ToString(), GetChannelDisplayName(channel), string.Empty, string.Empty);
                 _channelGrid.Rows[rowIndex].Tag = channel;
                 _channelGrid.Rows[rowIndex].Cells["Color"].ToolTipText = "点击修改颜色";
+                _channelGrid.Rows[rowIndex].Cells["LineWidth"].ToolTipText = "点击修改线宽";
                 _channelGrid.Rows[rowIndex].Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
                 displayIndex++;
             }
@@ -1495,6 +1513,13 @@ namespace PCAN_Client
         private void ChartFrom_FormClosed(object sender, FormClosedEventArgs e)
         {
             CAN_Data.DbcHelper.ChartShowOpenFlag = false;
+
+            // 释放线宽菜单资源
+            _lineWidthMenuTimer?.Stop();
+            _lineWidthMenuTimer?.Dispose();
+            _lineWidthMenuTimer = null;
+            _lineWidthMenu?.Dispose();
+            _lineWidthMenu = null;
 
             // 主动触发GC回收大块内存（gen2）
             GC.Collect();
@@ -3015,10 +3040,15 @@ namespace PCAN_Client
         {
             if (e.RowIndex < 0)
                 return;
-            if (_channelGrid.Columns[e.ColumnIndex].Name != "Color")
-                return;
-
-            ChangeChannelColorAtRow(e.RowIndex);
+            string columnName = _channelGrid.Columns[e.ColumnIndex].Name;
+            if (columnName == "Color")
+            {
+                ChangeChannelColorAtRow(e.RowIndex);
+            }
+            else if (columnName == "LineWidth")
+            {
+                ChangeChannelLineWidthAtRow(e.RowIndex);
+            }
         }
 
         private void _channelGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -3030,6 +3060,65 @@ namespace PCAN_Client
 
             bool isChecked = GetChannelRowChecked(e.RowIndex);
             SetChannelRowChecked(e.RowIndex, !isChecked);
+        }
+
+        /// <summary>
+        /// 弹出线宽选择菜单并应用到通道,同时更新网格显示与绘图区
+        /// </summary>
+        private void ChangeChannelLineWidthAtRow(int rowIndex)
+        {
+            ChannelData channel = GetChannelFromRow(rowIndex);
+            if (channel == null) return;
+
+            _lineWidthMenuRow = rowIndex;
+            _lineWidthMenuBounds = _channelGrid.GetCellDisplayRectangle(
+                _channelGrid.Columns["LineWidth"].Index, rowIndex, false);
+
+            // 复用同一个菜单实例(与ChartControl测量线菜单同模式):每次新建+Closed释放
+            // 会与DataGridView的输入处理产生竞态,导致菜单显示后点击被当作"菜单外"。
+            if (_lineWidthMenu == null)
+            {
+                _lineWidthMenu = new ContextMenuStrip();
+                foreach (int width in new int[] { 1, 2, 3, 4, 5 })
+                {
+                    ToolStripMenuItem item = new ToolStripMenuItem(width + " px");
+                    item.Tag = width;
+                    item.Click += (s, ev) => ApplyLineWidth((int)item.Tag);
+                    _lineWidthMenu.Items.Add(item);
+                }
+            }
+            // 同步勾选状态:当前线宽项打勾
+            foreach (ToolStripMenuItem item in _lineWidthMenu.Items)
+            {
+                item.Checked = ((int)item.Tag == channel.LineWidth);
+            }
+
+            // 不能同步Show(CellClick的MouseUp事件流会让菜单立即关闭),也不能用BeginInvoke
+            // (与网格输入处理竞态导致点击无效)。用Timer延迟到当前输入事件流完全结束后再显示,
+            // 与ChartControl测量线菜单(已验证可用)完全一致。
+            if (_lineWidthMenuTimer == null)
+            {
+                _lineWidthMenuTimer = new Timer();
+                _lineWidthMenuTimer.Interval = Math.Max(200, SystemInformation.DoubleClickTime);
+                _lineWidthMenuTimer.Tick += (s, ev) =>
+                {
+                    _lineWidthMenuTimer.Stop();
+                    _lineWidthMenu?.Show(_channelGrid, _lineWidthMenuBounds.Left, _lineWidthMenuBounds.Bottom);
+                };
+            }
+            _lineWidthMenuTimer.Stop();
+            _lineWidthMenuTimer.Start();
+        }
+
+        /// <summary>应用线宽:更新通道、网格显示与绘图区</summary>
+        private void ApplyLineWidth(int width)
+        {
+            if (_lineWidthMenuRow < 0) return;
+            ChannelData channel = GetChannelFromRow(_lineWidthMenuRow);
+            if (channel == null) return;
+            channel.LineWidth = width;
+            _channelGrid.Rows[_lineWidthMenuRow].Cells["LineWidth"].Value = width.ToString();
+            _chartControl.Invalidate();
         }
 
         private void _channelGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
