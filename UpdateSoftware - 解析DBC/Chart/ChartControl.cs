@@ -1727,15 +1727,31 @@ namespace PCAN_Client
 
         private string FormatMeasureLineValue(ChannelData channel, double yValue)
         {
+            string valueStr;
             if (channel.EnumDefinitions != null && channel.EnumDefinitions.Count > 0)
             {
                 string description;
                 if (channel.EnumDefinitions.TryGetValue(yValue, out description))
                 {
-                    return string.Format("{0} ({1:F1})", description, yValue);
+                    valueStr = string.Format("{0} ({1:F1})", description, yValue);
+                }
+                else
+                {
+                    valueStr = string.Format("{0:F1}", yValue);
                 }
             }
-            return string.Format("{0:F1}", yValue);
+            else
+            {
+                valueStr = string.Format("{0:F1}", yValue);
+            }
+
+            // 带单位显示(过滤空/占位符单位,与通道列表的 [单位] 规则一致)
+            string unit = (channel.Unit ?? string.Empty).Trim();
+            if (!string.IsNullOrEmpty(unit) && unit != "-" && unit != "\"\"")
+            {
+                valueStr += " " + unit;
+            }
+            return valueStr;
         }
 
         /// <summary>
