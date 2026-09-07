@@ -9,6 +9,24 @@ namespace PCAN_Client
     internal static class Program
     {
         /// <summary>
+        /// 启动自愈必须放在类型初始化阶段而非Main体内:
+        /// CLR在JIT编译Main方法时就要解析其引用的类型链(如 CAN_API→PCANBasic.NET.dll 等
+        /// 散落DLL),文件缺失会在Main第一条指令执行前抛FileNotFoundException。
+        /// 静态构造函数先于Main的JIT运行,在此补齐缺失文件后Main才能正常编译执行。
+        /// </summary>
+        static Program()
+        {
+            try
+            {
+                util.SelfUpdater.EnsureRuntimeFiles();
+            }
+            catch
+            {
+                /* 自愈失败(共享不可达等)不阻塞启动;若仍缺文件后续自然报错 */
+            }
+        }
+
+        /// <summary>
         /// 应用程序的主入口点。
         /// </summary>
         [STAThread]

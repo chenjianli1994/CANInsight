@@ -33,6 +33,67 @@ namespace PCAN_Client.util
         /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
         private const string UpdateDir = @"\\update-server\company-share\dept\group\其他资料\project\transfer\developer\CANInsight";
 
+        /// <summary>
+        /// 启动自愈:检查本机安装目录缺失的运行时散落文件(exe旁config/DLL),从共享目录补齐。
+        /// 历史版本自更新只替换 exe 不更新 DLL,导致部分用户更新后因缺散落 DLL 打不开;
+        /// 新版 exe 启动时先补齐再运行,未更新/已打不开的用户都能自动恢复。
+        /// </summary>
+        public static void EnsureRuntimeFiles()
+        {
+            try
+            {
+                if (!QuickProbe(UpdateDir, 1500)) return;
+
+                var names = new List<string>();
+                string manifestFile = Path.Combine(UpdateDir, "files.txt");
+                if (File.Exists(manifestFile))
+                {
+                    foreach (var line in File.ReadAllLines(manifestFile))
+                    {
+                        string name = line.Trim();
+                        if (string.IsNullOrEmpty(name)) continue;
+                        names.Add(name);
+                    }
+                }
+                else
+                {
+                    // 服务器无清单(旧发布):回退为固定运行时文件集合
+                    names.AddRange(new[]
+                    {
+                        "CANInsight.exe.config",
+                        "PCANBasic.NET.dll", "Newtonsoft.Json.dll",
+                        "vxlapi_NET.dll", "binlog.dll"
+                    });
+                }
+
+                string installDir = Path.GetDirectoryName(Application.ExecutablePath);
+                if (string.IsNullOrEmpty(installDir)) return;
+
+                foreach (var name in names)
+                {
+                    try
+                    {
+                        if (string.Equals(name, Path.GetFileName(Application.ExecutablePath),
+                                StringComparison.OrdinalIgnoreCase)) continue; // exe 本体跳过
+                        string local = Path.Combine(installDir, name);
+                        if (File.Exists(local)) continue;
+                        string remote = Path.Combine(UpdateDir, name);
+                        if (!File.Exists(remote)) continue;
+                        File.Copy(remote, local, true);
+                        System.Diagnostics.Debug.WriteLine("[SelfUpdater] 自愈补齐缺失文件: " + name);
+                    }
+                    catch
+                    {
+                        // 单个文件补齐失败不影响启动,其余文件继续
+                    }
+                }
+            }
+            catch
+            {
+                /* 共享不可达等异常静默跳过,不影响启动 */
+            }
+        }
+
         /// <summary>程序启动时调用，后台静默检查；自动检查会尊重用户设置的忽略版本。</summary>
         public static void CheckOnStartup()
         {
