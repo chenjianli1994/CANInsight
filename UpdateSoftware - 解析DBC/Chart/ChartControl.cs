@@ -557,7 +557,8 @@ namespace PCAN_Client
                         for (int i = bStart; i <= bEnd; i++)
                         {
                             ChannelPoint point = pointsInRange[i];
-                            if (point == null) continue;
+                            // 跳过丢帧虚拟点(IsLost, Y=旧值):避免其成为桶极值被抽样选中,否则抽样段会整段画成虚线
+                            if (point == null || point.IsLost) continue;
 
                             if (minPoint == null || point.Y < minPoint.Y)
                             {
@@ -571,20 +572,13 @@ namespace PCAN_Client
                             }
                         }
 
-                        if (minPoint == null) continue;
+                        if (minPoint == null) continue; // 桶内全为丢帧虚拟点:跳过该桶
 
-                        if (minIdxLocal <= maxIdxLocal)
-                        {
-                            filteredPoints.Add(minPoint);
-                            if (minIdxLocal != maxIdxLocal)
-                                filteredPoints.Add(maxPoint);
-                        }
-                        else
-                        {
-                            filteredPoints.Add(maxPoint);
-                            if (minIdxLocal != maxIdxLocal)
-                                filteredPoints.Add(minPoint);
-                        }
+                        // 每桶仅保留1个代表点:升序桶取max(偏桶尾)、降序桶取min(偏桶尾)。
+                        // 相邻代表点X间距稳定≈桶宽——固定周期信号缩小视图时点间距保持均匀。
+                        // (此前min+max双点方案:桶内两点间距小、桶间间距大;"取偏移最远极值"方案:
+                        //  近线性桶内选择由数值噪声驱动翻转,同样表现为"两密两疏"不均匀)
+                        filteredPoints.Add(minIdxLocal < maxIdxLocal ? maxPoint : minPoint);
                     }
 
                     // 绘制抽样的折线
@@ -1220,23 +1214,6 @@ namespace PCAN_Client
                 selectedChannel.YMax = center + newRange / 2;
                 Invalidate();
             }
-            else if (_isXAxisSelected)
-            {
-                double zoomFactor = e.Delta > 0 ? 0.9 : 1.1;
-                int paddingLeft = _leftMarginWidth;
-                int paddingRight = 20;
-                Rectangle plotArea = new Rectangle(paddingLeft, 10, Width - paddingLeft - paddingRight, Height - 50);
-                double centerX = ScreenToValueX(e.X, plotArea);
-
-                double range = _globalXMax - _globalXMin;
-                double newRange = range * zoomFactor;
-                double offset = (centerX - _globalXMin) / range;
-
-                _globalXMin = centerX - offset * newRange;
-                _globalXMax = _globalXMin + newRange;
-
-                Invalidate();
-            }
             else
             {
                 double zoomFactor = e.Delta > 0 ? 0.9 : 1.1;
@@ -1251,6 +1228,14 @@ namespace PCAN_Client
 
                 _globalXMin = centerX - offset * newRange;
                 _globalXMax = _globalXMin + newRange;
+
+                // 自动滑动开启时:缩放后视图右边缘贴齐最新数据(保留缩放后的范围宽度)。
+                // 既保持自动滑动语义不退出,又避免下一帧AutoScrollToLatest因右边缘落后于最新数据而把视图拉回(缩放回弹)
+                if (_autoScroll && _latestDataTime > _globalXMax)
+                {
+                    _globalXMax = _latestDataTime;
+                    _globalXMin = _globalXMax - newRange;
+                }
 
                 Invalidate();
             }
