@@ -640,33 +640,35 @@ namespace PCAN_Client
                 }
             }
 
-            // 数据点绘制：点密度不超过每像素1个时显示（避免糊成一片），抽样上限300个保证性能
+            // 数据点绘制：点密度不超过每像素1个时显示（避免糊成一片）
             bool showDots = totalPoints <= plotWidth || totalPoints <= 100;
             if (showDots)
             {
                 SolidBrush brush = GetCachedBrush(channel.Color);
                 // 半透明深色描边：浅色曲线(黄/白等)在白底上也清晰可辨
                 Pen outlinePen = GetCachedPen(Color.FromArgb(90, 0, 0, 0), 1f);
-                int dotInterval = pointsCount > 300 ? pointsCount / 300 : 1;
                 // 数据点直径跟随通道设置(默认5px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
                 float dotSizePx = Math.Max(1, channel.DotSize) * _renderScale;
                 int dotDiameter = Math.Max(1, (int)Math.Round(dotSizePx));
                 int dotRadius = dotDiameter / 2;
 
-                for (int i = 0; i < pointsCount; i += dotInterval)
+                // 按屏幕X间距显示圆点:相邻点间距不小于直径 → 不重叠(大小一致)、显示均匀。
+                // 跳过IsLost虚点(Y=旧值,调度脉冲而非真实采样):避免其与真实点(报文周期)混排导致间距忽密忽疏
+                // 初始值取负直径,保证首点必然通过(screenX - int.MinValue 会溢出为负导致全部点被跳过)
+                int lastDotScreenX = -dotDiameter;
+                for (int i = 0; i < pointsCount; i++)
                 {
                     ChannelPoint point = pointsInRange[i];
-                    // 不跳过IsLost虚点(Y=旧值):否则丢帧处圆点缺失、正常处密集,省略不均匀导致显示的点间距忽密忽疏
-                    if (point == null) continue;
-                    if (point.Y >= yMin && point.Y <= yMax)
-                    {
-                        int screenX = ValueToScreenX(point.X, rect);
-                        int screenY = ValueToScreenY(point.Y, yMin, yMax, rect);
-                        int dotX = screenX - dotRadius;
-                        int dotY = screenY - dotRadius;
-                        g.FillEllipse(brush, dotX, dotY, dotDiameter, dotDiameter);
-                        g.DrawEllipse(outlinePen, dotX, dotY, dotDiameter, dotDiameter);
-                    }
+                    if (point == null || point.IsLost) continue;
+                    if (point.Y < yMin || point.Y > yMax) continue;
+                    int screenX = ValueToScreenX(point.X, rect);
+                    if (screenX - lastDotScreenX < dotDiameter) continue;
+                    lastDotScreenX = screenX;
+                    int screenY = ValueToScreenY(point.Y, yMin, yMax, rect);
+                    int dotX = screenX - dotRadius;
+                    int dotY = screenY - dotRadius;
+                    g.FillEllipse(brush, dotX, dotY, dotDiameter, dotDiameter);
+                    g.DrawEllipse(outlinePen, dotX, dotY, dotDiameter, dotDiameter);
                 }
             }
         }

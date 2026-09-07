@@ -340,6 +340,7 @@ namespace PCAN_Client
             // 绘图区选中通道(Y轴区域点击) → 左侧信号列表同步选中该行
             this._chartControl.OnChannelClicked += (channel) =>
             {
+                if (IsDisposed) return; // 窗体销毁中丢弃回调,避免访问已释放控件
                 if (InvokeRequired)
                     Invoke(new Action(() => SelectChannelGridRow(channel)));
                 else
@@ -3129,6 +3130,8 @@ namespace PCAN_Client
         /// <summary>信号列表选中变化(Ctrl/Shift多选):高亮绘图区对应曲线面板背景</summary>
         private void _channelGrid_SelectionChanged(object sender, EventArgs e)
         {
+            if (IsDisposed || _chartControl == null || _chartControl.IsDisposed)
+                return; // 窗体/绘图控件销毁中丢弃回调,避免访问已释放对象
             if (Channels == null)
                 return;
             foreach (var channel in Channels)
