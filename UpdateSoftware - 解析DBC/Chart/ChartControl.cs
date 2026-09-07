@@ -656,7 +656,8 @@ namespace PCAN_Client
                 for (int i = 0; i < pointsCount; i += dotInterval)
                 {
                     ChannelPoint point = pointsInRange[i];
-                    if (point == null || point.IsLost) continue;
+                    // 不跳过IsLost虚点(Y=旧值):否则丢帧处圆点缺失、正常处密集,省略不均匀导致显示的点间距忽密忽疏
+                    if (point == null) continue;
                     if (point.Y >= yMin && point.Y <= yMax)
                     {
                         int screenX = ValueToScreenX(point.X, rect);
