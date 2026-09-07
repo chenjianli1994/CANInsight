@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -153,11 +154,37 @@ namespace PCAN_Client.util
                     return false;
                 }
 
+                // 整包更新清单(files.txt):exe + config + 运行时DLL。
+                // 共享目录缺清单时回退为仅更新 exe(兼容旧服务器)。
+                var files = new List<string>();
+                string manifestFile = Path.Combine(UpdateDir, "files.txt");
+                if (File.Exists(manifestFile))
+                {
+                    foreach (var line in File.ReadAllLines(manifestFile))
+                    {
+                        string name = line.Trim();
+                        if (string.IsNullOrEmpty(name)) continue;
+                        files.Add(name);
+                    }
+                    foreach (var name in files)
+                    {
+                        if (!File.Exists(Path.Combine(UpdateDir, name)))
+                        {
+                            error = "更新服务器缺少文件：" + name;
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    files.Add(exeName);
+                }
+
                 update = new UpdateInfo
                 {
                     RemoteVersionText = remoteVersionText,
                     ExeName = exeName,
-                    RemoteExe = remoteExe,
+                    Files = files,
                     Notes = ReadNotes(Path.Combine(UpdateDir, "更新说明.txt"))
                 };
                 return true;
@@ -182,11 +209,16 @@ namespace PCAN_Client.util
                 return;
             }
 
-            string tempExe = Path.Combine(Path.GetTempPath(),
-                Path.GetFileNameWithoutExtension(update.ExeName) + "_new.exe");
+            // 整包下载到暂存目录(清单内的 exe/config/DLL 全部下载,避免缺散落 DLL 导致新版本打不开)
+            string stageDir = Path.Combine(Path.GetTempPath(), "CANInsight_update");
             try
             {
-                File.Copy(update.RemoteExe, tempExe, true);
+                if (Directory.Exists(stageDir)) Directory.Delete(stageDir, true);
+                Directory.CreateDirectory(stageDir);
+                foreach (var name in update.Files)
+                {
+                    File.Copy(Path.Combine(UpdateDir, name), Path.Combine(stageDir, name), true);
+                }
             }
             catch (Exception ex)
             {
@@ -195,7 +227,7 @@ namespace PCAN_Client.util
                 return;
             }
 
-            StartReplaceAndExit(tempExe, Application.ExecutablePath);
+            StartReplaceAndExit(stageDir, Application.ExecutablePath);
         }
 
         private static bool IsIgnoredVersion(string remoteVersionText)
@@ -243,7 +275,7 @@ namespace PCAN_Client.util
         {
             public string RemoteVersionText;
             public string ExeName;
-            public string RemoteExe;
+            public List<string> Files;   // 整包更新文件清单(相对文件名)
             public string Notes;
         }
 
@@ -322,29 +354,37 @@ namespace PCAN_Client.util
             return vRemote.CompareTo(vLocal);
         }
 
-        /// <summary>生成替换批处理：等待本进程退出后覆盖 exe 并重启，随后删除自身</summary>
-        private static void StartReplaceAndExit(string newExe, string oldExe)
+        /// <summary>
+        /// 生成替换批处理：等待本进程退出后将暂存目录全部文件(exe/config/DLL)覆盖到安装目录，
+        /// 重启程序，随后清理暂存目录并删除自身。
+        /// </summary>
+        private static void StartReplaceAndExit(string stageDir, string oldExe)
         {
+            string exeName = Path.GetFileName(oldExe);
+            string installDir = Path.GetDirectoryName(oldExe);
             string batPath = Path.Combine(Path.GetTempPath(), "CANInsight_update.bat");
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
-            sb.AppendLine("set \"src=" + newExe + "\"");
-            sb.AppendLine("set \"dst=" + oldExe + "\"");
+            sb.AppendLine("set \"src=" + stageDir + "\"");
+            sb.AppendLine("set \"dst=" + installDir + "\"");
+            sb.AppendLine("set \"exe=" + exeName + "\"");
             sb.AppendLine("set /a n=0");
             sb.AppendLine(":retry");
-            sb.AppendLine("copy /y \"%src%\" \"%dst%\" >nul 2>&1");
+            // 整包复制：exe 被占用时 copy 失败，等待本进程退出后重试；其余 config/DLL 同步就位
+            sb.AppendLine("copy /y \"%src%\\*\" \"%dst%\" >nul 2>&1");
             sb.AppendLine("if errorlevel 1 (");
             sb.AppendLine("  set /a n+=1");
             sb.AppendLine("  if %n% geq 60 goto fail");
             sb.AppendLine("  ping 127.0.0.1 -n 2 >nul");
             sb.AppendLine("  goto retry");
             sb.AppendLine(")");
-            sb.AppendLine("start \"\" \"%dst%\" /updated");
-            sb.AppendLine("del \"%src%\"");
+            sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updated");
+            sb.AppendLine("rd /s /q \"%src%\"");
             sb.AppendLine("del \"%~f0\"");
             sb.AppendLine("exit");
             sb.AppendLine(":fail");
             sb.AppendLine("msg * \"CANInsight 更新失败：无法替换程序文件，请手动从共享文件夹复制新版本。\"");
+            sb.AppendLine("rd /s /q \"%src%\"");
             sb.AppendLine("del \"%~f0\"");
             File.WriteAllText(batPath, sb.ToString(), Encoding.Default);
 
