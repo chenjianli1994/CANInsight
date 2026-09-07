@@ -24,6 +24,7 @@ namespace PCAN_Client
         private Pen _selectedAxisPen = new Pen(Color.Blue, 1f);
         private Brush _textBrush = Brushes.Black;
         private Brush _whiteBrush = new SolidBrush(Color.White);
+        private Brush _highlightBrush = new SolidBrush(Color.FromArgb(90, 144, 238, 144)); // 信号列表选中联动:面板背景高亮(淡绿)
 
         // 渲染缩放因子（默认1.0，截图时按比例放大线宽/字体）
         private float _renderScale = 1.0f;
@@ -49,6 +50,8 @@ namespace PCAN_Client
         private bool _autoScrollManuallyDisabled = false;
         public event Action<bool> OnAutoScrollChanged;
         public event Action<ChannelData> OnChannelColorChanged; // 通道颜色变化事件
+        /// <summary>绘图区点击选中通道(Y轴区域点击)时触发,用于联动左侧信号列表选中</summary>
+        public event Action<ChannelData> OnChannelClicked;
         /// <summary>右键点击曲线区域，要求显示该时刻前后各5000条报文<br/>参数：X值（秒）</summary>
         public event Action<double> OnShowMessagesAtTime;
         /// <summary>测量线变化事件（添加、拖动、清除时触发）</summary>
@@ -307,7 +310,7 @@ namespace PCAN_Client
                         rectHeight
                     );
 
-                    DrawPanelBackground(g, panelRect, panelIndex);
+                    DrawPanelBackground(g, panelRect, channel);
                     DrawPanelAxes(g, panelRect, channel, isLastPanel);
                     DrawPanelCurve(g, panelRect, channel);
                     DrawPanelChannelName(g, panelRect, channel);
@@ -317,9 +320,12 @@ namespace PCAN_Client
             }
         }
 
-        private void DrawPanelBackground(Graphics g, Rectangle rect, int index)
+        private void DrawPanelBackground(Graphics g, Rectangle rect, ChannelData channel)
         {
-            g.FillRectangle(_whiteBrush, rect);
+            if (channel.IsHighlighted)
+                g.FillRectangle(_highlightBrush, rect);
+            else
+                g.FillRectangle(_whiteBrush, rect);
         }
 
         private void DrawPanelGrid(Graphics g, Rectangle rect, ChannelData channel)
@@ -949,6 +955,7 @@ namespace PCAN_Client
                         _lastMousePos = e.Location;
                     }
                     Invalidate();
+                    OnChannelClicked?.Invoke(clickedChannel);
                 }
                 else if (_isXAxisSelected)
                 {

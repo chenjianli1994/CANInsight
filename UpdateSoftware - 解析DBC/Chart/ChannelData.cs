@@ -48,6 +48,10 @@ namespace PCAN_Client
         public double YMin { get; set; }
         public double YMax { get; set; }
         public bool IsYAxisSelected { get; set; }
+        /// <summary>
+        /// 信号列表选中联动:绘图区面板背景高亮(支持多选)
+        /// </summary>
+        public bool IsHighlighted { get; set; }
         private double _cachedYMin = double.MaxValue;
         private double _cachedYMax = double.MinValue;
         private bool _yRangeCacheValid = false;
@@ -89,6 +93,7 @@ namespace PCAN_Client
             YMin = 0;
             YMax = 0;
             IsYAxisSelected = false;
+            IsHighlighted = false;
             DbcMessageIndex = dbcMessageIndex;
             DbcSignalIndex = dbcSignalIndex;
             DateTime dateTime = dateTimeNow;

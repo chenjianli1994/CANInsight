@@ -337,6 +337,16 @@ namespace PCAN_Client
                     }
                 }
             };
+            // 绘图区选中通道(Y轴区域点击) → 左侧信号列表同步选中该行
+            this._chartControl.OnChannelClicked += (channel) =>
+            {
+                if (InvokeRequired)
+                    Invoke(new Action(() => SelectChannelGridRow(channel)));
+                else
+                    SelectChannelGridRow(channel);
+            };
+            // 信号列表选中变化(Ctrl/Shift多选) → 绘图区对应曲线面板背景高亮
+            this._channelGrid.SelectionChanged += _channelGrid_SelectionChanged;
 
             // 加载上次保存的日志文件路径列表（包含勾选状态）
             var savedLogPaths = (string)PCAN_Client.Properties.Settings.Default["LogFilePaths"];
@@ -3114,6 +3124,21 @@ namespace PCAN_Client
             {
                 ChangeChannelColorAtRow(e.RowIndex);
             }
+        }
+
+        /// <summary>信号列表选中变化(Ctrl/Shift多选):高亮绘图区对应曲线面板背景</summary>
+        private void _channelGrid_SelectionChanged(object sender, EventArgs e)
+        {
+            if (Channels == null)
+                return;
+            foreach (var channel in Channels)
+                channel.IsHighlighted = false;
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                if (row.Tag is ChannelData channel)
+                    channel.IsHighlighted = true;
+            }
+            _chartControl.SmartInvalidate();
         }
 
         private void _channelGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
