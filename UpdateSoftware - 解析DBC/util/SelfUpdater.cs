@@ -276,10 +276,6 @@ namespace PCAN_Client.util
             {
                 if (Directory.Exists(stageDir)) Directory.Delete(stageDir, true);
                 Directory.CreateDirectory(stageDir);
-                foreach (var name in update.Files)
-                {
-                    File.Copy(Path.Combine(UpdateDir, name), Path.Combine(stageDir, name), true);
-                }
             }
             catch (Exception ex)
             {
@@ -288,7 +284,79 @@ namespace PCAN_Client.util
                 return;
             }
 
+            string dlError;
+            if (!DownloadFilesWithProgress(update, stageDir, out dlError))
+            {
+                MessageBox.Show("更新包下载失败：" + (dlError ?? "未知错误"), "检查更新",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // 升级包就绪:提示升级成功,用户确认后由批处理完成替换并自动重启软件
+            MessageBox.Show("升级成功！\r\n点击“确定”后软件将自动重启，完成升级。", "检查更新",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+
             StartReplaceAndExit(stageDir, Application.ExecutablePath);
+        }
+
+        /// <summary>
+        /// 带进度条下载整包到暂存目录:模态进度窗显示实时进度(按文件字节累计),
+        /// 下载完成自动关闭。返回true=全部成功;失败时out error携带原因。
+        /// </summary>
+        private static bool DownloadFilesWithProgress(UpdateInfo update, string stageDir, out string error)
+        {
+            error = null;
+            var srcPaths = new List<string>();
+            var fileSizes = new List<long>();
+            long totalBytes = 0;
+            try
+            {
+                foreach (var name in update.Files)
+                {
+                    string src = Path.Combine(UpdateDir, name);
+                    long len = new FileInfo(src).Length;
+                    totalBytes += len;
+                    srcPaths.Add(src);
+                    fileSizes.Add(len);
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            var dialog = new UpdateProgressDialog();
+            bool ok = false;
+            string dlError = null; // lambda内捕获局部变量,避免out参数限制
+            var task = Task.Run(() =>
+            {
+                try
+                {
+                    long done = 0;
+                    for (int i = 0; i < update.Files.Count; i++)
+                    {
+                        File.Copy(srcPaths[i], Path.Combine(stageDir, update.Files[i]), true);
+                        done += fileSizes[i];
+                        string copiedName = update.Files[i];
+                        long d = done;
+                        dialog.BeginInvoke(new Action(() => dialog.SetProgress(copiedName, d, totalBytes)));
+                    }
+                    ok = true;
+                }
+                catch (Exception ex)
+                {
+                    dlError = ex.Message;
+                }
+                finally
+                {
+                    try { dialog.BeginInvoke(new Action(() => dialog.Close())); } catch { }
+                }
+            });
+            dialog.ShowDialog(); // 模态泵消息直到下载完成关闭
+            task.Wait();
+            error = dlError;
+            return ok;
         }
 
         private static bool IsIgnoredVersion(string remoteVersionText)
@@ -541,6 +609,51 @@ namespace PCAN_Client.util
                 if (result == DialogResult.Ignore) return UpdateDialogResult.Ignore;
                 return UpdateDialogResult.Later;
             }
+        }
+    }
+
+    /// <summary>在线升级下载进度对话框:模态显示下载进度,下载中不可关闭,完成后由调用方关闭并提示重启。</summary>
+    internal class UpdateProgressDialog : Form
+    {
+        private ProgressBar _progressBar;
+        private Label _label;
+
+        public UpdateProgressDialog()
+        {
+            this.Text = "在线升级";
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.ControlBox = false; // 下载中不可中断
+            this.TopMost = true;
+            this.ClientSize = new Size(420, 110);
+            this.Font = new Font("微软雅黑", 9F);
+
+            _label = new Label
+            {
+                Text = "正在准备下载...",
+                Location = new Point(15, 12),
+                Size = new Size(390, 22)
+            };
+            _progressBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Location = new Point(15, 44),
+                Size = new Size(390, 18)
+            };
+            this.Controls.Add(_label);
+            this.Controls.Add(_progressBar);
+        }
+
+        /// <summary>更新下载进度(按已下载字节/总字节计算百分比),必须在对话框所在线程调用</summary>
+        public void SetProgress(string fileName, long doneBytes, long totalBytes)
+        {
+            int pct = totalBytes > 0 ? (int)(doneBytes * 100 / totalBytes) : 0;
+            _progressBar.Value = Math.Min(100, Math.Max(0, pct));
+            _label.Text = string.Format("正在下载: {0}  ({1:P0})", fileName,
+                totalBytes > 0 ? (double)doneBytes / totalBytes : 0.0);
         }
     }
 }
