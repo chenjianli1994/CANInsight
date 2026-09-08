@@ -84,7 +84,7 @@ namespace PCAN_Client
             Points = new List<ChannelPoint>();
             Visible = true;
             LineWidth = 2;
-            DotSize = 5;   // 默认5px直径(与历史硬编码视觉一致)
+            DotSize = 4;   // 默认4px直径
             DashStyle = System.Drawing.Drawing2D.DashStyle.Solid;
             CycleTime = cycleTime;
             LastReceiveTime = 0;
