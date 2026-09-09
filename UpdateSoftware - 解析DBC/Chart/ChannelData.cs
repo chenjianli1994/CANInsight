@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Threading;
 
 namespace PCAN_Client
 {
@@ -104,20 +105,35 @@ namespace PCAN_Client
             BusChannelIndex = busChannelIndex;
         }
 
-        // 单通道数据点上限：超过此值时裁剪最旧的数据，避免无限增长导致CPU/内存上升
-        private const int MaxPointsThreshold = 10000000;
-        // 每次裁剪移除的点数
-        private const int TrimCount = 2000000;
+        // 全局数据点预算（所有通道合计）：超出后淘汰最旧的点，限制长时间运行的常驻内存。
+        // 800 万点 × 约 48 字节/点 ≈ 380MB，是"长时间实时采集吃光内存"的上限护栏。
+        // 完整历史仍由 BLF 录制落盘；绘图区只保留最近的数据。
+        private const long GlobalPointBudget = 8000000;
+        // 超预算时单次淘汰的点数：分批淘汰，单次 RemoveRange 的搬移量有界（均摊 O(1)/点）
+        private const int GlobalTrimBatch = 50000;
+        // 所有通道的点数合计（跨线程用 Interlocked 维护）
+        private static long _globalPointCount;
+
+        /// <summary>淘汰最旧的点（须在 Points 锁内调用）</summary>
+        private void TrimOldestLocked(int count)
+        {
+            if (count <= 0) return;
+            if (count > Points.Count) count = Points.Count;
+            if (count <= 0) return;
+            Points.RemoveRange(0, count);
+            Interlocked.Add(ref _globalPointCount, -count);
+        }
 
         public void AddPoint(double x, double y, bool isLost = false)
         {
             lock (Points)
             {
                 Points.Add(new ChannelPoint(x, y, isLost));
-                // 超过上限时裁剪最旧的点，保持点数有界
-                if (Points.Count > MaxPointsThreshold)
+                Interlocked.Increment(ref _globalPointCount);
+                // 超过全局预算时淘汰本通道最旧的点，保持常驻内存有界
+                if (Interlocked.Read(ref _globalPointCount) > GlobalPointBudget)
                 {
-                    Points.RemoveRange(0, TrimCount);
+                    TrimOldestLocked(GlobalTrimBatch);
                 }
             }
             if (!isLost)
@@ -139,6 +155,7 @@ namespace PCAN_Client
         {
             lock (Points)
             {
+                Interlocked.Add(ref _globalPointCount, -Points.Count);
                 Points.Clear();
                 Points.TrimExcess();
             }
@@ -404,11 +421,15 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 批量获取索引范围内的数据点（一次性加锁，减少锁竞争）
+        /// 获取索引范围内按屏幕列抽稀后的点：每列保留一个代表点（列内靠后的极值），
+        /// 返回点数约 ≤ maxColumns，首尾点必定保留。点数未超过 2*maxColumns 时原样返回，
+        /// 稀疏数据的绘制结果不变。用于把每帧的拷贝量与 GDI+ 绘制量限制在屏幕分辨率内，
+        /// 避免长时间运行/缩小视图后每帧 O(全部点) 导致界面卡死。
         /// </summary>
-        public List<ChannelPoint> GetPointsInRange(int startIndex, int endIndex)
+        public List<ChannelPoint> GetPointsInRangeDecimated(int startIndex, int endIndex, int maxColumns)
         {
             if (Points == null || Points.Count == 0) return new List<ChannelPoint>();
+            if (maxColumns < 1) maxColumns = 1;
 
             lock (Points)
             {
@@ -417,13 +438,75 @@ namespace PCAN_Client
                 if (startIndex > endIndex) return new List<ChannelPoint>();
 
                 int count = endIndex - startIndex + 1;
-                var result = new List<ChannelPoint>(count);
-                for (int i = startIndex; i <= endIndex; i++)
+                int maxPoints = maxColumns * 2;
+                if (count <= maxPoints)
                 {
-                    result.Add(Points[i]);
+                    var exact = new List<ChannelPoint>(count);
+                    for (int i = startIndex; i <= endIndex; i++) exact.Add(Points[i]);
+                    return exact;
                 }
+
+                var result = new List<ChannelPoint>(maxPoints + 2);
+                int bucketSize = (count + maxColumns - 1) / maxColumns;
+                AddPointIfNew(result, Points[startIndex]);   // 保证左端起点
+
+                int i0 = startIndex;
+                while (i0 <= endIndex)
+                {
+                    int i1 = i0 + bucketSize - 1;
+                    if (i1 > endIndex) i1 = endIndex;
+
+                    ChannelPoint minPoint = null, maxPoint = null;
+                    int minIdx = -1, maxIdx = -1;
+                    ChannelPoint firstLost = null, lastLost = null;
+
+                    for (int i = i0; i <= i1; i++)
+                    {
+                        ChannelPoint point = Points[i];
+                        if (point == null) continue;
+                        // 丢帧虚拟点不参与极值竞争（否则抽样段会整段画成虚线），整列全丢帧时保留首尾维持虚线
+                        if (point.IsLost)
+                        {
+                            if (firstLost == null) firstLost = point;
+                            lastLost = point;
+                            continue;
+                        }
+                        if (minPoint == null || point.Y < minPoint.Y) { minPoint = point; minIdx = i; }
+                        if (maxPoint == null || point.Y > maxPoint.Y) { maxPoint = point; maxIdx = i; }
+                    }
+
+                    if (minPoint == null)
+                    {
+                        AddPointIfNew(result, firstLost);
+                        AddPointIfNew(result, lastLost);
+                    }
+                    else if (maxIdx > minIdx)
+                    {
+                        // 每列只保留一个代表点（列内靠后的极值）：抽稀后相邻点 X 间距均匀，
+                        // 且避免"峰谷交替"的锯齿折线——GDI+ 抗锯齿对陡峭折线的开销是平滑曲线的数十倍
+                        AddPointIfNew(result, maxPoint);
+                    }
+                    else
+                    {
+                        AddPointIfNew(result, minPoint);
+                    }
+
+                    i0 = i1 + 1;
+                }
+
+                // 保证曲线到达右边缘（最新数据）
+                AddPointIfNew(result, Points[endIndex]);
+
                 return result;
             }
+        }
+
+        /// <summary>追加点，跳过与上一个引用相同的点（抽稀时首尾点会被相邻列重复选中）</summary>
+        private static void AddPointIfNew(List<ChannelPoint> list, ChannelPoint point)
+        {
+            if (point == null) return;
+            if (list.Count > 0 && ReferenceEquals(list[list.Count - 1], point)) return;
+            list.Add(point);
         }
 
         /// <summary>

@@ -2072,7 +2072,9 @@ namespace PCAN_Client
             {
                 if (ch != null) ch.DotSize = _globalDotSize;
             }
-            _chartControl.Invalidate();
+            // 走帧率调度而非强制同步重绘：长时间运行/大量信号时单帧绘制本身可能耗时数十毫秒，
+            // 立即 Invalidate 会与正在排队的帧竞争，表现为下拉框"卡住"
+            _chartControl.SmartInvalidate();
         }
 
         /// <summary>全局线宽改变:应用到所有通道并刷新绘图(新通道创建时继承_globalLineWidth)</summary>
@@ -2086,7 +2088,8 @@ namespace PCAN_Client
             {
                 if (ch != null) ch.LineWidth = _globalLineWidth;
             }
-            _chartControl.Invalidate();
+            // 同点大小：交给帧率调度，避免在绘制繁忙时强制同步重绘造成界面无响应
+            _chartControl.SmartInvalidate();
         }
 
         /// <summary>

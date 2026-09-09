@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -39,7 +40,10 @@ namespace PCAN_Client
             public override int GetHashCode() => ColorArgb.GetHashCode() ^ Width.GetHashCode();
         }
         private Dictionary<PenKey, Pen> _penCache = new Dictionary<PenKey, Pen>();
-        private Dictionary<Color, SolidBrush> _brushCache = new Dictionary<Color, SolidBrush>();
+        private Dictionary<PenKey, Pen> _dashPenCache = new Dictionary<PenKey, Pen>();
+        private Dictionary<PenKey, Bitmap> _dotSpriteCache = new Dictionary<PenKey, Bitmap>();
+        /// <summary>单通道每帧描边像素预算：超出则降采样并关闭抗锯齿（GDI+ 软件描边约 0.1~0.3µs/px）</summary>
+        private const int StrokePixelBudget = 15000;
         private Pen _zoomPen = new Pen(Color.Blue, 1) { DashStyle = DashStyle.Dash };
         private Brush _zoomBrush = new SolidBrush(Color.FromArgb(50, Color.Blue));
         private readonly object _lockObj = new object();
@@ -118,15 +122,16 @@ namespace PCAN_Client
             return pen;
         }
 
-        /// <summary>获取缓存的 SolidBrush</summary>
-        private SolidBrush GetCachedBrush(Color color)
+        /// <summary>获取缓存的虚线 Pen（避免每帧 new Pen + DashPattern 数组分配）</summary>
+        private Pen GetCachedDashPen(Color color, float width)
         {
-            if (!_brushCache.TryGetValue(color, out var brush))
+            var key = new PenKey(color, width);
+            if (!_dashPenCache.TryGetValue(key, out var pen))
             {
-                brush = new SolidBrush(color);
-                _brushCache[color] = brush;
+                pen = new Pen(color, width) { DashStyle = DashStyle.Dash, DashPattern = new float[] { 5f, 3f } };
+                _dashPenCache[key] = pen;
             }
-            return brush;
+            return pen;
         }
 
         /// <summary>获取缩放后的字体（缓存避免重复创建）</summary>
@@ -159,9 +164,11 @@ namespace PCAN_Client
                 _measurementMenu?.Dispose();
                 _measurementMenuTimer?.Dispose();
                 foreach (var pen in _penCache.Values) pen.Dispose();
-                foreach (var brush in _brushCache.Values) brush.Dispose();
+                foreach (var pen in _dashPenCache.Values) pen.Dispose();
+                foreach (var sprite in _dotSpriteCache.Values) sprite.Dispose();
                 _penCache.Clear();
-                _brushCache.Clear();
+                _dashPenCache.Clear();
+                _dotSpriteCache.Clear();
             }
             base.Dispose(disposing);
         }
@@ -501,116 +508,43 @@ namespace PCAN_Client
                 yMax = 1;
             }
 
-            // 抽样：根据数据点数量分级抽样，降低CPU占用
-            int sampleTarget;
-            if (totalPoints <= 1000)
-                sampleTarget = 0; // 不抽样
-            else if (totalPoints <= 10000)
-                sampleTarget = 300;
-            else
-                sampleTarget = 1000;
-
             int plotWidth = rect.Width > 0 ? rect.Width : 1;
 
-            // 一次性批量获取索引范围内的点，避免在绘制循环中频繁加锁
-            List<ChannelPoint> pointsInRange = channel.GetPointsInRange(startIdx, endIdx);
+            // 抽稀列数：面板越矮可分辨的横向细节越少，无需画出全部采样点
+            int maxColumns = Math.Min(plotWidth, Math.Max(64, rect.Height * 8));
+
+            // 一次性批量获取索引范围内的点（已按屏幕列抽稀），避免每帧拷贝全部可见点
+            List<ChannelPoint> pointsInRange = channel.GetPointsInRangeDecimated(startIdx, endIdx, maxColumns);
             int pointsCount = pointsInRange.Count;
+
+            // GDI+ 抗锯齿对陡峭/锯齿折线的开销是平滑曲线的数十倍（实测 1000 段：平滑约 3ms，满幅锯齿约 250ms）。
+            // 缩小视图后相邻采样点纵向跳变可达整幅面板高度，据此估算描边像素长度：
+            // 超预算时进一步降低横向采样率并关闭抗锯齿，保证单帧耗时与数据量、缩放级别无关。
+            double strokePx = EstimateStrokePixels(pointsInRange, pointsCount, yMin, yMax, rect.Height);
+            bool antiAlias = strokePx <= StrokePixelBudget;
+            if (!antiAlias)
+            {
+                // 超预算时在已抽稀的结果上再降采样（O(点数)，不再扫全量数据）
+                int reducedColumns = (int)Math.Max(32, maxColumns * StrokePixelBudget / strokePx);
+                pointsInRange = SubSample(pointsInRange, reducedColumns);
+                pointsCount = pointsInRange.Count;
+            }
 
             // 线宽跟随通道设置(默认2px),并按渲染缩放等比缩放,保证报告截图/高DPI下一致
             float lineWidth = Math.Max(1, channel.LineWidth) * _renderScale;
-            using (GraphicsPath solidPath = new GraphicsPath())
-            using (GraphicsPath dashPath = new GraphicsPath())
-            using (Pen dashPen = new Pen(channel.Color, lineWidth))
+            SmoothingMode prevSmoothing = g.SmoothingMode;
+            if (!antiAlias) g.SmoothingMode = SmoothingMode.None;
+            try
             {
-                Pen solidPen = GetCachedPen(channel.Color, lineWidth);
-                dashPen.DashStyle = DashStyle.Dash;
-                dashPen.DashPattern = new float[] { 5f, 3f };
-
-                bool needStartSolidFigure = true;
-                bool needStartDashFigure = true;
-
-                if (sampleTarget > 0 && totalPoints > sampleTarget)
+                using (GraphicsPath solidPath = new GraphicsPath())
+                using (GraphicsPath dashPath = new GraphicsPath())
                 {
-                    // 需要抽样：分桶处理，使用批量获取的点（避免创建临时List）
-                    int bucketCount = Math.Min(sampleTarget, plotWidth);
-                    int pointsPerBucket = pointsCount / bucketCount;
-                    if (pointsPerBucket < 1) pointsPerBucket = 1;
+                    Pen solidPen = GetCachedPen(channel.Color, lineWidth);
+                    Pen dashPen = GetCachedDashPen(channel.Color, lineWidth);
 
-                    // 尾部保留 pointsPerBucket 个点不做抽样（至少保留 5 个），确保尾部绘制一致性
-                    int tailReserve = Math.Max(pointsPerBucket, 5);
-                    int sampledEnd = pointsCount - Math.Min(tailReserve, pointsCount / 2);
-                    if (sampledEnd < 0) sampledEnd = 0;
+                    bool needStartSolidFigure = true;
+                    bool needStartDashFigure = true;
 
-                    List<ChannelPoint> filteredPoints = new List<ChannelPoint>(bucketCount * 2);
-                    int bucketCountAdjusted = Math.Max(1, sampledEnd / pointsPerBucket);
-
-                    for (int b = 0; b < bucketCountAdjusted; b++)
-                    {
-                        int bStart = b * pointsPerBucket;
-                        if (bStart >= sampledEnd) break;
-                        int bEnd = (b == bucketCountAdjusted - 1) ? sampledEnd - 1 : (bStart + pointsPerBucket - 1);
-                        if (bEnd >= pointsCount) bEnd = pointsCount - 1;
-
-                        ChannelPoint minPoint = null, maxPoint = null;
-                        int minIdxLocal = -1, maxIdxLocal = -1;
-
-                        for (int i = bStart; i <= bEnd; i++)
-                        {
-                            ChannelPoint point = pointsInRange[i];
-                            // 跳过丢帧虚拟点(IsLost, Y=旧值):避免其成为桶极值被抽样选中,否则抽样段会整段画成虚线
-                            if (point == null || point.IsLost) continue;
-
-                            if (minPoint == null || point.Y < minPoint.Y)
-                            {
-                                minPoint = point;
-                                minIdxLocal = i;
-                            }
-                            if (maxPoint == null || point.Y > maxPoint.Y)
-                            {
-                                maxPoint = point;
-                                maxIdxLocal = i;
-                            }
-                        }
-
-                        if (minPoint == null) continue; // 桶内全为丢帧虚拟点:跳过该桶
-
-                        // 每桶仅保留1个代表点:升序桶取max(偏桶尾)、降序桶取min(偏桶尾)。
-                        // 相邻代表点X间距稳定≈桶宽——固定周期信号缩小视图时点间距保持均匀。
-                        // (此前min+max双点方案:桶内两点间距小、桶间间距大;"取偏移最远极值"方案:
-                        //  近线性桶内选择由数值噪声驱动翻转,同样表现为"两密两疏"不均匀)
-                        filteredPoints.Add(minIdxLocal < maxIdxLocal ? maxPoint : minPoint);
-                    }
-
-                    // 绘制抽样的折线
-                    for (int i = 0; i < filteredPoints.Count - 1; i++)
-                    {
-                        AddLineToPaths(rect, solidPath, dashPath, ref needStartSolidFigure, ref needStartDashFigure,
-                                       filteredPoints[i], filteredPoints[i + 1], yMin, yMax);
-                    }
-
-                    // 尾部不做抽样，直接绘制（确保尾部曲线稳定）
-                    if (sampledEnd < pointsCount)
-                    {
-                        // 连接最后一个抽样点与尾部第一个点
-                        if (filteredPoints.Count > 0)
-                        {
-                            AddLineToPaths(rect, solidPath, dashPath, ref needStartSolidFigure, ref needStartDashFigure,
-                                           filteredPoints[filteredPoints.Count - 1], pointsInRange[sampledEnd], yMin, yMax);
-                        }
-                        // 直接绘制尾部所有点
-                        for (int i = sampledEnd; i < pointsCount - 1; i++)
-                        {
-                            ChannelPoint cp = pointsInRange[i];
-                            ChannelPoint np = pointsInRange[i + 1];
-                            if (cp == null || np == null) continue;
-                            AddLineToPaths(rect, solidPath, dashPath, ref needStartSolidFigure, ref needStartDashFigure,
-                                           cp, np, yMin, yMax);
-                        }
-                    }
-                }
-                else
-                {
-                    // 不抽样：直接遍历批量获取的点
                     for (int i = 0; i < pointsCount - 1; i++)
                     {
                         ChannelPoint currentPoint = pointsInRange[i];
@@ -620,57 +554,128 @@ namespace PCAN_Client
                         AddLineToPaths(rect, solidPath, dashPath, ref needStartSolidFigure, ref needStartDashFigure,
                                        currentPoint, nextPoint, yMin, yMax);
                     }
-                }
 
-                if (solidPath.PointCount > 1)
-                {
-                    g.DrawPath(solidPen, solidPath);
-                }
-                if (dashPath.PointCount > 1)
-                {
-                    try
+                    if (solidPath.PointCount > 1)
                     {
-                        g.DrawPath(dashPen, dashPath);
+                        g.DrawPath(solidPen, solidPath);
                     }
-                    catch (OutOfMemoryException)
+                    if (dashPath.PointCount > 1)
                     {
-                        // GDI+ 路径包含过多子图元时跳过虚线绘制，不影响后续渲染
-                        System.Diagnostics.Debug.WriteLine("虚线路径太复杂，跳过绘制");
+                        try
+                        {
+                            g.DrawPath(dashPen, dashPath);
+                        }
+                        catch (OutOfMemoryException)
+                        {
+                            // GDI+ 路径包含过多子图元时跳过虚线绘制，不影响后续渲染
+                            System.Diagnostics.Debug.WriteLine("虚线路径太复杂，跳过绘制");
+                        }
                     }
                 }
             }
+            finally
+            {
+                g.SmoothingMode = prevSmoothing;
+            }
 
             // 数据点绘制：点密度不超过每像素1个时显示（避免糊成一片）
-            bool showDots = totalPoints <= plotWidth || totalPoints <= 100;
+            // 面板过矮时不画点：纵向只有十几像素，点只会糊成一片且是单帧最大开销之一
+            bool showDots = (totalPoints <= plotWidth || totalPoints <= 100) && rect.Height >= 24;
             if (showDots)
             {
-                SolidBrush brush = GetCachedBrush(channel.Color);
-                // 半透明深色描边：浅色曲线(黄/白等)在白底上也清晰可辨
-                Pen outlinePen = GetCachedPen(Color.FromArgb(90, 0, 0, 0), 1f);
                 // 数据点直径跟随通道设置(默认5px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
                 float dotSizePx = Math.Max(1, channel.DotSize) * _renderScale;
                 int dotDiameter = Math.Max(1, (int)Math.Round(dotSizePx));
                 int dotRadius = dotDiameter / 2;
 
                 // 按屏幕X间距显示圆点:相邻点间距不小于直径 → 不重叠(大小一致)、显示均匀。
+                // 间距同时受点数上限约束（≤200 点/通道）：点绘制是 GDI+ 最贵的部分之一。
+                int dotSpacing = Math.Max(dotDiameter, plotWidth / 200);
+
+                // 圆点用预渲染贴图一次性 blit（每点 2 次 GDI+ 绘制 → 1 次 DrawImageUnscaled）
+                Bitmap dotSprite = GetDotSprite(channel.Color, dotDiameter);
+
                 // 跳过IsLost虚点(Y=旧值,调度脉冲而非真实采样):避免其与真实点(报文周期)混排导致间距忽密忽疏
-                // 初始值取负直径,保证首点必然通过(screenX - int.MinValue 会溢出为负导致全部点被跳过)
-                int lastDotScreenX = -dotDiameter;
+                // 初始值取负间距,保证首点必然通过(screenX - int.MinValue 会溢出为负导致全部点被跳过)
+                int lastDotScreenX = -dotSpacing;
                 for (int i = 0; i < pointsCount; i++)
                 {
                     ChannelPoint point = pointsInRange[i];
                     if (point == null || point.IsLost) continue;
                     if (point.Y < yMin || point.Y > yMax) continue;
                     int screenX = ValueToScreenX(point.X, rect);
-                    if (screenX - lastDotScreenX < dotDiameter) continue;
+                    if (screenX - lastDotScreenX < dotSpacing) continue;
                     lastDotScreenX = screenX;
                     int screenY = ValueToScreenY(point.Y, yMin, yMax, rect);
-                    int dotX = screenX - dotRadius;
-                    int dotY = screenY - dotRadius;
-                    g.FillEllipse(brush, dotX, dotY, dotDiameter, dotDiameter);
-                    g.DrawEllipse(outlinePen, dotX, dotY, dotDiameter, dotDiameter);
+                    g.DrawImageUnscaled(dotSprite, screenX - dotRadius - 1, screenY - dotRadius - 1);
                 }
             }
+        }
+
+        /// <summary>
+        /// 把已抽稀的点列表按均匀步长再降采样到目标点数（首尾保留，O(点数)）。
+        /// 仅在曲线描边像素超预算（缩小视图、锯齿折线）时使用。
+        /// </summary>
+        private static List<ChannelPoint> SubSample(List<ChannelPoint> points, int targetCount)
+        {
+            int count = points.Count;
+            if (count <= targetCount || targetCount < 2) return points;
+
+            var result = new List<ChannelPoint>(targetCount);
+            double step = (double)(count - 1) / (targetCount - 1);
+            int lastIndex = -1;
+            for (int i = 0; i < targetCount; i++)
+            {
+                int index = (int)Math.Round(i * step);
+                if (index >= count) index = count - 1;
+                if (index == lastIndex) continue;
+                lastIndex = index;
+                result.Add(points[index]);
+            }
+            if (!ReferenceEquals(result[result.Count - 1], points[count - 1])) result.Add(points[count - 1]);
+            return result;
+        }
+
+        /// <summary>
+        /// 估算折线在屏幕上的描边像素总长（Σ|Δy| 按 Y 值域映射到面板高度）。
+        /// 用于判断曲线是否"陡峭/锯齿"——GDI+ 抗锯齿对这种折线的开销远高于平滑曲线。
+        /// </summary>
+        private static double EstimateStrokePixels(List<ChannelPoint> points, int count, double yMin, double yMax, int panelHeight)
+        {
+            double range = yMax - yMin;
+            if (range <= 0 || count < 2) return 0;
+            double sumDy = 0;
+            for (int i = 1; i < count; i++)
+            {
+                ChannelPoint a = points[i - 1];
+                ChannelPoint b = points[i];
+                if (a == null || b == null) continue;
+                sumDy += Math.Abs(b.Y - a.Y);
+            }
+            return sumDy / range * panelHeight;
+        }
+
+        /// <summary>
+        /// 获取预渲染的数据点贴图（圆点 + 半透明深色描边）。
+        /// 浅色曲线(黄/白等)在白底上也清晰可辨；按颜色/直径缓存，避免每帧逐点 FillEllipse+DrawEllipse。
+        /// </summary>
+        private Bitmap GetDotSprite(Color color, int diameter)
+        {
+            var key = new PenKey(color, diameter);
+            if (_dotSpriteCache.TryGetValue(key, out var sprite)) return sprite;
+
+            // 四周各留 1px 给描边抗锯齿
+            sprite = new Bitmap(diameter + 2, diameter + 2, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(sprite))
+            using (var brush = new SolidBrush(color))
+            using (var outline = new Pen(Color.FromArgb(90, 0, 0, 0), 1f))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.FillEllipse(brush, 1, 1, diameter, diameter);
+                g.DrawEllipse(outline, 1, 1, diameter, diameter);
+            }
+            _dotSpriteCache[key] = sprite;
+            return sprite;
         }
 
         /// <summary>
@@ -712,62 +717,6 @@ namespace PCAN_Client
                 solidPath.AddLine(currentScreenPoint, nextScreenPoint);
                 needStartDashFigure = true;
             }
-        }
-
-        /// <summary>
-        /// 分桶抽样：将数据点按索引均匀分桶，每桶保留 Y 最小和最大的点（按原始时间顺序排列），
-        /// 完整保留曲线的峰谷特征，避免均匀抽样导致的波形失真。
-        /// </summary>
-        private List<ChannelPoint> SamplePointsByBuckets(List<ChannelPoint> points, int bucketCount)
-        {
-            if (points.Count <= bucketCount || bucketCount <= 0) return points;
-
-            int pointsPerBucket = points.Count / bucketCount;
-            if (pointsPerBucket < 1) pointsPerBucket = 1;
-
-            List<ChannelPoint> result = new List<ChannelPoint>(bucketCount * 2);
-
-            for (int b = 0; b < bucketCount; b++)
-            {
-                int start = b * pointsPerBucket;
-                if (start >= points.Count) break;
-                int end = (b == bucketCount - 1) ? points.Count : (start + pointsPerBucket);
-
-                ChannelPoint minPoint = null, maxPoint = null;
-                int minIdx = -1, maxIdx = -1;
-
-                for (int i = start; i < end && i < points.Count; i++)
-                {
-                    if (minPoint == null || points[i].Y < minPoint.Y)
-                    {
-                        minPoint = points[i];
-                        minIdx = i;
-                    }
-                    if (maxPoint == null || points[i].Y > maxPoint.Y)
-                    {
-                        maxPoint = points[i];
-                        maxIdx = i;
-                    }
-                }
-
-                if (minPoint == null) continue;
-
-                // 按原始时间顺序添加，保持波形正确
-                if (minIdx <= maxIdx)
-                {
-                    result.Add(minPoint);
-                    if (minIdx != maxIdx)
-                        result.Add(maxPoint);
-                }
-                else
-                {
-                    result.Add(maxPoint);
-                    if (minIdx != maxIdx)
-                        result.Add(minPoint);
-                }
-            }
-
-            return result;
         }
 
         private void DrawPanelChannelName(Graphics g, Rectangle rect, ChannelData channel)
