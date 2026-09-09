@@ -328,6 +328,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Chart\ChannelData.cs" />
+    <Compile Include="Chart\ChannelLookup.cs" />
     <Compile Include="Chart\ChartControl.cs">
       <SubType>Component</SubType>
     </Compile>

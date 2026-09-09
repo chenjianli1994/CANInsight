@@ -31,6 +31,9 @@ namespace PCAN_Client
 
         public List<ChannelData> Channels { get; private set; }
 
+        /// <summary>曲线通道查找表快照（UI线程在Channels变更后重建并整体替换；调度/解码线程只读，读到的一定是完整快照）</summary>
+        private volatile ChannelLookupTable _channelLookup = ChannelLookupTable.Empty;
+
         /// <summary>
         /// CAN总线通道配置列表（多通道模式）
         /// </summary>
@@ -3058,6 +3061,7 @@ namespace PCAN_Client
                         newCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
                         newCh.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                         Channels.Add(newCh);
+                        RebuildChannelLookup();
                         _chartControl.SetChannels(Channels);
 
                         // 从通道DBC取报文对象，注册调度并设置ChartShowFlag
@@ -3085,6 +3089,7 @@ namespace PCAN_Client
         private void ChartFrom_Load(object sender, EventArgs e)
         {
             Channels = new List<ChannelData>();
+            RebuildChannelLookup();
             CAN_Data.DbcHelper.ChartShowOpenFlag = true;
             // 启动时已从BusChannels.json恢复全局通道配置,同步按钮文字
             if (_busChannels.Count > 0)
@@ -3295,6 +3300,7 @@ namespace PCAN_Client
                     channel.Clear();
                     Channels.Remove(channel);
                 }
+                RebuildChannelLookup();
                 // 按行引用删除,避免索引位移
                 foreach (var row in rowsToRemove)
                     _channelGrid.Rows.Remove(row);
@@ -3526,6 +3532,7 @@ namespace PCAN_Client
                 }
                 Channels.Insert(channelsIndex, channel);
                 InsertChannelGridRow(safeInsertIndex, channel, isChecked);
+                RebuildChannelLookup();
             }
 
             SelectChannelGridRow(channel);
@@ -3565,36 +3572,34 @@ namespace PCAN_Client
             DeleteSelectedChannel();
         }
 
-        /// <summary>按信号名找曲线通道；多通道模式（同一份DBC配多路，信号名相同）额外匹配逻辑通道（-1=兼容未分配通道，通配）</summary>
-        private int GetChannelIndex(string signalName, byte logicChannel = 0)
+        /// <summary>重建曲线通道查找表（Channels 每次变更后调用，仅UI线程；构建完整体替换，读侧无锁）</summary>
+        private void RebuildChannelLookup()
         {
-            int targetBusIndex = logicChannel > 0 ? BaseParamter.GetChannelIndex(logicChannel) : -1;
-            if (targetBusIndex < 0 && logicChannel > 0) targetBusIndex = logicChannel - 1;
-            for (int index = 0; index < Channels.Count; index++)
-            {
-                if (!Channels[index].DbcSignalName.Equals(signalName)) continue;
-                if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
-                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != targetBusIndex)
-                    continue;
-                return index;
-            }
-            return -1;
+            _channelLookup = ChannelLookupTable.Build(Channels);
         }
-        /// <summary>按 CAN ID+信号索引找曲线通道；多通道模式下额外匹配信号所属逻辑通道（BusChannelIndex），同ID信号各归各的曲线（-1=兼容未分配通道，通配）</summary>
-        private int GetChannelIndex(int messageId, int signalIndex, byte logicChannel = 0)
+
+        /// <summary>逻辑通道号 → BusChannels 行索引（未匹配时回退 logicChannel-1，与原线性扫描一致）</summary>
+        private static int ResolveBusIndex(byte logicChannel)
         {
-            int targetBusIndex = logicChannel > 0 ? BaseParamter.GetChannelIndex(logicChannel) : -1;
-            if (targetBusIndex < 0 && logicChannel > 0) targetBusIndex = logicChannel - 1;
-            for (int index = 0; index < Channels.Count; index++)
-            {
-                if (Channels[index].DbcSignalIndex != signalIndex || Channels[index].DbcMessageId != messageId)
-                    continue;
-                if (BaseParamter.BusChannels.Count > 0 && logicChannel > 0
-                    && Channels[index].BusChannelIndex >= 0 && Channels[index].BusChannelIndex != targetBusIndex)
-                    continue; // 多通道同ID：只喂给信号所属通道的曲线
-                return index;
-            }
-            return -1;
+            int targetBusIndex = BaseParamter.GetChannelIndex(logicChannel);
+            if (targetBusIndex < 0) targetBusIndex = logicChannel - 1;
+            return targetBusIndex;
+        }
+
+        /// <summary>按信号名找曲线通道；多通道模式（同一份DBC配多路，信号名相同）额外匹配逻辑通道（-1=兼容未分配通道，通配）</summary>
+        private ChannelData FindChannel(string signalName, byte logicChannel = 0)
+        {
+            bool filterByBusChannel = BaseParamter.BusChannels.Count > 0 && logicChannel > 0;
+            return _channelLookup.FindBySignalName(signalName, filterByBusChannel,
+                filterByBusChannel ? ResolveBusIndex(logicChannel) : -1);
+        }
+
+        /// <summary>按 CAN ID+信号索引找曲线通道；多通道模式下额外匹配信号所属逻辑通道（BusChannelIndex），同ID信号各归各的曲线（-1=兼容未分配通道，通配）</summary>
+        private ChannelData FindChannel(int messageId, int signalIndex, byte logicChannel = 0)
+        {
+            bool filterByBusChannel = BaseParamter.BusChannels.Count > 0 && logicChannel > 0;
+            return _channelLookup.FindByMessageSignal(messageId, signalIndex, filterByBusChannel,
+                filterByBusChannel ? ResolveBusIndex(logicChannel) : -1);
         }
         private int _lastGridValueUpdateTick = 0;  // 上次信号列表数值刷新时间(TickCount),用于实时刷新节流
         public void AddPoint(uint msgId, int signalIndex, double rawValue, uint cycleTime, byte logicChannel = 0)
@@ -3604,13 +3609,12 @@ namespace PCAN_Client
             {
                 return;
             }
-            int channelIndex = Main.chartFromShow.GetChannelIndex((int)msgId, signalIndex, logicChannel);
-            if (-1 != channelIndex)
+            ChannelData channel = Main.chartFromShow.FindChannel((int)msgId, signalIndex, logicChannel);
+            if (channel != null)
             {
                 TimeSpan elapsed = DateTime.Now - Main.chartFromShow.startTime;
                 _currentTime = elapsed.TotalSeconds;
 
-                ChannelData channel = Main.chartFromShow.Channels[channelIndex];
                 channel.AddPoint(_currentTime, rawValue, false);
                 // 无线测量线时实时更新当前值(节流:最多每100ms刷新一次,避免高帧率下CPU空耗)
                 if (!_chartControl.MeasureLineX1.HasValue)
@@ -3830,16 +3834,15 @@ namespace PCAN_Client
                             if (signal.ChartShowFlag)
                             {
                                 // 多通道同名信号（同一份DBC配多路）：按逻辑通道匹配，超时丢失点插到各自通道的曲线
-                                int index = Main.chartFromShow.GetChannelIndex(signal.signalName, sc.LogicChannel);
-                                if (-1 != index)
+                                ChannelData channel = Main.chartFromShow.FindChannel(signal.signalName, sc.LogicChannel);
+                                if (channel != null)
                                 {
-                                    ChannelData channel = Main.chartFromShow.Channels[index];
                                     if (isLost)
                                     {
                                         channel.AddPoint(Main.chartFromShow._currentTime, channel.LastValue, isLost);
                                         if (!channel.IsLost)
                                         {
-                                            Main.chartFromShow.Channels[index].IsLost = true;
+                                            channel.IsLost = true;
                                             UpdateMessageInterval(msg.messgeId, msg.cycleTime, sc.LogicChannel);
                                         }
                                     }
@@ -3847,7 +3850,7 @@ namespace PCAN_Client
                                     {
                                         if (channel.IsLost)
                                         {
-                                            Main.chartFromShow.Channels[index].IsLost = false;
+                                            channel.IsLost = false;
                                             UpdateMessageInterval(msg.messgeId, msg.cycleTime * 2, sc.LogicChannel);
                                         }
                                     }
@@ -4472,6 +4475,7 @@ namespace PCAN_Client
                 Channels.Clear();
                 _channelGrid.Rows.Clear();
             }
+            RebuildChannelLookup();
 
             _chartControl.SetChannels(Channels);
             _chartControl.ResetView();
@@ -4573,6 +4577,7 @@ namespace PCAN_Client
                 Channels.Clear();
                 _channelGrid.Rows.Clear();
             }
+            RebuildChannelLookup();
 
             Color[] colors = new Color[]
             {
@@ -4624,6 +4629,7 @@ namespace PCAN_Client
                 presetCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
                 presetCh.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                 Channels.Add(presetCh);
+                RebuildChannelLookup();
                 multiChartFromScheduler.AddMessage(msg, signal.CycleTime, (byte)(busIdx + 1));
 
                 // 设置ChartShowFlag到通道DBC实例

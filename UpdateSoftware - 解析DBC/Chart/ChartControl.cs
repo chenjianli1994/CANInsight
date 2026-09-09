@@ -44,6 +44,14 @@ namespace PCAN_Client
         private Dictionary<PenKey, Bitmap> _dotSpriteCache = new Dictionary<PenKey, Bitmap>();
         /// <summary>单通道每帧描边像素预算：超出则降采样并关闭抗锯齿（GDI+ 软件描边约 0.1~0.3µs/px）</summary>
         private const int StrokePixelBudget = 15000;
+        /// <summary>轴标签文本测量缓存：键=(文本, 字号, DPI)，避免每帧对每个刻度重复 MeasureString</summary>
+        private readonly Dictionary<(string Text, float FontSize, float DpiX, float DpiY), SizeF> _textSizeCache =
+            new Dictionary<(string, float, float, float), SizeF>();
+        private const int TextSizeCacheLimit = 500;   // 超限整体清空，保证长时间运行不无界增长
+        /// <summary>缩放字体缓存：报告截图路径按 (字体族, 样式, 字号) 复用，避免每帧 new Font 泄漏 GDI 句柄</summary>
+        private readonly Dictionary<(string Family, FontStyle Style, float Size), Font> _scaledFontCache =
+            new Dictionary<(string, FontStyle, float), Font>();
+        private const int ScaledFontCacheLimit = 4;
         private Pen _zoomPen = new Pen(Color.Blue, 1) { DashStyle = DashStyle.Dash };
         private Brush _zoomBrush = new SolidBrush(Color.FromArgb(50, Color.Blue));
         private readonly object _lockObj = new object();
@@ -134,15 +142,34 @@ namespace PCAN_Client
             return pen;
         }
 
-        /// <summary>获取缩放后的字体（缓存避免重复创建）</summary>
+        /// <summary>获取缩放后的字体（按字体族/样式/字号缓存复用，统一在 Dispose 释放；调用方不要 Dispose 返回值）</summary>
         private Font GetScaledFont(Font baseFont)
         {
             if (_renderScale <= 1.01f) return baseFont;
             float size = baseFont.Size * _renderScale;
-            // 用缓存避免每次渲染都创建新字体
-            var key = new PenKey(Color.Black, size); // 复用PenKey做缓存key
-            // 简化处理：每次缩放时创建新字体（截图频率低，可接受）
-            return new Font(baseFont.FontFamily, size, baseFont.Style);
+            var key = (baseFont.FontFamily.Name, baseFont.Style, size);
+            if (_scaledFontCache.TryGetValue(key, out Font cached)) return cached;
+
+            if (_scaledFontCache.Count >= ScaledFontCacheLimit)
+            {
+                foreach (var font in _scaledFontCache.Values) font.Dispose();
+                _scaledFontCache.Clear();
+            }
+            Font scaled = new Font(baseFont.FontFamily, size, baseFont.Style);
+            _scaledFontCache[key] = scaled;
+            return scaled;
+        }
+
+        /// <summary>测量文本尺寸（带缓存：键含文本/字号/DPI，避免每帧对每个刻度重复 MeasureString）</summary>
+        private SizeF MeasureTextCached(Graphics g, string text, Font font)
+        {
+            var key = (text, font.Size, g.DpiX, g.DpiY);
+            if (_textSizeCache.TryGetValue(key, out SizeF size)) return size;
+
+            size = g.MeasureString(text, font);
+            if (_textSizeCache.Count >= TextSizeCacheLimit) _textSizeCache.Clear();
+            _textSizeCache[key] = size;
+            return size;
         }
 
         protected override void Dispose(bool disposing)
@@ -166,9 +193,12 @@ namespace PCAN_Client
                 foreach (var pen in _penCache.Values) pen.Dispose();
                 foreach (var pen in _dashPenCache.Values) pen.Dispose();
                 foreach (var sprite in _dotSpriteCache.Values) sprite.Dispose();
+                foreach (var font in _scaledFontCache.Values) font.Dispose();
                 _penCache.Clear();
                 _dashPenCache.Clear();
                 _dotSpriteCache.Clear();
+                _scaledFontCache.Clear();
+                _textSizeCache.Clear();
             }
             base.Dispose(disposing);
         }
@@ -404,12 +434,11 @@ namespace PCAN_Client
                     double xValue = xMin + range * i / xLabelCount;
                     int x = ValueToScreenX(xValue, rect);
                     string label = xValue.ToString(format) + "s";
-                    SizeF labelSize = g.MeasureString(label, scaledAxisFont);
+                    SizeF labelSize = MeasureTextCached(g, label, scaledAxisFont);
                     // X轴刻度线
                     g.DrawLine(_axisPen, x, rect.Bottom, x, rect.Bottom + 4);
                     g.DrawString(label, scaledAxisFont, _textBrush, x - labelSize.Width / 2, rect.Bottom + 5);
                 }
-                if (scaledAxisFont != _axisFont) scaledAxisFont.Dispose();
             }
 
             // Y轴标签：有枚举定义时显示枚举描述，否则显示数值
@@ -434,7 +463,7 @@ namespace PCAN_Client
                     if (!float.IsNaN(lastEnumY) && Math.Abs(y - lastEnumY) < minLabelGap) continue;
 
                     string label = kvp.Value;
-                    SizeF labelSize = g.MeasureString(label, scaledFont);
+                    SizeF labelSize = MeasureTextCached(g, label, scaledFont);
 
                     float labelY = y - labelSize.Height / 2;
                     if (labelY < rect.Top) labelY = rect.Top;
@@ -465,7 +494,7 @@ namespace PCAN_Client
                     double step = yLabelCount > 0 ? (yMax - yMin) / yLabelCount : (yMax - yMin);
                     int decimals = step >= 1 ? 0 : (step >= 0.1 ? 1 : (step >= 0.01 ? 2 : 3));
                     string label = Math.Round(yValue, decimals).ToString("F" + decimals);
-                    SizeF labelSize = g.MeasureString(label, scaledFont);
+                    SizeF labelSize = MeasureTextCached(g, label, scaledFont);
 
                     // 标签限制在面板顶部和底部直线之间，避免与相邻面板重叠
                     float labelY = y - labelSize.Height / 2;
@@ -1461,7 +1490,7 @@ namespace PCAN_Client
                         {
                             int screenY1 = ValueToScreenY(point1.Y, yMin, yMax, panelRect);
                             string valueLabel = FormatMeasureLineValue(channel, point1.Y);
-                            SizeF valueSize = g.MeasureString(valueLabel, _measureLineFont);
+                            SizeF valueSize = MeasureTextCached(g, valueLabel, _measureLineFont);
                             using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.White)))
                             {
                                 g.FillRectangle(bgBrush, screenX1 + 5, screenY1 - valueSize.Height / 2 - 2, valueSize.Width + 4, valueSize.Height + 4);
@@ -1478,7 +1507,7 @@ namespace PCAN_Client
                         {
                             int screenY2 = ValueToScreenY(point2.Y, yMin, yMax, panelRect);
                             string valueLabel = FormatMeasureLineValue(channel, point2.Y);
-                            SizeF valueSize = g.MeasureString(valueLabel, _measureLineFont);
+                            SizeF valueSize = MeasureTextCached(g, valueLabel, _measureLineFont);
                             using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.White)))
                             {
                                 g.FillRectangle(bgBrush, screenX2 + 5, screenY2 - valueSize.Height / 2 - 2, valueSize.Width + 4, valueSize.Height + 4);
@@ -1503,7 +1532,7 @@ namespace PCAN_Client
                     g.DrawLine(pen, screenX1, totalTop, screenX1, totalBottom);
                 }
                 string label1 = string.Format("{0:F3}s", _measureLine1X.Value);
-                SizeF size1 = g.MeasureString(label1, _axisFont);
+                SizeF size1 = MeasureTextCached(g, label1, _axisFont);
                 using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.White)))
                 {
                     g.FillRectangle(bgBrush, screenX1 - size1.Width / 2 - 2, Height - 27, size1.Width + 4, size1.Height + 4);
@@ -1520,7 +1549,7 @@ namespace PCAN_Client
                     g.DrawLine(pen, screenX2, totalTop, screenX2, totalBottom);
                 }
                 string label2 = string.Format("{0:F3}s", _measureLine2X.Value);
-                SizeF size2 = g.MeasureString(label2, _axisFont);
+                SizeF size2 = MeasureTextCached(g, label2, _axisFont);
                 using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.White)))
                 {
                     g.FillRectangle(bgBrush, screenX2 - size2.Width / 2 - 2, Height - 27, size2.Width + 4, size2.Height + 4);
@@ -1535,7 +1564,7 @@ namespace PCAN_Client
                 int screenX2 = ValueToScreenX(_measureLine2X.Value, new Rectangle(paddingLeft, 5, Width - paddingLeft - paddingRight, Height - 60));
                 int midX = (screenX1 + screenX2) / 2;
                 string diffLabel = string.Format("Δt = {0:F3}s", diff);
-                SizeF diffSize = g.MeasureString(diffLabel, _axisFont);
+                SizeF diffSize = MeasureTextCached(g, diffLabel, _axisFont);
                 using (Brush bgBrush = new SolidBrush(Color.FromArgb(200, Color.Yellow)))
                 {
                     g.FillRectangle(bgBrush, midX - diffSize.Width / 2 - 4, 15, diffSize.Width + 8, diffSize.Height + 4);

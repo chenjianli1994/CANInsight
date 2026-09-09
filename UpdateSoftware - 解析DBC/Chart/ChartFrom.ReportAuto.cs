@@ -456,6 +456,7 @@ namespace PCAN_Client
                     channel.Clear();
                 Channels.Clear();
             }
+            RebuildChannelLookup();
 
             // 从SignalList恢复信号
             Color[] palette = new Color[]
@@ -500,6 +501,7 @@ namespace PCAN_Client
                 ch.LineWidth = _globalLineWidth;   // 继承当前全局线宽
                 ch.DotSize = _globalDotSize;       // 继承当前全局数据点大小
                 Channels.Add(ch);
+                RebuildChannelLookup();
             }
 
             _chartControl.SetChannels(Channels);
@@ -671,6 +673,7 @@ namespace PCAN_Client
                 ch.Visible = false;      // 不绘制曲线
                 ch.IsReportOnly = true;  // 标记为占位符报告专用通道
                 Channels.Add(ch);
+                RebuildChannelLookup();
                 added.Add(ch);
             }
 
