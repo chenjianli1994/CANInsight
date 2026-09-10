@@ -64,11 +64,16 @@ namespace PCAN_Client
 
         private static readonly HwBindItem NotConnectItem = new HwBindItem { HwType = "", Hw = 0, Display = "不连接" };
 
-        public ChannelManagerForm(Main main)
+        public ChannelManagerForm(Main main) : this(main, ResolveRealTimeMode())
+        {
+        }
+
+        /// <summary>由调用方指定模式（绘图窗口内打开时传它自己的 RealTimeDataSta，避免读到别的窗口的全局引用）</summary>
+        public ChannelManagerForm(Main main, bool realTimeMode)
         {
             _main = main;
-            AppLog.Write("[CAN-UI] 通道管理对话框打开");
-            _realTimeMode = Main.chartFromShow?.RealTimeDataSta ?? true;
+            _realTimeMode = realTimeMode;
+            AppLog.Write("[CAN-UI] 通道管理对话框打开 (mode=" + (realTimeMode ? "实时数据" : "报文数据") + ")");
             BuildUi();
             // 先用 Main 现有识别结果立即填充；窗口显示后后台异步刷新，避免识别异常时阻塞界面
             if (_main != null)
@@ -361,6 +366,18 @@ namespace PCAN_Client
             byte sameNo = BaseParamter.GetLogicChannel(logicIndex);
             var same = items.FirstOrDefault(x => x.Hw != 0 && x.Hw == sameNo);
             return (same ?? NotConnectItem).Key;
+        }
+
+        /// <summary>
+        /// 未由调用方指定模式时的解析：优先取仍存活的绘图窗口（它才是模式的持有者）；
+        /// 绘图窗口尚未创建/已释放时按上次保存的 ChartMode 判断（与 ChartFrom 构造函数同一判据）。
+        /// 不能直接默认"实时"——否则报文模式下"通道号/BLF通道号"列标题与校验文案会渲染反。
+        /// </summary>
+        internal static bool ResolveRealTimeMode()
+        {
+            var chart = Main.chartFromShow;
+            if (chart != null && !chart.IsDisposed) return chart.RealTimeDataSta;
+            return (string)PCAN_Client.Properties.Settings.Default["ChartMode"] != "FileData";
         }
 
         /// <summary>从全局通道配置填充表格</summary>

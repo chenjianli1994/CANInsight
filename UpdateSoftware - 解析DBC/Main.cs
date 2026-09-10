@@ -3134,6 +3134,8 @@ namespace PCAN_Client
                 if (null == chartFromShow || chartFromShow.IsDisposed || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
                 {
                     chartFromShow = new ChartFrom();
+                    // 与 Main_Load/Program 的创建路径保持一致：绘图窗口关闭即退出程序
+                    chartFromShow.FormClosed += (cs, cev) => System.Windows.Forms.Application.Exit();
                     chartFromShow.Show();
                 }
                 else
@@ -3158,6 +3160,8 @@ namespace PCAN_Client
             if (null == chartFromShow || chartFromShow.IsDisposed || false == CAN_Data.DbcHelper.ChartShowOpenFlag)
             {
                 chartFromShow = new ChartFrom();
+                // 与 Main_Load/Program 的创建路径保持一致：绘图窗口关闭即退出程序
+                chartFromShow.FormClosed += (cs, cev) => System.Windows.Forms.Application.Exit();
                 chartFromShow.Show();
             }
             // 窗口已存在但可能被隐藏/最小化/置后 → 确保可见并置前

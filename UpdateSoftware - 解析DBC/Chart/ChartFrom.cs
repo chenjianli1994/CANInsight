@@ -1669,8 +1669,19 @@ namespace PCAN_Client
             _cancelPlayback = false;
             if (_isLoadingFile) return;
 
-            // 实时模式且未连接硬件(PCAN/CANoe)时:弹警告并中断,避免空跑(放在任何状态变更之前)
-            if (!_isFileMode && !Main.pcanOpenFlag && !Main.canoeOpenFlag)
+            // 开始前的模式校验(放在任何状态变更之前):分支以 RealTimeDataSta(用户选的模式)为准,
+            // _isFileMode 只表示"是否已加载/已勾选报文文件",不再由它决定跑实时还是回放——
+            // 否则报文模式未加载文件时会弹"实时模式"警告,连着硬件时更会直接按实时采集。
+            if (!RealTimeDataSta && !_isFileMode)
+            {
+                MessageBox.Show("报文数据模式需要先加载报文文件:请点击「加载文件」后再开始", "提示",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _statusLabel.Text = "状态: 已停止 (报文模式 — 请先加载报文文件)";
+                _statusLabel.ForeColor = Color.Red;
+                return;
+            }
+            // 实时模式且未连接硬件(PCAN/CANoe)时:弹警告并中断,避免空跑
+            if (RealTimeDataSta && !Main.pcanOpenFlag && !Main.canoeOpenFlag)
             {
                 MessageBox.Show("实时模式需要连接CAN硬件:请在「报文列表」窗口连接 PCAN 或 CANoe 后再开始", "提示",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1691,7 +1702,7 @@ namespace PCAN_Client
             _chartControl.SetAutoScroll(true);
             _btnAutoScroll.Text = "停止滑动";
 
-            if (_isFileMode)
+            if (!RealTimeDataSta)
             {
                 // ========== 文件回放模式 ==========
                 // 内存模式且数据未加载时：临时切到流式模式 + 开启缓存
@@ -2344,7 +2355,7 @@ namespace PCAN_Client
         {
             // 统一通道管理窗口（硬件识别/通道配置/DBC/映射/连接一窗统管）：
             // 窗口内保存时已写回全局通道列表、持久化并刷新聚合DBC视图，此处仅执行后置刷新
-            using (var dlg = new ChannelManagerForm(Main.main))
+            using (var dlg = new ChannelManagerForm(Main.main, RealTimeDataSta))
             {
                 dlg.ShowDialog(this);
                 if (!dlg.ConfigSaved) return;
@@ -2466,7 +2477,10 @@ namespace PCAN_Client
             bool fromMemory = _rawMessages != null && _rawMessages.Count > 0;
             if (!fromMemory && !_isFileMode)
             {
-                _statusLabel.Text = "状态: 实时模式无法补采历史数据,加载文件后可用";
+                // 文案随当前模式:报文模式没数据是"还没加载文件",不是"实时模式无法补采"
+                _statusLabel.Text = RealTimeDataSta
+                    ? "状态: 实时模式无法补采历史数据,加载文件后可用"
+                    : "状态: 报文模式尚未加载数据,请先加载报文文件";
                 _statusLabel.ForeColor = Color.Orange;
                 onComplete?.Invoke();
                 return;
@@ -2757,6 +2771,9 @@ namespace PCAN_Client
             if (_streamingMode)
                 _cancelPlayback = true;
             RunStatus = false;
+            // 停止后指示器回到"模式"语义:播放中的"流式/内存"只描述本次播放方式,不能代表当前模式
+            _playbackModeText = RealTimeDataSta ? "实时数据" : "报文数据";
+            _playbackModeColor = Color.Gray;
             UpdateModeIndicator();
             _playbackTimer.Stop();
             multiChartFromScheduler.Stop();
@@ -2769,7 +2786,8 @@ namespace PCAN_Client
             _streamingPendingMessage = null;
             _btnStart.Enabled = true;
             _btnStop.Enabled = false;
-            _statusLabel.Text = "状态: 已停止" + (_isFileMode ? " (可重新播放)" : "");
+            _statusLabel.Text = "状态: 已停止 (" + (RealTimeDataSta ? "实时模式" : "报文模式")
+                + (!RealTimeDataSta && _isFileMode ? " — 可重新播放" : "") + ")";
             _statusLabel.ForeColor = Color.Red;
             _chartControl.AutoFitView();
 
