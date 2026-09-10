@@ -391,6 +391,7 @@
     <Compile Include="ResistanceSleep.cs" />
     <Compile Include="util\AppLog.cs" />
     <Compile Include="util\Delay.cs" />
+    <Compile Include="util\DgvComboHelper.cs" />
     <Compile Include="util\SelfUpdater.cs" />
     <Compile Include="util\UiTheme.cs" />
     <EmbeddedResource Include="CanSend.resx">

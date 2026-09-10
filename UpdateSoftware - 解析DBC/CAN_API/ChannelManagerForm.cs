@@ -143,6 +143,7 @@ namespace PCAN_Client
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CellContentClick += Dgv_CellContentClick;
             _dgv.DataError += (s, e) => { e.ThrowException = false; }; // 重建数据源瞬间旧键值暂不在新列表时静默（随后立即重设）
+            DgvComboHelper.EnableSingleClickDropDown(_dgv);            // 绑定/模式/波特率下拉列：单击即展开（不必点第二次）
             _tabCan.Controls.Add(_dgv);
 
             var btnAdd = new Button { Text = "添加通道", Location = new Point(12, 296), Size = new Size(96, 28) };

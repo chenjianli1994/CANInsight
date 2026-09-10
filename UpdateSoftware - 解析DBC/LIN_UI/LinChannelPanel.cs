@@ -122,6 +122,7 @@ namespace PCAN_Client.LIN_UI
             // 防 DataGridView 默认错误弹窗：异步枚举完成前行绑定 Key 可能不在下拉 DataSource 中，
             // DataError 静默处理（RebuildHwBindCellDataSource 已保证保存值会被回退/重建）
             _dgv.DataError += (s, e) => { e.ThrowException = false; };
+            DgvComboHelper.EnableSingleClickDropDown(_dgv);   // 绑定硬件/波特率下拉列：单击即展开
             _dgv.CellClick += Dgv_CellClick;
             _dgv.CellValueChanged += Dgv_CellValueChanged;
             _dgv.CurrentCellDirtyStateChanged += (s, e) =>
