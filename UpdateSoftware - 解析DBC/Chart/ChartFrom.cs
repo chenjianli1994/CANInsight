@@ -66,9 +66,9 @@ namespace PCAN_Client
         private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
         private ToolStripComboBox _toolLineWidthComboBox;   // 全局线宽选择(对所有信号同时生效)
-        private int _globalLineWidth = 2;                   // 当前全局线宽(新通道默认继承)
+        private int _globalLineWidth = 1;                   // 当前全局线宽(新通道默认继承)
         private ToolStripComboBox _toolDotSizeComboBox;     // 全局数据点大小选择(对所有信号同时生效)
-        private int _globalDotSize = 4;                     // 当前全局数据点直径px(新通道默认继承)
+        private int _globalDotSize = 2;                     // 当前全局数据点直径px(新通道默认继承)
         private ToolStripDropDownButton _toolMore;
         private ToolStripTextBox _txtStartTime;
         private ToolStripTextBox _txtEndTime;
@@ -1133,14 +1133,14 @@ namespace PCAN_Client
                 _toolSpeedComboBox.Items.Add(item);
             }
 
-            // 全局线宽:1~5px,默认2px,选中即应用到所有通道
+            // 全局线宽:1~5px,默认1px,选中即应用到所有通道
             foreach (int w in new int[] { 1, 2, 3, 4, 5 })
             {
                 _toolLineWidthComboBox.Items.Add(w + " px");
             }
             _toolLineWidthComboBox.SelectedIndex = _globalLineWidth - 1;
 
-            // 全局数据点大小:1~5px,默认4px,选中即应用到所有通道
+            // 全局数据点大小:1~5px,默认2px,选中即应用到所有通道
             foreach (int d in new int[] { 1, 2, 3, 4, 5 })
             {
                 _toolDotSizeComboBox.Items.Add(d + " px");

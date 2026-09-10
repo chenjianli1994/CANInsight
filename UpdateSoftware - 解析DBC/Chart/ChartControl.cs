@@ -567,7 +567,7 @@ namespace PCAN_Client
                 pointsCount = pointsInRange.Count;
             }
 
-            // 线宽跟随通道设置(默认2px),并按渲染缩放等比缩放,保证报告截图/高DPI下一致
+            // 线宽跟随通道设置(默认1px),并按渲染缩放等比缩放(报告截图/高DPI一致)
             float lineWidth = Math.Max(1, channel.LineWidth) * _renderScale;
             SmoothingMode prevSmoothing = g.SmoothingMode;
             if (!antiAlias) g.SmoothingMode = SmoothingMode.None;
@@ -621,7 +621,7 @@ namespace PCAN_Client
             bool showDots = rect.Height >= 24 && (_globalXMax - _globalXMin) < DotMaxSpanSeconds;
             if (showDots)
             {
-                // 数据点直径跟随通道设置(默认5px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
+                // 数据点直径跟随通道设置(默认2px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
                 float dotSizePx = Math.Max(1, channel.DotSize) * _renderScale;
                 int dotDiameter = Math.Max(1, (int)Math.Round(dotSizePx));
                 int dotRadius = dotDiameter / 2;
