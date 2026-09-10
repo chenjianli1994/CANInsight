@@ -44,6 +44,12 @@ namespace PCAN_Client
         private Dictionary<PenKey, Bitmap> _dotSpriteCache = new Dictionary<PenKey, Bitmap>();
         /// <summary>单通道每帧描边像素预算：超出则降采样并关闭抗锯齿（GDI+ 软件描边约 0.1~0.3µs/px）</summary>
         private const int StrokePixelBudget = 15000;
+        /// <summary>数据点绘制：单通道每帧最多绘制的点数（横向间距 = 面板宽度/此值）</summary>
+        private const int MaxDotsPerChannel = 200;
+        /// <summary>数据点绘制：每帧所有通道合计最多绘制的点数，按可见通道数摊分（下限 24/通道）</summary>
+        private const int MaxDotsPerFrame = 1600;
+        /// <summary>数据点绘制：可见跨度达到此值(秒)即不再画点（小时级缩略图，单点已无意义）</summary>
+        private const double DotMaxSpanSeconds = 3600;
         /// <summary>轴标签文本测量缓存：键=(文本, 字号, DPI)，避免每帧对每个刻度重复 MeasureString</summary>
         private readonly Dictionary<(string Text, float FontSize, float DpiX, float DpiY), SizeF> _textSizeCache =
             new Dictionary<(string, float, float, float), SizeF>();
@@ -327,6 +333,8 @@ namespace PCAN_Client
 
                 int axisLabelHeight = 20;
                 int panelContentHeight = (Height - 20 - axisLabelHeight) / visibleChannels;
+                // 数据点总预算按可见通道数摊分：通道越多每通道画的点越少，单帧点绘制量有界
+                int dotsPerChannel = Math.Max(24, Math.Min(MaxDotsPerChannel, MaxDotsPerFrame / visibleChannels));
                 int paddingLeft = _leftMarginWidth;
                 int paddingRight = 20;
                 int paddingTop = 5;
@@ -349,7 +357,7 @@ namespace PCAN_Client
 
                     DrawPanelBackground(g, panelRect, channel);
                     DrawPanelAxes(g, panelRect, channel, isLastPanel);
-                    DrawPanelCurve(g, panelRect, channel);
+                    DrawPanelCurve(g, panelRect, channel, dotsPerChannel);
                     DrawPanelChannelName(g, panelRect, channel);
 
                     panelIndex++;
@@ -516,7 +524,7 @@ namespace PCAN_Client
             }
         }
 
-        private void DrawPanelCurve(Graphics g, Rectangle rect, ChannelData channel)
+        private void DrawPanelCurve(Graphics g, Rectangle rect, ChannelData channel, int maxDots)
         {
             // 使用索引范围避免数据复制（性能优化关键点）
             var indexRange = channel.GetPointIndexRange(_globalXMin, _globalXMax);
@@ -607,9 +615,10 @@ namespace PCAN_Client
                 g.SmoothingMode = prevSmoothing;
             }
 
-            // 数据点绘制：点密度不超过每像素1个时显示（避免糊成一片）
-            // 面板过矮时不画点：纵向只有十几像素，点只会糊成一片且是单帧最大开销之一
-            bool showDots = (totalPoints <= plotWidth || totalPoints <= 100) && rect.Height >= 24;
+            // 数据点绘制：按屏幕X间距抽稀显示（每通道不超过 maxDots 点），点数不随缩放级别清零。
+            // 仅两种情况不画点：可见跨度大到单点已无意义（DotMaxSpanSeconds，小时级缩略图），或面板过矮
+            // （纵向只有十几像素，点只会糊成一片且是单帧最大开销之一）。
+            bool showDots = rect.Height >= 24 && (_globalXMax - _globalXMin) < DotMaxSpanSeconds;
             if (showDots)
             {
                 // 数据点直径跟随通道设置(默认5px)，并按渲染缩放等比缩放(报告截图/高DPI一致)
@@ -618,8 +627,8 @@ namespace PCAN_Client
                 int dotRadius = dotDiameter / 2;
 
                 // 按屏幕X间距显示圆点:相邻点间距不小于直径 → 不重叠(大小一致)、显示均匀。
-                // 间距同时受点数上限约束（≤200 点/通道）：点绘制是 GDI+ 最贵的部分之一。
-                int dotSpacing = Math.Max(dotDiameter, plotWidth / 200);
+                // 间距同时受点数上限约束（≤ maxDots 点/通道）：点绘制是 GDI+ 最贵的部分之一。
+                int dotSpacing = Math.Max(dotDiameter, plotWidth / maxDots);
 
                 // 圆点用预渲染贴图一次性 blit（每点 2 次 GDI+ 绘制 → 1 次 DrawImageUnscaled）
                 Bitmap dotSprite = GetDotSprite(channel.Color, dotDiameter);
@@ -631,11 +640,15 @@ namespace PCAN_Client
                 {
                     ChannelPoint point = pointsInRange[i];
                     if (point == null || point.IsLost) continue;
-                    if (point.Y < yMin || point.Y > yMax) continue;
+                    // 与曲线一致：超出可见Y范围的采样按面板边界绘制（AddLineToPaths 同样钳位），
+                    // 不跳过点——否则手动Y缩放后会出现"只有曲线、没有数据点"的错位
+                    double dotValue = point.Y;
+                    if (dotValue < yMin) dotValue = yMin;
+                    if (dotValue > yMax) dotValue = yMax;
                     int screenX = ValueToScreenX(point.X, rect);
                     if (screenX - lastDotScreenX < dotSpacing) continue;
                     lastDotScreenX = screenX;
-                    int screenY = ValueToScreenY(point.Y, yMin, yMax, rect);
+                    int screenY = ValueToScreenY(dotValue, yMin, yMax, rect);
                     g.DrawImageUnscaled(dotSprite, screenX - dotRadius - 1, screenY - dotRadius - 1);
                 }
             }
