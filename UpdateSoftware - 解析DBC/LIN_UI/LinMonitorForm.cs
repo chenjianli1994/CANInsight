@@ -1282,10 +1282,12 @@ namespace PCAN_Client.LIN_UI
             switch (col)
             {
                 case "colExpand": e.Value = ""; break;
-                // 方案 §4.3：计划行“次数/时间”不再兼任多义——次数=总线帧观察数（真实 Tx+Rx 观测），
-                // 时间列不显示会话绝对时间（"--"，反模式门禁）；提交次数/真实Rx/实测周期/错误次数独立成列。
+                // 计划行：次数=总线帧观察数（真实 Tx+Rx 观测），时间=最近一条真实总线帧的时间（无帧显示 "--"），
+                // 两者都取真实观测、不伪造；提交次数/真实Rx/实测周期/错误次数另立独立列。
+                // （原 §4.3 门禁把时间列固定为 "--"；2026-09-23 用户确认改为显示最近真实帧时间，与同行其余列同源。）
                 case "colCount": e.Value = (info != null ? info.Count : 0u).ToString(); break;
-                case "colTime": e.Value = "--"; break;
+                // 计划行时间=最近一条真实总线帧的时间（与同行次数/方向/数据同源）；无真实帧时不伪造（"--"）
+                case "colTime": e.Value = info != null ? (info.LastTimestampUs / 1000.0).ToString("F3") : "--"; break;
                 case "colCh": e.Value = "CH" + flat.Channel; break;
                 case "colDir":
                     e.Value = info != null ? (info.Last.Direction == LinFrameDir.Tx ? "Tx" : "Rx") : "—";
