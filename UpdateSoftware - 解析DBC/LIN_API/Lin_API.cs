@@ -529,13 +529,17 @@ namespace PCAN_Client.LIN_API
 
         /// <summary>
         /// 发送类型在线切换门禁：目标类型超出当前适配器能力时返回中文原因（空=允许）。
-        /// 连接模式恒为 modMaster（用户决策）后，Master/HeaderOnly/Slave 三类型均在线可切；
-        /// 仅 BreakOnly 因 PLIN/XL 驱动均无独立 Break 原语而始终拒绝。
+        /// Slave 硬件模式的通道不发 Header，故 Master/HeaderOnly 一律拒绝；
+        /// BreakOnly 因 PLIN/XL 驱动均无独立 Break 原语而始终拒绝。
         /// </summary>
         public static string CanSwitchTransmitType(byte logicChannel, byte pid, LinTransmitType newType)
         {
             if (newType == LinTransmitType.BreakOnly)
                 return "当前 PCAN/Vector 适配器不支持独立 BreakOnly 原语";
+            if (newType != LinTransmitType.Slave
+                && logicChannel >= 1 && logicChannel <= LinConfig.Channels.Count
+                && LinConfig.Channels[logicChannel - 1].GetHardwareMode() == LinNodeMode.Slave)
+                return "通道硬件模式为 Slave：本机不发 Header，只能配置 Slave 发送项（请在通道管理把硬件模式改为 Master）";
             return "";
         }
 

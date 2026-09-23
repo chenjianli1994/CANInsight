@@ -93,13 +93,16 @@ namespace PCAN_Client.LIN_API
         }
 
         /// <summary>
-        /// 驱动连接模式：一律 modMaster（用户决策：接受误发 Header 的总线风险换取
-        /// 全类型在线切换能力）。本机是否发 Header 由发送项类型决定：仅 Master/HeaderOnly
-        /// 槽进入调度循环，Slave 项只武装本机响应（RESPONSE_ENABLE/XL_LinSetSlave）等待外部 Header。
+        /// 驱动连接模式：由通道 Mode 决定 —— Master=modMaster（可发 Header/跑调度），
+        /// Slave=modSlave（只监听总线、按 Slave 项应答外部主节点 Header，不发 Header）。
+        /// 历史实现恒返回 modMaster（"全类型在线切换"决策）。现场实测（PCAN-USB Pro FD，
+        /// 总线上已有 ECC 主节点按 15ms 槽发全表）：modMaster 客户端一条报文都收不到，
+        /// 改 modSlave 后立刻收到全部帧 —— 即"总线上已有其他主节点"时 modMaster 无法监听，
+        /// 故监听/从节点场景必须按 Mode 以 modSlave 连接。
         /// </summary>
         public LinNodeMode GetHardwareMode()
         {
-            return LinNodeMode.Master;
+            return Mode == LinNodeMode.Slave ? LinNodeMode.Slave : LinNodeMode.Master;
         }
 
         public bool HasEnabledSlaveEntries
@@ -128,6 +131,8 @@ namespace PCAN_Client.LIN_API
         /// </summary>
         public string GetHardwareModeNotice()
         {
+            if (GetHardwareMode() == LinNodeMode.Slave)
+                return "通道硬件模式为 Slave：本机不发送 Header、不跑调度，只监听总线并按 Slave 发送项应答外部主节点的 Header";
             // 周期发送模型下混合角色可行（modMaster 统一发 Header，Slave 项响应由
             // RESPONSE_ENABLE/外部从机提供），但保留提示便于排查响应判定差异。
             return HasEnabledSlaveEntries && HasEnabledMasterEntries
@@ -138,6 +143,9 @@ namespace PCAN_Client.LIN_API
         /// <summary>校验发送页配置。</summary>
         public string ValidateTransmitPlan()
         {
+            if (GetHardwareMode() == LinNodeMode.Slave && HasEnabledMasterEntries)
+                return "通道硬件模式为 Slave：本机不发 Header，请停用 Master/HeaderOnly 发送项或将其改为 Slave" +
+                    "（Slave 模式只监听总线并应答外部主节点 Header）";
             var configuredPids = new HashSet<byte>();
             if (TransmitEntries != null)
                 foreach (var entry in TransmitEntries)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -206,12 +206,14 @@ namespace PCAN_Client.LIN_API
                     }
                 }
 
-                // 连接模式一律 modMaster（用户决策）：全发送类型可在线切换；
-                // 纯 Slave 仿真的防误发由软件层负责（调度器跳过 Slave 槽 + LinSendScheduleSlot 拒绝发 Header）。
+                // 连接模式按通道 Mode：Master=modMaster（可发 Header/跑调度），Slave=modSlave（只监听+应答）。
+                // Slave 模式下 Master/HeaderOnly 发送项由 ValidateTransmitPlan 在连接前拒绝。
                 string modeNotice = _cfg.GetHardwareModeNotice();
                 if (modeNotice.Length > 0) LinDebugLog.Write("[CONN] 警告: " + modeNotice);
-                err = LinPlApi.InitializeHardware(_client, _hw, LinPlHardwareMode.modMaster, (ushort)_cfg.Baudrate);
-                LinDebugLog.Write("[CONN] InitializeHardware mode=modMaster baud=" + _cfg.Baudrate + " → err=" + err);
+                LinPlHardwareMode plMode = _cfg.GetHardwareMode() == LinNodeMode.Slave
+                    ? LinPlHardwareMode.modSlave : LinPlHardwareMode.modMaster;
+                err = LinPlApi.InitializeHardware(_client, _hw, plMode, (ushort)_cfg.Baudrate);
+                LinDebugLog.Write("[CONN] InitializeHardware mode=" + plMode + " baud=" + _cfg.Baudrate + " → err=" + err);
 
                 // 官方序列：连接后设置客户端过滤器（全 ID 接收，0-63 每位一帧；官方签名为 3 参无 filterType）
                 err = LinPlApi.SetClientFilter(_client, _hw, 0xFFFFFFFFFFFFFFFF);
@@ -228,7 +230,7 @@ namespace PCAN_Client.LIN_API
                             CleanupClient();
                             return "恢复 LIN 硬件默认配置失败: " + LinPlErrorCodes.ToChinese(resetConfigErr);
                         }
-                        LinPlError reinitErr = LinPlApi.InitializeHardware(_client, _hw, LinPlHardwareMode.modMaster, (ushort)_cfg.Baudrate);
+                        LinPlError reinitErr = LinPlApi.InitializeHardware(_client, _hw, plMode, (ushort)_cfg.Baudrate);
                         LinDebugLog.Write("[CONN] SetClientFilter 恢复 InitializeHardware → err=" + reinitErr);
                         if (reinitErr != LinPlError.errOK)
                         {
@@ -627,7 +629,7 @@ namespace PCAN_Client.LIN_API
 
         /// <summary>
         /// 唤醒原语能力门禁（官方契约 PLinApi.h：LIN_XmtWakeUp 仅适用于 Slave 模式）。
-        /// 连接模式恒为 modMaster 后此门禁恒 false：PCAN Master 下的总线唤醒走 UI 明确
+        /// 通道硬件模式为 Master 时门禁拒绝：PCAN Master 下的总线唤醒走 UI 明确
         /// "不支持"提示（不引入未验证的驱动调用）；Vector 的 XL_LinWakeUp 不分模式不受影响。
         /// </summary>
         internal static bool ShouldUseXmtWakeUp(LinNodeMode hardwareMode)

@@ -108,6 +108,13 @@ namespace PCAN_Client.LIN_UI
             var colBaud = new DataGridViewComboBoxColumn { Name = "colBaud", HeaderText = "波特率", Width = 70 };
             colBaud.Items.AddRange(new object[] { "1000", "2400", "9600", "19200" });
             _dgv.Columns.Add(colBaud);
+            // 硬件模式：Master=发 Header/跑调度；Slave=只监听总线并按 Slave 发送项应答外部主节点。
+            // 总线上已有其他主节点（如 ECC）时必须选 Slave，否则收不到对方任何报文。
+            var colMode = new DataGridViewComboBoxColumn { Name = "colMode", HeaderText = "硬件模式", Width = 80 };
+            colMode.Items.AddRange(new object[] { "Master", "Slave" });
+            colMode.ToolTipText = "Master：本机作为 LIN 主节点发 Header（含调度）；" +
+                "Slave：本机只监听总线并按 Slave 发送项应答外部主节点的 Header（总线上已有主节点时用此项）";
+            _dgv.Columns.Add(colMode);
             _dgv.Columns.Add("colLdf", "LDF 文件");
             _dgv.Columns["colLdf"].Width = 210;
             _dgv.Columns["colLdf"].ReadOnly = true; // 路径只经浏览按钮选择（点击单元格触发）
@@ -289,6 +296,7 @@ namespace PCAN_Client.LIN_UI
                 ch.Name,
                 "", // 绑定硬件通道：由 FindHwBindKey 赋值
                 ch.Baudrate.ToString(),
+                ch.Mode == LinNodeMode.Slave ? "Slave" : "Master",
                 ch.LdfPath,
                 "", // 状态列：行加入后由 UpdateRowStatus 以权威状态填充
                 "连接");
@@ -597,6 +605,20 @@ namespace PCAN_Client.LIN_UI
                 case "colBaud":
                     uint b;
                     if (uint.TryParse((v ?? "").ToString(), out b) && b >= 1000 && b <= 20000) ch.Baudrate = b;
+                    break;
+                case "colMode":
+                    var newMode = string.Equals((v ?? "").ToString(), "Slave", StringComparison.OrdinalIgnoreCase)
+                        ? LinNodeMode.Slave : LinNodeMode.Master;
+                    if (newMode == ch.Mode) break;
+                    ch.Mode = newMode;
+                    // 硬件模式只在连接时生效：已连接行必须断开重连，避免 UI 显示与硬件实际模式不符
+                    if (Lin_API.IsConnected((byte)(e.RowIndex + 1)))
+                    {
+                        Lin_API.LinDisconnect((byte)(e.RowIndex + 1));
+                        ch.ConnectError = "硬件模式已修改，请重新连接";
+                    }
+                    else ch.ConnectError = "";
+                    UpdateRowStatus(row);
                     break;
             }
         }

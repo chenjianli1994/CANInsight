@@ -128,12 +128,14 @@ namespace PCAN_Client.LIN_API
                 if (status != XLDefine.XL_Status.XL_SUCCESS) return "打开 Vector LIN 端口失败: " + status;
                 portOpened = true;
 
-                // 连接模式一律 XL_LIN_MASTER（用户决策，与 PCAN 侧一致）：全发送类型可在线切换；
-                // 纯 Slave 仿真的防误发由软件层负责（调度器跳过 Slave 槽 + SendScheduleFrame 拒绝发 Header）。
+                // 连接模式按通道 Mode（与 PCAN 侧一致）：Master=XL_LIN_MASTER（可发 Header/跑调度），
+                // Slave=XL_LIN_SLAVE（只监听+应答）。Slave 模式下 Master/HeaderOnly 发送项由
+                // ValidateTransmitPlan 在连接前拒绝。
                 var linVersion = GetLinVersion();
                 var linStat = new XLClass.xl_linStatPar
                 {
-                    LINMode = XLDefine.XL_LIN_Mode.XL_LIN_MASTER,
+                    LINMode = _cfg.GetHardwareMode() == LinNodeMode.Slave
+                        ? XLDefine.XL_LIN_Mode.XL_LIN_SLAVE : XLDefine.XL_LIN_Mode.XL_LIN_MASTER,
                     baudrate = (int)_cfg.Baudrate,
                     LINVersion = linVersion,
                     reserved = 0,

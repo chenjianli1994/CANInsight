@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Globalization;
@@ -224,8 +224,8 @@ namespace PCAN_Client.LIN_UI
             _btnWakeUp = new ToolStripButton("唤醒", ToolbarIcons.Get("plus"));
             _btnWakeUp.Click += (s, e) =>
             {
-                // 连接恒 modMaster：PCAN 的 XmtWakeUp 官方契约仅 Slave 模式，硬件层门禁
-                // ShouldUseXmtWakeUp 会拒绝并记 [WAKE] 日志；Vector 的 XL_LinWakeUp 不分模式直接执行。
+                // 硬件模式按通道 Mode：Master 下 PCAN 的 XmtWakeUp 官方契约仅 Slave 模式适用，
+                // 硬件层门禁 ShouldUseXmtWakeUp 会拒绝并记 [WAKE] 日志；Vector 的 XL_LinWakeUp 不分模式直接执行。
                 if (!Lin_API.WakeUp(_channel)) ShowError("唤醒失败（未连接或当前适配器模式不支持唤醒）");
             };
             _btnSleep = new ToolStripButton("休眠", ToolbarIcons.Get("stop"));
@@ -2491,7 +2491,7 @@ namespace PCAN_Client.LIN_UI
             {
                 _lblBus.Text = Lin_API.IsConnected(_channel) ? "总线: " + Lin_API.GetBusStateText(_channel) : "总线: 未连接";
                 var sc = GetScheduler();
-                // 连接模式恒 modMaster：运行状态只看调度器（无启用项时调度器不运行）。
+                // 运行状态只看调度器：无启用项（或全为 Slave 项的被动监听）时调度器不运行。
                 _lblSched.Text = sc.IsRunning ? "调度: 运行中（周期发送）" : "调度: 停止";
             }
             else
