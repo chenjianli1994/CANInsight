@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace PCAN_Client.LIN_API
@@ -41,11 +41,12 @@ namespace PCAN_Client.LIN_API
         SubmitOk = 1,
         /// <summary>驱动提交失败</summary>
         SubmitFail = 2,
-        /// <summary>真实总线帧（仅 Direction=Rx 的硬件帧；Tx 提交回显不是真实总线帧）</summary>
+        /// <summary>真实总线帧（Direction=Rx 的硬件帧；或 Slave 项的硬件 dirPublisher 应答帧——
+        /// 后者证明外部 Master 的 Header 已到达。软件提交回显不算真实总线帧）</summary>
         BusFrame = 3,
         /// <summary>HeaderOn：进入等待应答</summary>
         ResponseWait = 4,
-        /// <summary>真实 Rx 完成响应</summary>
+        /// <summary>真实响应完成（HeaderOn 收到远端响应 / Slave 项收到外部 Header 并应答上总线）</summary>
         ResponseComplete = 5,
         /// <summary>响应窗口到期且无真实 Rx：无应答</summary>
         ResponseTimeout = 6,

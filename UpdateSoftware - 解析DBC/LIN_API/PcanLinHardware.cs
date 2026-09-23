@@ -806,6 +806,7 @@ namespace PCAN_Client.LIN_API
                     Dlc = 0,
                     Data = new byte[0],
                     ErrorKind = LinErrorKind.Hw,
+                    HwFrame = true,
                     FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
                 });
                 return;
@@ -832,6 +833,7 @@ namespace PCAN_Client.LIN_API
                 ChecksumRx = m.Checksum,
                 ChecksumOk = (m.ErrorFlags & LinPlMsgErrors.Checksum) == 0,
                 FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
+                HwFrame = true,
             };
             if (m.Length > 0 && m.Data != null) Array.Copy(m.Data, frame.Data, m.Length);
 

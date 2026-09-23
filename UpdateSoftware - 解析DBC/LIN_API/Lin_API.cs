@@ -646,8 +646,14 @@ namespace PCAN_Client.LIN_API
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
                 frame.TimestampUs = (ulong)_sw.ElapsedMilliseconds * 1000 - _epochUs;
 
+                // Slave 发送项的真实总线证据：硬件上报的 dirPublisher 帧说明"外部 Master 的 Header 已到达，
+                // 本机响应已上总线"（PLIN/XL 都以 Publisher 方向回报本机应答）。软件提交回显（HwFrame=false）
+                // 不算总线证据，避免"驱动收下了但总线上没出现"被当成应答成功。
+                bool slaveAnswered = frame.HwFrame && frame.Direction == LinFrameDir.Tx
+                    && IsEnabledSlaveEntry(logicChannel, frame.Pid);
+
                 // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显不能证明总线上出现了响应。
-                if (frame.Direction == LinFrameDir.Rx)
+                if (frame.Direction == LinFrameDir.Rx || slaveAnswered)
                 {
                     lock (_rxActivityLock)
                         _lastRxMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;
@@ -655,6 +661,10 @@ namespace PCAN_Client.LIN_API
                     NotifyTxState(logicChannel, frame.Pid,
                         GetTransmitType(logicChannel, frame.Pid, LinTransmitType.Master),
                         LinTxEventKind.BusFrame, "");
+                    // Slave 应答完成：状态由"等待外部Header"转为"应答完成"，并清除锁存的无应答/错误灯
+                    if (slaveAnswered)
+                        NotifyTxState(logicChannel, frame.Pid, LinTransmitType.Slave,
+                            LinTxEventKind.ResponseComplete, "外部 Header 已触发本机应答");
                 }
 
                 // 帧类型/名称映射：LDF 命中则用其定义；无 LDF 时按诊断帧 ID 兜底
@@ -887,6 +897,13 @@ namespace PCAN_Client.LIN_API
         {
             var entry = GetTransmitEntry(logicChannel, pid);
             return entry != null && entry.Enabled && entry.Type == LinTransmitType.Master;
+        }
+
+        /// <summary>该帧是否是发送页中已启用、且本机作为从节点应答的 Slave 项。</summary>
+        internal static bool IsEnabledSlaveEntry(byte logicChannel, byte pid)
+        {
+            var entry = GetTransmitEntry(logicChannel, pid);
+            return entry != null && entry.Enabled && entry.Type == LinTransmitType.Slave;
         }
     }
 }

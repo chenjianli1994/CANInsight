@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -552,7 +552,7 @@ namespace PCAN_Client.LIN_UI
             else if (e.ColumnIndex == _dgv.Columns["colLdf"].Index)
             {
                 var row = _dgv.Rows[e.RowIndex];
-                using (var dlg = new OpenFileDialog { Filter = "LIN 描述文件 (*.lin)|*.lin|所有文件 (*.*)|*.*", Title = "选择 LDF 文件" })
+                using (var dlg = new OpenFileDialog { Filter = "LIN 描述文件 (*.ldf)|*.ldf|LIN 描述文件 (*.lin)|*.lin|所有文件 (*.*)|*.*", Title = "选择 LDF 文件" })
                 {
                     if (dlg.ShowDialog(this) == DialogResult.OK)
                     {

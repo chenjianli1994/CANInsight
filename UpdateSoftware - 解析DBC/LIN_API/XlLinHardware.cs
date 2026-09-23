@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using vxlapi_NET;
@@ -500,6 +500,7 @@ namespace PCAN_Client.LIN_API
                 ChecksumRx = msg.crc,
                 ChecksumOk = (msg.flags & XLDefine.XL_MessageFlags.XL_LIN_MSGFLAG_CRCERROR) == 0,
                 FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, pid),
+                HwFrame = true,
             };
             if (frame.Data.Length > 8) frame.Data = new byte[0]; // 保险：拒绝越界数据
             if ((msg.flags & XLDefine.XL_MessageFlags.XL_LIN_MSGFLAG_CRCERROR) != 0)
@@ -526,6 +527,7 @@ namespace PCAN_Client.LIN_API
                 ChecksumOk = false,
                 ErrorKind = kind,
                 FrameName = LinLdfHelper.GetFrameName(_cfg.LdfHelper, norm),
+                HwFrame = true,
             };
         }
     }

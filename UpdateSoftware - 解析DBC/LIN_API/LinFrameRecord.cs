@@ -126,6 +126,10 @@ namespace PCAN_Client.LIN_API
         public LinErrorKind ErrorKind;
         /// <summary>帧名称（LDF 符号名，无 LDF 时为 "0x{pid:X2}"）</summary>
         public string FrameName;
+        /// <summary>是否由硬件适配器上报的真实总线帧（软件提交回显为 false）。
+        /// 用于区分"本机帧确实上了总线"与"仅驱动队列提交回显"：Slave 发送项的硬件
+        /// dirPublisher 帧即"外部 Header 已到达并触发本机应答"的真实证据。</summary>
+        public bool HwFrame;
 
         public string DataHex
         {

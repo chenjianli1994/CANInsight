@@ -144,8 +144,14 @@ namespace PCAN_Client.LIN_API
         public string ValidateTransmitPlan()
         {
             if (GetHardwareMode() == LinNodeMode.Slave && HasEnabledMasterEntries)
-                return "通道硬件模式为 Slave：本机不发 Header，请停用 Master/HeaderOnly 发送项或将其改为 Slave" +
-                    "（Slave 模式只监听总线并应答外部主节点 Header）";
+            {
+                var names = new List<string>();
+                foreach (var entry in TransmitEntries ?? new List<LinTransmitEntry>())
+                    if (entry != null && entry.Enabled && entry.Type != LinTransmitType.Slave)
+                        names.Add("0x" + entry.Pid.ToString("X2") + "(" + entry.Type + ")");
+                return "通道硬件模式为 Slave：本机不发 Header，以下发送项无法发送 → " + string.Join("、", names) +
+                    "；请停用它们或改为 Slave（Slave 模式只监听总线并应答外部主节点 Header）";
+            }
             var configuredPids = new HashSet<byte>();
             if (TransmitEntries != null)
                 foreach (var entry in TransmitEntries)

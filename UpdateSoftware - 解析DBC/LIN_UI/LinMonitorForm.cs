@@ -613,8 +613,10 @@ namespace PCAN_Client.LIN_UI
             {
                 Dock = DockStyle.Bottom,
                 AutoSize = false,
-                Height = 40,
-                Text = "发送项独立选择 Master / Slave / HeaderOnly / BreakOnly；Slave 只等待外部 Master Header，不会自行产生报文。添加 LDF 报文默认按 Master/HeaderOnly 处理，需明确选择 Slave 才配置本机响应；“＋”或双击可编辑信号。",
+                Height = 90,
+                Text = "发送项独立选择 Master / Slave / HeaderOnly / BreakOnly；Slave 只等待外部 Master Header，不会自行产生报文。添加 LDF 报文默认按 Master/HeaderOnly 处理，需明确选择 Slave 才配置本机响应；“＋”或双击可编辑信号。\r\n" +
+                    "发送类型在「启用」勾选期间锁定（正在发送不允许改模式）：改类型请先取消勾选，改完再勾选。展开帧后可直接改信号值：枚举信号下拉选择，物理量输入数值（单位自动带出、不可编辑）。\r\n" +
+                    "通道硬件模式：Slave = 只监听 + 按 Slave 项应答（不发 Header，Master/HeaderOnly 无法启用）；Master = 本机发 Header/跑调度（只能看到本机请求的帧）。",
                 ForeColor = Color.Gray,
                 Font = UiTheme.UiFont,
             };
@@ -713,13 +715,30 @@ namespace PCAN_Client.LIN_UI
             return data;
         }
 
-        private static LinTransmitType DefaultTransmitType(LinLdfFile ldf, byte pid)
+        /// <summary>当前通道是否为 Slave 硬件模式（不发 Header，只监听+应答外部 Header）</summary>
+        private bool IsSlaveHardwareMode()
         {
+            var ch = CurrentChannel;
+            return ch != null && ch.GetHardwareMode() == LinNodeMode.Slave;
+        }
+
+        /// <summary>发送页默认发送类型（纯函数，便于测试）：按通道硬件模式分支</summary>
+        internal static LinTransmitType DefaultTransmitTypeFor(LinLdfFile ldf, byte pid, LinNodeMode hardwareMode)
+        {
+            // Slave 硬件模式的通道本机不发 Header：从节点发布帧默认配 Slave（本机应答），
+            // 主节点发布帧本机不参与（由外部主节点自己发，本机配 Slave 会与其发布抢答）。
+            if (hardwareMode == LinNodeMode.Slave && !LinLdfHelper.IsMasterPublisherFrame(ldf, pid)) return LinTransmitType.Slave;
             if (LinLdfHelper.IsMasterPublisherFrame(ldf, pid)) return LinTransmitType.Master;
             // LDF 只描述总线上的发布者，不代表该发布者就是本工具。
             // 添加一个从节点发布帧时，默认应由本机 Master 发送 Header 请求响应；
             // 只有用户在发送页明确改成 Slave，才把该帧配置为本机自动响应。
             return LinTransmitType.HeaderOnly;
+        }
+
+        private LinTransmitType DefaultTransmitType(LinLdfFile ldf, byte pid)
+        {
+            var ch = CurrentChannel;
+            return DefaultTransmitTypeFor(ldf, pid, ch != null ? ch.GetHardwareMode() : LinNodeMode.Master);
         }
 
         private LinTransmitEntry CreateTransmitEntry(byte pid)
@@ -819,7 +838,7 @@ namespace PCAN_Client.LIN_UI
         private void LoadLdf()
         {
             if (_channel < 1 || _channel > LinConfig.Channels.Count) return;
-            using (var dlg = new OpenFileDialog { Filter = "LIN 描述文件 (*.lin)|*.lin|所有文件 (*.*)|*.*", Title = "选择 LDF 文件" })
+            using (var dlg = new OpenFileDialog { Filter = "LIN 描述文件 (*.ldf)|*.ldf|LIN 描述文件 (*.lin)|*.lin|所有文件 (*.*)|*.*", Title = "选择 LDF 文件" })
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
@@ -1055,6 +1074,9 @@ namespace PCAN_Client.LIN_UI
                         if (!LinPassesFilter(snap.Pid)) continue;
                         _linPlanKeys.Add(LinMsgKey(snap.Pid, snap.LogicChannel));
                         _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, IsPlanRow = true, Pid = snap.Pid, Channel = snap.LogicChannel });
+                        // 计划行同样可展开解析信号（数据取最近真实总线帧；无帧时用本机配置数据，不伪造 Rx）
+                        if (_linExpandedKeys.Contains(LinMsgKey(snap.Pid, snap.LogicChannel)))
+                            AppendLinSignalRows(PlanRowFrame(snap.Pid, snap.LogicChannel), -1);
                     }
                     for (int i = 0; i < _linFixedList.Count; i++)
                     {
@@ -1076,6 +1098,28 @@ namespace PCAN_Client.LIN_UI
             _linFlatRows.Add(new LinFlatRow { Type = LinRowType.Frame, FrameIndex = frameIndex, Pid = f.Pid, Channel = f.LogicChannel });
             if (_linExpandedFrames.Contains(frameIndex))
                 AppendLinSignalRows(f, frameIndex);
+        }
+
+        /// <summary>计划行的信号解析数据源：优先最近真实总线帧，无帧时用本机配置数据（不伪造 Rx）</summary>
+        private LinFrameRecord PlanRowFrame(byte pid, byte channel)
+        {
+            LinFixedInfo info;
+            lock (_frames)
+            {
+                if (_linMsgIndexMap.TryGetValue(LinMsgKey(pid, channel), out info)) return info.Last;
+            }
+            var entry = GetPlanEntry(pid);
+            var ldf = GetLdfForChannel(channel);
+            byte dlc = entry != null ? EntryDlc(entry, ldf) : (byte)0;
+            return new LinFrameRecord
+            {
+                LogicChannel = channel,
+                Pid = pid,
+                Direction = LinFrameDir.Tx,
+                Dlc = dlc,
+                Data = entry != null && entry.Data != null ? (byte[])entry.Data.Clone() : new byte[0],
+                FrameName = LinLdfHelper.GetFrameName(ldf, pid),
+            };
         }
 
         /// <summary>按帧追加该帧全部信号行（LDF 按通道匹配；无定义时跳过）</summary>
@@ -1199,8 +1243,10 @@ namespace PCAN_Client.LIN_UI
                     else
                     {
                         LinFixedInfo info;
-                        if (!_linMsgIndexMap.TryGetValue(LinMsgKey(flat.Pid, flat.Channel), out info)) return;
-                        f = info.Last;
+                        // 计划行/聚合行：优先最近真实总线帧，无帧时用本机配置数据（不伪造 Rx）
+                        f = _linMsgIndexMap.TryGetValue(LinMsgKey(flat.Pid, flat.Channel), out info)
+                            ? info.Last
+                            : PlanRowFrame(flat.Pid, flat.Channel);
                     }
                 }
                 var ldf = GetLdfForChannel(flat.Channel);
@@ -1342,11 +1388,11 @@ namespace PCAN_Client.LIN_UI
                 if (colName == "colExpand")
                 {
                     if (flat.Type != LinRowType.Frame) return;
-                    if (flat.IsPlanRow) return; // 计划行：展开经聚合行映射（FixedIndex=-1 点击无效），不画按钮
                     if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return; // 无信号定义不画按钮
                     e.Handled = true;
                     PaintLinCellSurface(e);
-                    bool isExpanded = flat.FixedIndex >= 0
+                    // 计划行与聚合行共用聚合键展开；Scroll 逐帧行用帧索引
+                    bool isExpanded = flat.IsPlanRow || flat.FixedIndex >= 0
                         ? _linExpandedKeys.Contains(LinMsgKey(flat.Pid, flat.Channel))
                         : _linExpandedFrames.Contains(flat.FrameIndex);
                     using (var btnFont = new Font("Arial", 10f, FontStyle.Bold))
@@ -1441,9 +1487,9 @@ namespace PCAN_Client.LIN_UI
             if (flat.Type != LinRowType.Frame) return;
             if (!LinFrameHasSignals(flat.Pid, flat.Channel)) return;
 
-            if (flat.FixedIndex >= 0)
+            if (flat.IsPlanRow || flat.FixedIndex >= 0)
             {
-                // Fixed 模式：聚合键展开（重建，行数 ≤ 128 极快；绕过暂停门）
+                // 计划行/聚合行：聚合键展开（重建，行数 ≤ 128 极快；绕过暂停门）
                 long key = LinMsgKey(flat.Pid, flat.Channel);
                 if (_linExpandedKeys.Contains(key)) _linExpandedKeys.Remove(key);
                 else _linExpandedKeys.Add(key);
@@ -1797,6 +1843,8 @@ namespace PCAN_Client.LIN_UI
                 if (old != null && !prototypes.ContainsKey(old.Pid)) prototypes[old.Pid] = old;
             var imported = new List<LinTransmitEntry>();
             var importedPids = new HashSet<byte>();
+            bool slaveMode = IsSlaveHardwareMode();
+            int skippedMaster = 0;
             if (ldf.ScheduleTables.Count > 0)
             {
                 var table = ldf.ScheduleTables[tableName];
@@ -1805,6 +1853,8 @@ namespace PCAN_Client.LIN_UI
                     var frame = ldf.Frames.Values.FirstOrDefault(f => f.Name == def.FrameName);
                     if (frame == null) continue;
                     if (!importedPids.Add(frame.Pid)) continue;
+                    // Slave 硬件模式：主节点发布帧由外部主节点自己发，本机不参与（配 Slave 会抢答）
+                    if (slaveMode && LinLdfHelper.IsMasterPublisherFrame(ldf, frame.Pid)) { skippedMaster++; continue; }
                     LinTransmitEntry prototype;
                     prototypes.TryGetValue(frame.Pid, out prototype);
                     var entry = prototype == null
@@ -1814,6 +1864,7 @@ namespace PCAN_Client.LIN_UI
                     entry.SlotMs = def.SlotMs > 0 ? def.SlotMs : (entry.SlotMs > 0 ? entry.SlotMs : 15);
                     entry.Dlc = EntryDlc(entry, ldf);
                     entry.Data = EntryData(entry, entry.Dlc);
+                    if (slaveMode) entry.Enabled = false; // 应答会改变总线上其他节点看到的网络，默认不启用
                     imported.Add(entry);
                 }
             }
@@ -1821,6 +1872,7 @@ namespace PCAN_Client.LIN_UI
             {
                 foreach (var kv in ldf.Frames)
                 {
+                    if (slaveMode && LinLdfHelper.IsMasterPublisherFrame(ldf, kv.Key)) { skippedMaster++; continue; }
                     LinTransmitEntry prototype;
                     prototypes.TryGetValue(kv.Key, out prototype);
                     byte dlc = kv.Value.Dlc == 0 ? (byte)8 : kv.Value.Dlc;
@@ -1831,12 +1883,15 @@ namespace PCAN_Client.LIN_UI
                     entry.SlotMs = entry.SlotMs > 0 ? entry.SlotMs : 15;
                     entry.Dlc = EntryDlc(entry, ldf);
                     entry.Data = EntryData(entry, entry.Dlc);
+                    if (slaveMode) entry.Enabled = false;
                     imported.Add(entry);
                 }
             }
             if (imported.Count == 0)
             {
-                MessageBox.Show(this, "LDF 中无可用帧（调度表为空）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, slaveMode
+                    ? "LDF 中无本机可参与的从节点发布帧（Slave 硬件模式下主节点发布帧由外部主节点自己发）"
+                    : "LDF 中无可用帧（调度表为空）", "调度表", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             CurrentChannel.TransmitEntries = imported;
@@ -1844,7 +1899,12 @@ namespace PCAN_Client.LIN_UI
             SyncSchedulerSlots();
             RefreshSendGrid();
             RefreshRespGrid();
-            MessageBox.Show(this, $"已从 LDF 调度表 {tableName ?? "全部帧"} 导入 {imported.Count} 个发送项；重复 PID 已合并。勾选启用即开始周期发送，发送类型可在发送页调整。", "发送列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, slaveMode
+                ? "已从 LDF 调度表 " + (tableName ?? "全部帧") + " 导入 " + imported.Count + " 个从节点发送项（类型 Slave，默认未勾选）；" +
+                  "跳过 " + skippedMaster + " 个主节点发布帧（Slave 硬件模式下本机不参与）。\n" +
+                  "勾选启用后，本机将作为对应从节点应答外部主节点的 Header（通道连接后可随时勾选/取消）。"
+                : "已从 LDF 调度表 " + (tableName ?? "全部帧") + " 导入 " + imported.Count + " 个发送项；重复 PID 已合并。勾选启用即开始周期发送，发送类型可在发送页调整。",
+                "发送列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private LinLdfFile GetLdf()
@@ -1947,6 +2007,16 @@ namespace PCAN_Client.LIN_UI
         {
             var ch = CurrentChannel;
             if (ch == null || FindSendEntry(pid) != null) return;
+            // Slave 硬件模式下本机不发 Header：主节点发布帧（cmd 帧）由外部主节点自己发，
+            // 本机配 Slave 会在该帧响应窗口与其发布抢答 → 直接拒绝添加。
+            if (IsSlaveHardwareMode() && LinLdfHelper.IsMasterPublisherFrame(GetLdf(), pid))
+            {
+                MessageBox.Show(this, "该帧由 LDF 主节点发布（" + LinLdfHelper.GetFrameName(GetLdf(), pid) +
+                    "），当前通道硬件模式为 Slave：本机不发 Header、也不应答主节点自己发布的帧。\n" +
+                    "如需本机发布这些 cmd 帧，请在通道管理把硬件模式改为 Master（总线上不能同时有两个主节点）。",
+                    "发送列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             ch.TransmitEntries.Add(CreateTransmitEntry(pid));
             if (Lin_API.IsConnected(_channel))
             {
@@ -2265,16 +2335,41 @@ namespace PCAN_Client.LIN_UI
                 srow.Cells["colSendEn"].Value = false; // CheckBox 列必须 bool，空字符串会触发格式化异常
                 srow.Cells["colSendPid"].Value = "";
                 srow.Cells["colSendName"].Value = "　├ " + fs.SignalName.PadRight(maxNameLen);
-                srow.Cells["colSendType"].Value = "信号";
+                // 信号行不适用发送类型（角色由所属帧决定）：ComboBox 列写非法值会被 DataError 吞掉并回退显示 Master
+                srow.Cells["colSendType"] = new DataGridViewTextBoxCell { Value = "" };
+                srow.Cells["colSendType"].ReadOnly = true; // ReadOnly 只能在单元格加入行后设置
                 srow.Cells["colSendDlc"].Value = "bit " + fs.Offset;
                 srow.Cells["colSendSlotMs"].Value = "";
-                srow.Cells["colSendData"].Value = sig == null ? "—" : FormatSigValue(sig, raw);
+                string valueText = sig == null ? "—" : FormatSigValue(sig, raw);
+                srow.Cells["colSendData"] = BuildSignalValueCell(sig, valueText);
                 srow.Tag = new SendSignalRow { Entry = entry, SignalName = fs.SignalName, Offset = fs.Offset };
                 srow.DefaultCellStyle.BackColor = Color.FromArgb(245, 245, 248);
+                srow.Cells["colSendData"].Style.BackColor = Color.White; // 值可编辑：白底区别于只读列
+                srow.Cells["colSendData"].ToolTipText = sig != null && sig.Unit.Length > 0
+                    ? "可直接改值：输入数值（单位 " + sig.Unit + " 自动带出，不可编辑）"
+                    : "可直接改值：枚举信号下拉选择，其余输入数值";
                 insertAt++;
             }
             _expandedSend.Add(entry);
             _dgvSend.Rows[rowIdx].Cells["colSendExpand"].Value = "－";
+        }
+
+        /// <summary>
+        /// 信号值编辑单元格：枚举信号（LDF logical_value）用下拉选择，物理量信号用文本编辑
+        /// （单位由显示格式带出、不参与编辑；提交时按 TryParseSigValue 解析回原始位）。
+        /// </summary>
+        private DataGridViewCell BuildSignalValueCell(LinSignalDef sig, string valueText)
+        {
+            if (sig != null && sig.LogicalValues != null && sig.LogicalValues.Count > 0)
+            {
+                var combo = new DataGridViewComboBoxCell { FlatStyle = FlatStyle.Flat };
+                foreach (var kv in sig.LogicalValues.OrderBy(kv => kv.Key))
+                    if (!combo.Items.Contains(kv.Value)) combo.Items.Add(kv.Value);
+                if (!string.IsNullOrEmpty(valueText) && !combo.Items.Contains(valueText)) combo.Items.Add(valueText);
+                combo.Value = valueText;
+                return combo;
+            }
+            return new DataGridViewTextBoxCell { Value = valueText };
         }
 
         private void CollapseSendFrame(LinTransmitEntry entry)
@@ -2370,6 +2465,16 @@ namespace PCAN_Client.LIN_UI
             {
                 case "colSendEn":
                     entry.Enabled = (bool)(row.Cells["colSendEn"].Value ?? false);
+                    // Slave 硬件模式不发 Header：启用 Master/HeaderOnly 项只会"看起来在发"，实际发不出去
+                    // （LIN_Write 在从节点模式下不产生总线 Header）→ 直接拒绝启用并给出改法。
+                    if (entry.Enabled && entry.Type != LinTransmitType.Slave && IsSlaveHardwareMode())
+                    {
+                        entry.Enabled = false;
+                        row.Cells["colSendEn"].Value = false;
+                        ShowError("通道硬件模式为 Slave：本机不发 Header，发送类型 " + TransmitTypeText(entry.Type) +
+                            " 无法发送。请把该报文改为 Slave（本机应答外部 Header），或在通道管理把硬件模式改成 Master。");
+                        break;
+                    }
                     if (Lin_API.IsConnected(_channel))
                     {
                         if (!entry.Enabled && entry.Type == LinTransmitType.Slave)
