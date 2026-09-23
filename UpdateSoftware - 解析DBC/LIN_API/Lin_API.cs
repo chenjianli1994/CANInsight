@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
@@ -631,16 +631,18 @@ namespace PCAN_Client.LIN_API
         {
             try
             {
-                // 阶段 2 反模式门禁（方案 §3 P0/§4.2）：NoResponse 是【运行事件】不是总线帧。
-                // PEAK SlaveNOtResponding/Timeout 与 Vector XL_LIN_NOANS 是真实硬件无应答观测，
-                // 必须转为运行事件更新快照锁存（ErrorCount++/State=NoResponse），禁止以 Direction=Rx
-                // 伪帧进入 LinFrameReceived/_lastRxMs/统计；软件调度时优先经调度器结算对应 pending，
-                // 避免与软件 deadline（下限 500ms）双报。
-                if (frame.ErrorKind == LinErrorKind.NoResponse)
+                // 无应答（PEAK SlaveNOtResponding/Timeout、Vector XL_LIN_NOANS）是真实硬件观测：
+                // 外部主节点发了 Header 但没有从节点响应。现场要求它必须可见（报文表红灯 + 状态"错误·无应答"），
+                // 否则"某个从节点不在总线"这类故障在监控里完全看不到。但它不是数据帧——硬件缓冲里是无效字节：
+                // 清空数据、不写 _lastRxMs、不计入真实总线帧统计（不伪造 Rx），并照旧结算运行快照
+                // （配置了发送项时锁存无应答）。软件超时仍只发 ResponseTimeout 运行事件，不产生伪帧。
+                bool noResponse = frame.ErrorKind == LinErrorKind.NoResponse;
+                if (noResponse)
                 {
-                    LinDebugLog.Write("[RX] 硬件无应答运行事件 ch=" + logicChannel + " pid=0x" + frame.Pid.ToString("X2"));
+                    LinDebugLog.Write("[RX] 硬件无应答 ch=" + logicChannel + " pid=0x" + frame.Pid.ToString("X2") + " → 报文表按错误帧显示");
                     HandleHardwareNoResponse(logicChannel, frame.Pid);
-                    return;
+                    frame.Dlc = 0;
+                    frame.Data = new byte[0];
                 }
 
                 // 时间戳：会话时钟（硬件时间戳不一致，统一用 Stopwatch 会话归零）
@@ -649,11 +651,11 @@ namespace PCAN_Client.LIN_API
                 // Slave 发送项的真实总线证据：硬件上报的 dirPublisher 帧说明"外部 Master 的 Header 已到达，
                 // 本机响应已上总线"（PLIN/XL 都以 Publisher 方向回报本机应答）。软件提交回显（HwFrame=false）
                 // 不算总线证据，避免"驱动收下了但总线上没出现"被当成应答成功。
-                bool slaveAnswered = frame.HwFrame && frame.Direction == LinFrameDir.Tx
+                bool slaveAnswered = !noResponse && frame.HwFrame && frame.Direction == LinFrameDir.Tx
                     && IsEnabledSlaveEntry(logicChannel, frame.Pid);
 
-                // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显不能证明总线上出现了响应。
-                if (frame.Direction == LinFrameDir.Rx || slaveAnswered)
+                // 从节点响应超时兜底只看真实 Rx；软件 Tx 回显与无应答观测都不能证明总线上出现了响应。
+                if (!noResponse && (frame.Direction == LinFrameDir.Rx || slaveAnswered))
                 {
                     lock (_rxActivityLock)
                         _lastRxMs[FrameKey(logicChannel, frame.Pid)] = SessionMs;

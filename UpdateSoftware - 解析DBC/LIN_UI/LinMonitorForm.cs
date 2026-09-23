@@ -1214,11 +1214,15 @@ namespace PCAN_Client.LIN_UI
                     case "colName": e.Value = f.FrameName; break;
                     case "colType": e.Value = FrameTypeText(f.FrameType); break;
                     case "colDlc": e.Value = f.Dlc.ToString(); break;
-                    case "colData": e.Value = f.DataHex; break;
+                    case "colData":
+                        // 无应答行没有总线数据（硬件缓冲为无效字节，已在 Lin_API 清空）：显式 "—" 而非空白
+                        e.Value = f.DataHex.Length > 0 ? f.DataHex : (f.ErrorKind == LinErrorKind.NoResponse ? "—" : "");
+                        break;
                     case "colCs":
-                        e.Value = f.Dlc == 0 && f.ErrorKind == LinErrorKind.None
-                            ? "—"
-                            : f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
+                        e.Value = f.ErrorKind == LinErrorKind.NoResponse ? "—"
+                            : f.Dlc == 0 && f.ErrorKind == LinErrorKind.None
+                                ? "—"
+                                : f.ErrorKind == LinErrorKind.Checksum ? "0x" + f.ChecksumRx.ToString("X2") + "*" : "0x" + f.ChecksumRx.ToString("X2");
                         break;
                     case "colStatus": e.Value = f.StatusText; break;
                     // 阶段 3 统计列只对计划行有语义；真实帧行/聚合行显式空（VirtualMode 防残留旧值）
@@ -1313,9 +1317,9 @@ namespace PCAN_Client.LIN_UI
                         : info != null ? info.Last.DataHex : (GetPlanDataHex(flat) ?? "--");
                     break;
                 case "colCs":
-                    e.Value = info != null
-                        ? (info.Last.ErrorKind == LinErrorKind.Checksum ? "0x" + info.Last.ChecksumRx.ToString("X2") + "*" : "0x" + info.Last.ChecksumRx.ToString("X2"))
-                        : "--";
+                    e.Value = info == null || info.Last.ErrorKind == LinErrorKind.NoResponse
+                        ? "--"
+                        : (info.Last.ErrorKind == LinErrorKind.Checksum ? "0x" + info.Last.ChecksumRx.ToString("X2") + "*" : "0x" + info.Last.ChecksumRx.ToString("X2"));
                     break;
                 case "colStatus": e.Value = SnapshotStateText(snap); break;
                 // 阶段 3 统计列（方案 §4.3）：
