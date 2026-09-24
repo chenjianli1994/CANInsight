@@ -56,3 +56,6 @@ desktop.ini
 
 # CANInsight.Service 暂不对外（本机保留，仅不入库）
 /CANInsight.Service/
+
+# 本机私有 E2E CRC 表（客户协议数据不入库）
+/CANInsight.Core/util/FrameCrcCal.Local.cs

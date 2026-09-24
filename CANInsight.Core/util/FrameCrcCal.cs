@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace PCAN_Client.util
 {
-    internal class FrameCrcCal
+    internal partial class FrameCrcCal
     {
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct TsCOM_h_FrameCRC_ID_DataType
@@ -27,22 +27,21 @@ namespace PCAN_Client.util
             }
         }
 
-        public static readonly TsCOM_h_FrameCRC_ID_DataType[] CaCOM_a_FrameCRC_ID_DataCfg =
-        {),
-),
-),
-),
-),
-),
-),
-),
-),
-),
-),
-),
-),
-)
-        };
+        /* 每个报文的 E2E CRC 表（报文 ID + 16 字节种子）属于客户协议数据，不写进源码仓：
+           由本机私有文件 util/FrameCrcCal.Local.cs 提供（已 gitignore，只在本机参与编译）。
+           源码仓里没有这个文件时表为空，messageCrcCal 不注入 CRC（不报错、不崩溃）。 */
+        public static readonly TsCOM_h_FrameCRC_ID_DataType[] CaCOM_a_FrameCRC_ID_DataCfg = ResolveCrcTable();
+
+        /// <summary>取本机私有文件里的 CRC 表；无私有实现（源码仓编译）时返回空表</summary>
+        private static TsCOM_h_FrameCRC_ID_DataType[] ResolveCrcTable()
+        {
+            TsCOM_h_FrameCRC_ID_DataType[] table = null;
+            FillLocalCrcTable(ref table);
+            return table ?? new TsCOM_h_FrameCRC_ID_DataType[0];
+        }
+
+        /// <summary>由本机私有文件实现的 CRC 表填充（partial：源码仓不带实现，调用点编译期被移除）</summary>
+        static partial void FillLocalCrcTable(ref TsCOM_h_FrameCRC_ID_DataType[] table);
 
         // CRC计算
         
