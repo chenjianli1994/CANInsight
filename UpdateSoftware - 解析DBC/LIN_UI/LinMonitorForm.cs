@@ -264,9 +264,13 @@ namespace PCAN_Client.LIN_UI
             UiTheme.StyleGrid(_dgvFrames);
             _dgvFrames.DefaultCellStyle.Font = new Font("Consolas", 9f);
             _dgvFrames.DefaultCellStyle.ForeColor = Color.Black;
-            // 表头/单元格边框风格与 CAN 报文接收窗口一致（单线分隔，表头清晰可辨）
+            // 边框策略：边框"照画"，但把网格线颜色设成行底色 → 视觉上无边框，同时行边界那 1px
+            // 会被边框像素覆盖。不能用 CellBorderStyle=None：框架会连那 1px 一起不画，条带成为
+            // 未绘制区，屏幕表面上露出底层陈旧像素 → 现场看到"有些单元格有黑色/灰色边框"
+            // （内存 DC 抓图看不出来，因为预先擦白；屏幕与窗口抓图才暴露）。
             _dgvFrames.ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.Single;
             _dgvFrames.CellBorderStyle = DataGridViewCellBorderStyle.Single;
+            _dgvFrames.GridColor = UiTheme.AlternatingRowBack;
             _dgvFrames.CellValueNeeded += DgvFrames_CellValueNeeded;
             _dgvFrames.CellFormatting += DgvFrames_CellFormatting;
             _dgvFrames.CellPainting += DgvFrames_CellPainting;
@@ -1422,14 +1426,7 @@ namespace PCAN_Client.LIN_UI
                         if (snap == null || !snap.IsError) return;
                         e.Handled = true;
                         PaintLinCellSurface(e);
-                        const int d2 = 12;
-                        var rc2 = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d2) / 2,
-                            e.CellBounds.Y + (e.CellBounds.Height - d2) / 2, d2, d2);
-                        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                        using (var red = new SolidBrush(Color.FromArgb(226, 68, 54)))
-                            e.Graphics.FillEllipse(red, rc2);
-                        using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
-                            e.Graphics.FillEllipse(hl, rc2.X + rc2.Width / 4, rc2.Y + rc2.Height / 4, rc2.Width / 2, rc2.Height / 2);
+                        PaintErrorLamp(e);
                         return;
                     }
                     LinFrameRecord f;
@@ -1441,21 +1438,14 @@ namespace PCAN_Client.LIN_UI
                     // 错误帧：红灯（中心高光，指示灯质感）
                     e.Handled = true;
                     PaintLinCellSurface(e);
-                    const int d = 12;
-                    var rc = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d) / 2,
-                        e.CellBounds.Y + (e.CellBounds.Height - d) / 2, d, d);
-                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    using (var red = new SolidBrush(Color.FromArgb(226, 68, 54)))
-                        e.Graphics.FillEllipse(red, rc);
-                    using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
-                        e.Graphics.FillEllipse(hl, rc.X + rc.Width / 4, rc.Y + rc.Height / 4, rc.Width / 2, rc.Height / 2);
+                    PaintErrorLamp(e);
                     return;
                 }
             }
             catch { /* 防御：绘制异常不中断 */ }
         }
 
-        /// <summary>自绘单元格使用与 DataGridView 相同的网格色，避免自绘格出现黑色边框</summary>
+        /// <summary>自绘单元格背景：与默认格一致（含选中/交替行底色），不描边框（单元格统一无边框）</summary>
         private void PaintLinCellSurface(DataGridViewCellPaintingEventArgs e)
         {
             bool selected = (e.State & DataGridViewElementStates.Selected) != 0;
@@ -1464,9 +1454,32 @@ namespace PCAN_Client.LIN_UI
                 : (e.CellStyle.BackColor.IsEmpty ? _dgvFrames.DefaultCellStyle.BackColor : e.CellStyle.BackColor);
             using (var background = new SolidBrush(backColor))
                 e.Graphics.FillRectangle(background, e.CellBounds);
-            using (var border = new Pen(_dgvFrames.GridColor))
-                e.Graphics.DrawRectangle(border, e.CellBounds.X, e.CellBounds.Y,
-                    Math.Max(0, e.CellBounds.Width - 1), Math.Max(0, e.CellBounds.Height - 1));
+        }
+
+        /// <summary>
+        /// 绘制错误指示灯（红灯 + 中心高光，须先 PaintLinCellSurface）。
+        /// SmoothingMode 是共享 Graphics 的状态：这里改为 AntiAlias 后必须就地还原，
+        /// 否则同一次绘制里"本行右侧 + 下方全部行"的单元格都会以抗锯齿方式画 1px 格线
+        /// （半覆盖像素压在复用缓冲区的旧像素上），现场表现为"错误帧所在行往下出现黑色格线"。
+        /// </summary>
+        private static void PaintErrorLamp(DataGridViewCellPaintingEventArgs e)
+        {
+            const int d = 12;
+            var rc = new Rectangle(e.CellBounds.X + (e.CellBounds.Width - d) / 2,
+                e.CellBounds.Y + (e.CellBounds.Height - d) / 2, d, d);
+            var prevSmoothing = e.Graphics.SmoothingMode;
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            try
+            {
+                using (var red = new SolidBrush(Color.FromArgb(226, 68, 54)))
+                    e.Graphics.FillEllipse(red, rc);
+                using (var hl = new SolidBrush(Color.FromArgb(255, 140, 120)))
+                    e.Graphics.FillEllipse(hl, rc.X + rc.Width / 4, rc.Y + rc.Height / 4, rc.Width / 2, rc.Height / 2);
+            }
+            finally
+            {
+                e.Graphics.SmoothingMode = prevSmoothing;
+            }
         }
 
         /// <summary>展开列单击：切换信号展开（对齐 CAN colFilter 交互）</summary>
