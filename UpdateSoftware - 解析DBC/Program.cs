@@ -107,15 +107,28 @@ namespace PCAN_Client
                 try { AppLog.Error("[APP] ThreadException: " + (e.Exception != null ? e.Exception.ToString() : "null")); }
                 catch { }
             };
-            /* 首次打开或版本更新后首次打开：弹窗提示（/updated 为更新批处理重启时携带的参数） */
+            /* 首次打开或版本更新后首次打开：弹窗提示（/updated、/updatefailed 为更新批处理重启时携带的参数） */
             bool justUpdated = false;
+            bool updateFailed = false;
             foreach (var arg in args)
             {
                 if (arg.Equals("/updated", StringComparison.OrdinalIgnoreCase))
                 {
                     justUpdated = true;
-                    break;
                 }
+                else if (arg.Equals("/updatefailed", StringComparison.OrdinalIgnoreCase))
+                {
+                    updateFailed = true;
+                }
+            }
+            if (updateFailed)
+            {
+                /* 更新批处理没能替换程序文件：本次旧版本由批处理重新拉起，在此说明原因。
+                   旧实现用 msg * 广播，会弹到同一台机器的其他会话上（别人看到莫名其妙的失败框）。 */
+                MessageBox.Show("自动更新未完成：未能替换程序文件，可能被其他程序占用。\r\n" +
+                                "当前仍为旧版本 " + BaseParamter.softVersion + "，请关闭其他 CANInsight 窗口后重试“检查更新”，" +
+                                "或手动从中转站复制新版本。",
+                    "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             if (justUpdated || !Properties.Settings.Default.NoticeShownVersion.Equals(BaseParamter.softVersion))
             {
@@ -133,7 +146,9 @@ namespace PCAN_Client
                 Properties.Settings.Default.NoticeShownVersion = BaseParamter.softVersion;
                 Properties.Settings.Default.Save();
             }
-            util.SelfUpdater.CheckOnStartup(); /* 启动时后台检查局域网共享文件夹中的新版本 */
+            /* 更新失败重启的这次不再自动检查：否则会立刻又弹更新确认框，陷入"关掉→下载→又失败"的循环，
+               用户想重试走“检查更新”菜单即可 */
+            if (!updateFailed) util.SelfUpdater.CheckOnStartup();
             // 秒开优化:先创建并显示绘图主页面(ChartFrom不依赖Main实例,启动路径仅用静态成员),
             // Main窗口随后再构建;Main_Load通过PreloadedChart接管已显示的实例,不重复创建
             PreloadedChart = new ChartFrom();

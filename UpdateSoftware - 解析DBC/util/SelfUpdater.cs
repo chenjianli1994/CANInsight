@@ -33,6 +33,9 @@ namespace PCAN_Client.util
         /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
         private const string UpdateDir = @"\\update-server\company-share\dept\group\其他资料\project\transfer\developer\CANInsight";
 
+        /* 暂存目录/替换批处理/替换日志统一按进程号命名：同一台机器多开实例同时更新时不会互相覆盖 */
+        private static readonly string UpdateTempName = "CANInsight_update_" + Process.GetCurrentProcess().Id;
+
         /// <summary>
         /// 启动自愈:检查本机安装目录缺失的运行时散落文件(exe旁config/DLL),从共享目录补齐。
         /// 历史版本自更新只替换 exe 不更新 DLL,导致部分用户更新后因缺散落 DLL 打不开;
@@ -271,7 +274,8 @@ namespace PCAN_Client.util
             }
 
             // 整包下载到暂存目录(清单内的 exe/config/DLL 全部下载,避免缺散落 DLL 导致新版本打不开)
-            string stageDir = Path.Combine(Path.GetTempPath(), "CANInsight_update");
+            CleanStaleUpdateTempFiles();
+            string stageDir = Path.Combine(Path.GetTempPath(), UpdateTempName);
             try
             {
                 if (Directory.Exists(stageDir)) Directory.Delete(stageDir, true);
@@ -327,6 +331,9 @@ namespace PCAN_Client.util
             }
 
             var dialog = new UpdateProgressDialog();
+            // 强制先创建进度窗句柄:源端在本地/已缓存时下载可能瞬间完成,首个 SetProgress 的 BeginInvoke
+            // 若早于句柄创建会抛异常,对话框就没人关闭,更新流程永久卡在"正在准备下载"(ControlBox=false 关不掉)
+            var progressHandle = dialog.Handle;
             bool ok = false;
             string dlError = null; // lambda内捕获局部变量,避免out参数限制
             var task = Task.Run(() =>
@@ -484,48 +491,131 @@ namespace PCAN_Client.util
         }
 
         /// <summary>
+        /// 清理历史更新的临时残留（上次更新中断留下的暂存目录/批处理/日志）。
+        /// 只清 1 小时前的：并发实例正在使用的文件绝不动。
+        /// </summary>
+        private static void CleanStaleUpdateTempFiles()
+        {
+            try
+            {
+                string temp = Path.GetTempPath();
+                DateTime cutoff = DateTime.Now.AddHours(-1);
+                foreach (var dir in Directory.GetDirectories(temp, "CANInsight_update*"))
+                {
+                    try
+                    {
+                        if (string.Equals(Path.GetFileName(dir), UpdateTempName, StringComparison.OrdinalIgnoreCase)
+                            || Directory.GetLastWriteTime(dir) > cutoff)
+                        {
+                            continue;
+                        }
+                        Directory.Delete(dir, true);
+                    }
+                    catch
+                    {
+                        /* 被占用等异常跳过,不影响本次更新 */
+                    }
+                }
+                foreach (var pattern in new[] { "CANInsight_update*.bat", "CANInsight_update*.log" })
+                {
+                    foreach (var file in Directory.GetFiles(temp, pattern))
+                    {
+                        try
+                        {
+                            if (string.Equals(Path.GetFileNameWithoutExtension(file), UpdateTempName, StringComparison.OrdinalIgnoreCase)
+                                || File.GetLastWriteTime(file) > cutoff)
+                            {
+                                continue;
+                            }
+                            File.Delete(file);
+                        }
+                        catch
+                        {
+                            /* 被占用等异常跳过,不影响本次更新 */
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                /* 清理只是卫生工作 */
+            }
+        }
+
+        /// <summary>
         /// 生成替换批处理：等待本进程退出后将暂存目录全部文件(exe/config/DLL)覆盖到安装目录，
-        /// 重启程序，随后清理暂存目录并删除自身。
+        /// 重启程序，随后清理暂存目录并删除自身；失败分支同样重启程序，由程序自身弹提示。
         /// </summary>
         private static void StartReplaceAndExit(string stageDir, string oldExe)
         {
-            string exeName = Path.GetFileName(oldExe);
-            string installDir = Path.GetDirectoryName(oldExe);
-            string batPath = Path.Combine(Path.GetTempPath(), "CANInsight_update.bat");
+            string temp = Path.GetTempPath();
+            string batPath = Path.Combine(temp, UpdateTempName + ".bat");
+            string logPath = Path.Combine(temp, UpdateTempName + ".log");
+            File.WriteAllText(batPath,
+                BuildReplaceScript(stageDir, Path.GetDirectoryName(oldExe), Path.GetFileName(oldExe), logPath),
+                Encoding.Default);
+
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c \"" + batPath + "\"",
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+            }
+            catch (Exception ex)
+            {
+                /* 起不了替换批处理就别退出:留着界面,用户至少还能继续用手动方式更新 */
+                MessageBox.Show("无法启动升级程序：" + ex.Message + "\r\n请手动从中转站复制新版本。", "检查更新",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            Environment.Exit(0);
+        }
+
+        /// <summary>
+        /// 构造替换批处理文本。判断成败以“程序本体是否已换成新版”为准：
+        /// copy 整包时个别散落文件被占用（杀软扫描、残留进程、另一实例等）不应把已经换好 exe 的更新误报成失败，
+        /// 也绝不能因为误报失败而不重启程序（用户会以为软件自己关了）。
+        /// </summary>
+        internal static string BuildReplaceScript(string stageDir, string installDir, string exeName, string logPath)
+        {
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("set \"src=" + stageDir + "\"");
             sb.AppendLine("set \"dst=" + installDir + "\"");
             sb.AppendLine("set \"exe=" + exeName + "\"");
+            sb.AppendLine("set \"log=" + logPath + "\"");
             sb.AppendLine("set /a n=0");
             sb.AppendLine(":retry");
-            // 整包复制：exe 被占用时 copy 失败，等待本进程退出后重试；其余 config/DLL 同步就位
-            sb.AppendLine("copy /y \"%src%\\*\" \"%dst%\" >nul 2>&1");
-            sb.AppendLine("if errorlevel 1 (");
-            sb.AppendLine("  set /a n+=1");
-            sb.AppendLine("  if %n% geq 60 goto fail");
-            sb.AppendLine("  ping 127.0.0.1 -n 2 >nul");
-            sb.AppendLine("  goto retry");
-            sb.AppendLine(")");
+            // 整包复制：exe 被占用时 copy 失败，等待本进程退出后重试；其余 config/DLL 同步就位。
+            // 输出进日志：真出问题时能看出是哪个文件、什么原因没落地。
+            sb.AppendLine("copy /y \"%src%\\*\" \"%dst%\" >\"%log%\" 2>&1");
+            sb.AppendLine("if not errorlevel 1 goto ok");
+            sb.AppendLine("set /a n+=1");
+            sb.AppendLine("if %n% geq 30 goto verify");
+            sb.AppendLine("ping 127.0.0.1 -n 2 >nul");
+            sb.AppendLine("goto retry");
+            sb.AppendLine(":verify");
+            // 整包始终有文件没落地：以程序本体逐字节比对裁决（散落 DLL 缺了由程序启动自愈补齐）
+            sb.AppendLine("fc /b \"%src%\\%exe%\" \"%dst%\\%exe%\" >nul 2>&1");
+            sb.AppendLine("if errorlevel 1 goto fail");
+            sb.AppendLine(":ok");
             sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updated");
             sb.AppendLine("rd /s /q \"%src%\"");
-            sb.AppendLine("del \"%~f0\"");
-            sb.AppendLine("exit");
+            sb.AppendLine("del \"%log%\"");
+            sb.AppendLine("goto cleanup");
             sb.AppendLine(":fail");
-            sb.AppendLine("msg * \"CANInsight 更新失败：无法替换程序文件，请手动从共享文件夹复制新版本。\"");
+            // 失败也要把程序拉起来（否则用户看到的是软件自己关了），失败提示留在 %log% 里供排查
+            sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updatefailed");
             sb.AppendLine("rd /s /q \"%src%\"");
-            sb.AppendLine("del \"%~f0\"");
-            File.WriteAllText(batPath, sb.ToString(), Encoding.Default);
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = "/c \"" + batPath + "\"",
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
-            Environment.Exit(0);
+            sb.AppendLine(":cleanup");
+            // 自删除只能放最后一行:(goto) 让 cmd 先释放批处理文件再删,否则 del 之后的语句都不会再执行
+            sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
+            return sb.ToString();
         }
     }
 
