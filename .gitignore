@@ -1,4 +1,9 @@
-​.build-check/
+.build-check/
+
+# 构建输出
+obj/
+bin/
+/Output/
 
 # NuGet restore output (use packages.config to restore)
 packages/
@@ -8,6 +13,7 @@ nuget.exe
 .vs/
 .reasonix/
 .codegraph/
+.zcode/
 
 # User-specific files
 *.user
@@ -19,3 +25,28 @@ nuget.exe
 Thumbs.db
 desktop.ini
 /发布包/
+
+# 本地模板 / 发布脚本 / 内部资料 / 本地冒烟工程（不入库）
+/模板文件.pptx
+/模板_解密.pptx
+/base_plain.pptx
+/publish_update.ps1
+/发布更新.bat
+/一键修复.bat
+/gen_blank_template.py
+/parse_template.py
+/gen_ui_mockups.py
+/AGENTS.md
+/性能优化路线图.md
+/接口说明.md
+/自动生成报告功能-交接文档.md
+/报告素材/
+/AutoPPT_Report_Architecture.png
+/CANInsight-源码工程-*.zip
+/TestReportAuto/
+/ProbeSmoke/
+/TestLinSmoke/
+/ChartSelectSmoke/
+/UpdateSoftware - 解析DBC/gen_icon.py
+/UpdateSoftware - 解析DBC/PCAN_Client.sln
+/UpdateSoftware - 解析DBC/app_icon_预览.png
