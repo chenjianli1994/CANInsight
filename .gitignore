@@ -24,7 +24,6 @@ nuget.exe
 # OS
 Thumbs.db
 desktop.ini
-/发布包/
 
 # 本地模板 / 发布脚本 / 内部资料 / 本地冒烟工程（不入库）
 /模板文件.pptx
