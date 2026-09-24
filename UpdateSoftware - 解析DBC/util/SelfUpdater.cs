@@ -58,6 +58,9 @@ namespace PCAN_Client.util
         {
             try
             {
+                /* 未配置中转站地址(源码仓编译、无本机私有文件)时直接跳过:
+                   否则 Path.Combine("", "files.txt") 会退化成相对路径,误读当前目录里的同名文件 */
+                if (UpdateDir.Length == 0) return;
                 if (!QuickProbe(UpdateDir, 1500)) return;
 
                 var names = new List<string>();
