@@ -28,10 +28,23 @@ namespace PCAN_Client.util
         Ignore
     }
 
-    internal static class SelfUpdater
+    internal static partial class SelfUpdater
     {
-        /* 中转站固定共享文件夹路径（网络盘如 Z:\CANInsight 也可直接填） */
-        private const string UpdateDir = @"\\update-server\company-share\dept\group\其他资料\project\transfer\developer\CANInsight";
+        /* 中转站共享文件夹路径（UNC 或映射盘）来自本机私有文件 util/SelfUpdater.Local.cs：
+           公司内网地址不写进源码仓（该文件已加进 .gitignore，只在本机参与编译）。
+           源码仓里没有这个文件时 UpdateDir 为空串，自动更新静默跳过，"检查更新"会提示未配置。 */
+        private static readonly string UpdateDir = ResolveUpdateDir();
+
+        /// <summary>取本机私有文件里的中转站地址；无私有实现（源码仓编译）时返回空串</summary>
+        private static string ResolveUpdateDir()
+        {
+            string dir = null;
+            FillLocalUpdateDir(ref dir);
+            return dir ?? "";
+        }
+
+        /// <summary>由本机私有文件实现的中转站地址填充（partial：源码仓不带实现，调用点编译期被移除）</summary>
+        static partial void FillLocalUpdateDir(ref string dir);
 
         /* 暂存目录/替换批处理/替换日志统一按进程号命名：同一台机器多开实例同时更新时不会互相覆盖 */
         private static readonly string UpdateTempName = "CANInsight_update_" + Process.GetCurrentProcess().Id;
@@ -181,6 +194,12 @@ namespace PCAN_Client.util
             error = "无法访问更新服务器。";
             try
             {
+                if (UpdateDir.Length == 0)
+                {
+                    error = "本机未配置中转站地址（源码仓不含公司内网地址，需本机私有文件 util/SelfUpdater.Local.cs）。";
+                    return false;
+                }
+
                 /* 先快速探测服务器可达性，避免不可达时 SMB 长时间挂起拖慢进程 */
                 if (!QuickProbe(UpdateDir, 1500))
                 {

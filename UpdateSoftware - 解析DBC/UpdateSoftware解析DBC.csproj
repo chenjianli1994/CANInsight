@@ -393,6 +393,8 @@
     <Compile Include="util\Delay.cs" />
     <Compile Include="util\DgvComboHelper.cs" />
     <Compile Include="util\SelfUpdater.cs" />
+    <!-- 本机私有更新源地址(不入库):存在才编译,源码仓里没有它也能正常编译 -->
+    <Compile Include="util\SelfUpdater.Local.cs" Condition="Exists('util\SelfUpdater.Local.cs')" />
     <Compile Include="util\UiTheme.cs" />
     <EmbeddedResource Include="CanSend.resx">
       <DependentUpon>CanSend.cs</DependentUpon>

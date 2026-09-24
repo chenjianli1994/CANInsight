@@ -50,3 +50,9 @@ desktop.ini
 /UpdateSoftware - 解析DBC/gen_icon.py
 /UpdateSoftware - 解析DBC/PCAN_Client.sln
 /UpdateSoftware - 解析DBC/app_icon_预览.png
+
+# 本机私有更新源地址（公司内网地址不入库）
+/UpdateSoftware - 解析DBC/util/SelfUpdater.Local.cs
+
+# CANInsight.Service 暂不对外（本机保留，仅不入库）
+/CANInsight.Service/

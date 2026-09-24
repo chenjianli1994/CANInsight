@@ -132,8 +132,9 @@ namespace PCAN_Client
             }
             if (justUpdated || !Properties.Settings.Default.NoticeShownVersion.Equals(BaseParamter.softVersion))
             {
-                string notice = "1、使用过程中发现问题请内部沟通工具联系developer进行反馈\r\n" +
-                                "2、如需要更新软件需要连接上公司内网，确认可以访问\\\\update-server地址后重新打开此软件";
+                /* 提示文案不含内网地址/人名/内网工具名:源码对外公开,具体联系方式由使用者自行补充 */
+                string notice = "1、使用过程中发现问题请联系开发人员反馈\r\n" +
+                                "2、更新软件需要接入公司内网，确认可访问更新服务器地址后重新打开此软件";
                 if (justUpdated)
                 {
                     MessageBox.Show("更新完成！当前版本：" + BaseParamter.softVersion + "\r\n\r\n" + notice,
