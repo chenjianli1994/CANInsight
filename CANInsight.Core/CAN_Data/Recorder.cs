@@ -12,7 +12,7 @@ namespace PCAN_Client.CAN_Data
 {
     /// <summary>
     /// BLF/ASC 录制器：文件创建、写队列、连续写线程、文件分割。
-    /// 自 GUI 的 Log/Logging 收归 Core，GUI 与 Service 共用；宿主通过事件接收新文件通知。
+    /// 自 GUI 的 Log/Logging 收归 Core；宿主通过事件接收新文件通知。
     /// </summary>
     public static class Recorder
     {

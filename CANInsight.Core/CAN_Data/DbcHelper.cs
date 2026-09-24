@@ -26,7 +26,7 @@ namespace PCAN_Client.CAN_Data
         /// <summary>DBC 解析完成事件（GUI 订阅刷新报文树/信号树）</summary>
         public static event Action DbcLoaded;
 
-        /// <summary>底层 CAN 发送注入点（宿主绑定：GUI 绑 CAN_API.CanTransmit；Service 绑自身实现）</summary>
+        /// <summary>底层 CAN 发送注入点（宿主绑定：GUI 绑 CAN_API.CanTransmit）</summary>
         public static Func<uint, ushort, byte[], byte, bool> CanTransmitHandler;
 
         public DbcFile dbcFile = new DbcFile();

@@ -72,6 +72,25 @@ namespace PCAN_Client.ReportAuto
             return _templatePath;
         }
 
+        /// <summary>
+        /// 报表模板是否可用（含DLP可读性验证）。模板文件不在源码仓内，
+        /// 缺失时由调用方直接给友好提示，不进入生成流程（软件其余功能不受影响）。
+        /// </summary>
+        public static bool IsTemplateReady()
+        {
+            EnsureTemplateReady();
+            return !string.IsNullOrEmpty(_templatePath) && File.Exists(_templatePath);
+        }
+
+        /// <summary>模板缺失时的提示文案：说明模板该放哪里、从哪来</summary>
+        public static string TemplateMissingHint()
+        {
+            string dir = Path.GetDirectoryName(Application.ExecutablePath);
+            return "缺少报表模板「模板文件.pptx」，无法生成报告。\r\n\r\n" +
+                   "请把该模板文件放到程序目录后重试：\r\n" + dir + "\r\n\r\n" +
+                   "（模板文件不在源码仓内，可从发布包获取；软件其余功能不受影响）";
+        }
+
         /// <summary>确保模板可被OpenXml打开:先直接试打开并验证内容,失败则用cmd /c type走DLP授权路径提取明文副本</summary>
         private static string TryEnsureReadableTemplate(string path)
         {

@@ -54,8 +54,5 @@ desktop.ini
 # 本机私有更新源地址（公司内网地址不入库）
 /UpdateSoftware - 解析DBC/util/SelfUpdater.Local.cs
 
-# CANInsight.Service 暂不对外（本机保留，仅不入库）
-/CANInsight.Service/
-
 # 本机私有 E2E CRC 表（客户协议数据不入库）
 /CANInsight.Core/util/FrameCrcCal.Local.cs

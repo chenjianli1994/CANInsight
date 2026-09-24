@@ -11,7 +11,7 @@ namespace PCAN_Client.CAN_API
 {
     /// <summary>
     /// 统一 CAN 收发汇聚点：发送按通道硬件类型路由 PCAN/CANoe，接收汇聚后经事件分发给宿主。
-    /// 宿主（GUI/Service）负责订阅事件与注入录制状态，本类不持有任何 UI 引用。
+    /// 宿主（GUI）负责订阅事件与注入录制状态，本类不持有任何 UI 引用。
     /// </summary>
     public static class CAN_API
     {
@@ -32,7 +32,7 @@ namespace PCAN_Client.CAN_API
 
         public static object _receiveCanDataLock = new object();
 
-        // === 后端实例与连接状态（GUI 的 Main 静态字段代理到此处，Service 直接使用） ===
+        // === 后端实例与连接状态（GUI 的 Main 静态字段代理到此处） ===
         // 懒初始化：XLDriver 构造会加载 vxlapi 原生库，静态初始化即构造会导致无 Vector 驱动的环境启动崩溃
         private static PcanBackend _pcanApi;
         private static CanoeBackend _canoeApi;
@@ -41,7 +41,7 @@ namespace PCAN_Client.CAN_API
         public static bool PcanOpenFlag;
         public static bool CanoeOpenFlag;
 
-        // === 宿主事件（GUI/Service 订阅；订阅者必须快速返回，禁止阻塞接收链路） ===
+        // === 宿主事件（GUI 订阅；订阅者必须快速返回，禁止阻塞接收链路） ===
 
         /// <summary>
         /// 统一接收帧事件(ID,len,data,逻辑通道,isTx本端发送回灌)。
@@ -50,7 +50,7 @@ namespace PCAN_Client.CAN_API
         /// </summary>
         public static event Action<uint, ushort, byte[], byte, bool> RawFrameReceived;
 
-        /// <summary>接收帧上屏事件（GUI 订阅 → Main.RecordCanMessage；Service 订阅 → 帧环形缓冲）</summary>
+        /// <summary>接收帧上屏事件（GUI 订阅 → Main.RecordCanMessage）</summary>
         public static event Action<TPCANMsg, ulong, bool, byte> FrameReceived;
 
         /// <summary>实时原始帧记录事件（GUI 订阅 → ChartFrom.RecordRealtimeRawMessage，供手动导出 BLF）</summary>

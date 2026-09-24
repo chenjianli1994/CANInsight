@@ -4,7 +4,7 @@ namespace PCAN_Client.CAN_API
 {
     /// <summary>
     /// 录制状态（ASC/BLF）唯一真相源。GUI 的 Logging/LoggingSet 通过属性代理读写，
-    /// Core 的接收链路直接读取，Service 宿主可直接控制。
+    /// Core 的接收链路直接读取，宿主可直接控制。
     /// </summary>
     public static class RecordingState
     {

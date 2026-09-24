@@ -268,6 +268,13 @@ namespace PCAN_Client
         {
             try
             {
+                // 模板缺失时先给明确提示(模板不在源码仓内):不进入后续流程,避免先做一堆无用功再报错
+                if (!ReportAutoService.IsTemplateReady())
+                {
+                    MessageBox.Show(ReportAutoService.TemplateMissingHint(), "缺少报表模板",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
                 var type = _currentAnalysisType;
                 if (type == null)
                 {
