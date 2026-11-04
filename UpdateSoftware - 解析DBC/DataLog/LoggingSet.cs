@@ -173,6 +173,14 @@ namespace PCAN_Client.DataLog
 
         private void button2_Click(object sender, EventArgs e)
         {
+            // 状态自愈：标志为"录制中"但录制实例已不存在（上次停止/异常遗留）时，
+            // 开始录制按钮会永久置灰并一直提示"正在录制中"，这里复位后继续
+            if (Logging.SaveFlag && Logging.log == null)
+            {
+                AppLog.Warn("[录制] 检测到残留录制状态（无录制实例），已复位");
+                Logging.SaveFlag = false;
+                SyncRecordButtons();
+            }
             if (Logging.SaveFlag)
             {
                 MessageBox.Show("正在录制中，请先停止当前录制!");
@@ -214,15 +222,14 @@ namespace PCAN_Client.DataLog
                     SaveFileType_int = 0;
                     SaveFileType = "ASC";
                     Properties.Settings.Default.SaveFileType = SaveFileType;
-                    Properties.Settings.Default.Save();
                 }
                 else
                 {
                     SaveFileType_int = 1;
                     SaveFileType = "BLF";
                     Properties.Settings.Default.SaveFileType = SaveFileType;
-                    Properties.Settings.Default.Save();
                 }
+                SaveSettingsQuietly();
                 //string data = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 //string filename = fileAdress.Text + "FN" + data + ".txt";
 
@@ -232,9 +239,28 @@ namespace PCAN_Client.DataLog
                 //Header_information = Header_information_Text.Text;
                 Header_information = "";
 
+                if (Main.main == null || Main.main.IsDisposed)
+                {
+                    MessageBox.Show("开始录制失败：主窗口未就绪，请重新打开软件。", "录制报文",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
                 Main.main.MngMAIN_OpenLogging();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 原实现 catch { } 把失败全部吞掉，现场表现为"点开始录制没反应"，无法定位
+                AppLog.Error("[录制] 开始录制请求异常: " + ex);
+                MessageBox.Show("开始录制失败：" + ex.Message, "录制报文",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        /// <summary>保存用户设置：失败只记日志，不阻断录制（user.config 在受限账户/漫游目录下可能不可写）</summary>
+        private static void SaveSettingsQuietly()
+        {
+            try { Properties.Settings.Default.Save(); }
+            catch (Exception ex) { AppLog.Warn("[设置] 保存失败: " + ex.Message); }
         }
 
         private void buttonStop_Click(object sender, EventArgs e)
@@ -272,7 +298,7 @@ namespace PCAN_Client.DataLog
             SaveFileType_int = 0;
 
             Properties.Settings.Default.SaveFileType = SaveFileType;
-            Properties.Settings.Default.Save();
+            SaveSettingsQuietly();
         }
 
         private void radioButton2_CheckedChanged(object sender, EventArgs e)
@@ -280,7 +306,7 @@ namespace PCAN_Client.DataLog
             SaveFileType = "BLF";
             SaveFileType_int = 1;
             Properties.Settings.Default.SaveFileType = SaveFileType;
-            Properties.Settings.Default.Save();
+            SaveSettingsQuietly();
         }
 
         private void LoggingSet_FormClosing(object sender, FormClosingEventArgs e)
@@ -298,7 +324,7 @@ namespace PCAN_Client.DataLog
             saveExcelFlag = checkBoxSaveExcel.Checked;
 
             Properties.Settings.Default.checkBoxSaveExcelChecked = saveExcelFlag;
-            Properties.Settings.Default.Save();
+            SaveSettingsQuietly();
         }
 
         private void comboBoxExcelSaveTime_SelectedIndexChanged(object sender, EventArgs e)
@@ -306,7 +332,7 @@ namespace PCAN_Client.DataLog
             comboBoxExcelSaveTimeSelectIndex = (uint)comboBoxExcelSaveTime.SelectedIndex;
 
             Properties.Settings.Default.comboBoxExcelSaveTimeSelectIndex = (int)comboBoxExcelSaveTimeSelectIndex;
-            Properties.Settings.Default.Save();
+            SaveSettingsQuietly();
 
         }
     }

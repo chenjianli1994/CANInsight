@@ -600,6 +600,7 @@ namespace PCAN_Client.DataLog
 
                             if (msgChannel == 0) msgChannel = 1; // 容错：BLF通道号应1-based
                             byte logicCh = BaseParamter.GetLogicChannelByBlfId(msgChannel); // BLF通道号→逻辑通道号（解码路由用）
+                            canid &= 0x1FFFFFFF; // BLF 的 mID bit31 是扩展帧标记（CANoe 与录制器都按此写），真实 ID 在低 29 位
 
                             if (saveExcelFlag)
                             {

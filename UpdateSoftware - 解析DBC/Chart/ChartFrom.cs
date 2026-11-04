@@ -4154,13 +4154,23 @@ namespace PCAN_Client
                 var messageList = new List<CAN_Data.blf.MessageBase>();
                 foreach (var rawMsg in messagesToSave)
                 {
-                    byte[] data = new byte[8];
-                    int copyLen = Math.Min(rawMsg.Data.Length, 8);
-                    Array.Copy(rawMsg.Data, data, copyLen);
-
                     // rawMsg.Channel为1-based（实时逻辑通道/BLF mChannel），writeBLF内部+1写出，故传入-1保持原通道号
                     uint saveChannel = rawMsg.Channel > 0 ? (uint)(rawMsg.Channel - 1) : 0;
-                    messageList.Add(new CAN_Data.blf.CANMessage(saveChannel, rawMsg.CanId, data, rawMsg.TimeStampSeconds));
+                    byte[] rawData = rawMsg.Data ?? new byte[0];
+                    if (rawData.Length > 8)
+                    {
+                        // CAN FD 帧按 FD 对象导出（原实现统一截断到 8 字节，>8 字节部分永久丢失）
+                        messageList.Add(new CAN_Data.blf.CANFDMessage(saveChannel, rawMsg.CanId, 0, rawData,
+                            rawMsg.TimeStampSeconds,
+                            rawMsg.CanId > 0x7FF ? CAN_Data.blf.MessageFlag.MSG_EXT : CAN_Data.blf.MessageFlag.MSG_STD));
+                    }
+                    else
+                    {
+                        byte[] data = new byte[8];
+                        Array.Copy(rawData, data, Math.Min(rawData.Length, 8));
+                        messageList.Add(new CAN_Data.blf.CANMessage(saveChannel, rawMsg.CanId, data, rawMsg.TimeStampSeconds,
+                            rawMsg.CanId > 0x7FF ? CAN_Data.blf.MessageFlag.MSG_EXT : CAN_Data.blf.MessageFlag.MSG_STD));
+                    }
                 }
 
                 CAN_Data.blf.BinlogReadWrite.writeBLF(dialog.FileName, messageList);

@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using PcanBackend = PCAN_Client.PCAN_API.PCAN_API;
 using CanoeBackend = PCAN_Client.Canoe_API.CanOe_API;
@@ -56,10 +57,10 @@ namespace PCAN_Client.CAN_API
         /// <summary>实时原始帧记录事件（GUI 订阅 → ChartFrom.RecordRealtimeRawMessage，供手动导出 BLF）</summary>
         public static event Action<uint, byte[], byte> RealtimeRawRecorded;
 
-        /// <summary>BLF 写入请求（GUI 订阅 → Log.AddCanMessageToWrite）</summary>
-        public static event Action<uint, byte[], ulong, byte> BlfWriteRequest;
+        /// <summary>BLF 写入请求（GUI 订阅 → Recorder.AddCanMessageToWrite）；最后一个参数=是否 CAN FD 帧</summary>
+        public static event Action<uint, byte[], ulong, byte, bool> BlfWriteRequest;
 
-        /// <summary>BLF 队列刷新请求（GUI 订阅 → Log.ContinuousWriteWorker）</summary>
+        /// <summary>BLF 队列刷新请求（GUI 订阅 → Recorder.FlushCanWriteQueue）</summary>
         public static event Action BlfFlushRequest;
 
         /// <summary>ASC 落盘请求（GUI 订阅 → Log.saveLog）</summary>
@@ -150,6 +151,8 @@ namespace PCAN_Client.CAN_API
             byte blfCh = BaseParamter.GetBlfIdByLogicChannel(channel);
             // 录制通道过滤（LoggingSet中勾选；未勾选通道的报文不落盘，UI/解析不受影响）
             bool recordCh = RecordingState.IsRecordChannel(channel);
+            // 是否 CAN FD 帧：决定 BLF 落盘对象类型（FD 帧即使有效字节≤8 也要按 FD 对象写，与 CANoe 一致）
+            bool isFd = (MSGTYPE & TPCANMessageType.PCAN_MESSAGE_FD) != 0;
             // 记录实时CAN原始报文（用于ChartFrom保存BLF）；
             // 已落盘的帧（BLF录制开启且该通道勾选录制）跳过内存副本；其余帧（未录制/ASC/未勾选通道）必须入内存，否则手动导出永久缺失
             if (!(RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordCh))
@@ -158,7 +161,7 @@ namespace PCAN_Client.CAN_API
             }
             if (RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordCh)
             {
-                try { BlfWriteRequest?.Invoke(ID, data, timestamp2, blfCh); } catch { }
+                try { BlfWriteRequest?.Invoke(ID, data, timestamp2, blfCh, isFd); } catch { }
             }
             if (0 == startTime)
             {
@@ -234,15 +237,20 @@ namespace PCAN_Client.CAN_API
             }
         }
 
+        /// <summary>待处理的 BLF 刷新请求（1=已排队）：同一时刻只排一个，避免慢盘时线程池任务堆积</summary>
+        private static int _blfFlushPending = 0;
+
         public static void FlushBLFBuffer()
         {
-            // 异步后台写入，不阻塞CAN接收线程
+            // 只投递"尽快落盘"请求，不占用 _bufferLock：
+            // 原实现把整次磁盘刷新放在 _bufferLock 内，慢盘时会把接收线程卡在 ASC 缓冲上（丢帧）；
+            // 同一句柄的并发写由 Recorder 内部的锁串行化。
+            if (Interlocked.Exchange(ref _blfFlushPending, 1) == 1) return;
             Task.Run(() =>
             {
-                lock (_bufferLock)
-                {
-                    try { BlfFlushRequest?.Invoke(); } catch { }
-                }
+                try { BlfFlushRequest?.Invoke(); }
+                catch { /* 订阅者异常不影响接收链路 */ }
+                finally { Interlocked.Exchange(ref _blfFlushPending, 0); }
             });
         }
 

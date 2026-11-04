@@ -10,8 +10,14 @@ namespace PCAN_Client.CAN_Data.blf
 {
     public class BinlogReadWrite
     {
-        //throw Exception
+        /// <summary>读 BLF：与录制写线程、手动导出共用同一把 binlog 锁，避免并发调用破坏堆</summary>
         public static List<MessageBase> readBLF(string path)
+        {
+            lock (BLFAPI.SyncRoot) { return readBLFCore(path); }
+        }
+
+        //throw Exception
+        private static List<MessageBase> readBLFCore(string path)
         {
 
             if (!File.Exists(path))
@@ -49,7 +55,9 @@ namespace PCAN_Client.CAN_Data.blf
                         if (retval == 1)
                         {
                             VBLCANMessage retMsg = Marshal.PtrToStructure<VBLCANMessage>(pMsg);
-                            readMessageList.Add(new CANMessage(retMsg.mChannel, retMsg.mID, retMsg.mData, msg.mHeader.mObjectTimeStamp / 1000000000.0));
+                            // 时间戳/ID 必须取回读到的对象：原实现取的是入参种子结构（mObjectTimeStamp 恒为 0）
+                            readMessageList.Add(new CANMessage(retMsg.mChannel, retMsg.mID & 0x1FFFFFFF, retMsg.mData,
+                                retMsg.mHeader.mObjectTimeStamp / 1000000000.0));
                         }
 
                         Marshal.FreeHGlobal(pMsg);
@@ -66,6 +74,16 @@ namespace PCAN_Client.CAN_Data.blf
                         if (retval == 1)
                         {
                             VBLCANFDMessage64 retMsg = Marshal.PtrToStructure<VBLCANFDMessage64>(pMsg);
+                            // 原实现读了 FD 对象却直接丢弃：录制里全是 CAN FD 帧时读回来是空列表
+                            int validBytes = Math.Min((int)retMsg.mValidDataBytes, 64);
+                            byte[] data = new byte[validBytes];
+                            if (validBytes > 0 && retMsg.mData != null)
+                            {
+                                Array.Copy(retMsg.mData, data, Math.Min(validBytes, retMsg.mData.Length));
+                            }
+                            // bit31 是扩展帧标记，真实 ID 在低 29 位
+                            readMessageList.Add(new CANFDMessage(retMsg.mChannel, retMsg.mID & 0x1FFFFFFF, 0, data,
+                                retMsg.mHeader.mObjectTimeStamp / 1000000000.0));
                         }
                         Marshal.FreeHGlobal(pMsg);
                     }
@@ -75,7 +93,13 @@ namespace PCAN_Client.CAN_Data.blf
             return readMessageList;
         }
 
+        /// <summary>写 BLF：与录制写线程共用同一把 binlog 锁（录制过程中导出手动 BLF 不会破坏堆）</summary>
         public static bool writeBLF(string path, List<MessageBase> messageList)
+        {
+            lock (BLFAPI.SyncRoot) { return writeBLFCore(path, messageList); }
+        }
+
+        private static bool writeBLFCore(string path, List<MessageBase> messageList)
         {
 
             IntPtr fileHandle = BLFAPI.BLCreateFileW(path, GENERIC.GENERIC_WRITE);
@@ -115,7 +139,8 @@ namespace PCAN_Client.CAN_Data.blf
                         canMessage.mChannel = (UInt16)(canMsg.channel + 1);
                         canMessage.mFlags = 0;
                         canMessage.mDLC = canMsg.DLC;
-                        canMessage.mID = canMsg.ID;
+                        // bit31 标记扩展帧（与 CANoe 一致；读取方按 0x1FFFFFFF 掩码取真实 ID）
+                        canMessage.mID = canMsg.ID > 0x7FF ? (0x80000000 | canMsg.ID) : canMsg.ID;
                         canMessage.mData = canMsg.data;
                         Marshal.StructureToPtr(canMessage, msgPtr, false);
                         retval = BLFAPI.BLWriteObject(fileHandle, msgPtr);
@@ -133,10 +158,11 @@ namespace PCAN_Client.CAN_Data.blf
                         IntPtr msgFDPtr = Marshal.AllocHGlobal(msgFDSize);
                         VBLCANFDMessage64 canFDMessage = new VBLCANFDMessage64();
                         canFDMessage.mHeader.mBase.mSignature = BLFAPI.BL_OBJ_SIGNATURE;
-                        canFDMessage.mHeader.mBase.mHeaderSize = (UInt16)Marshal.SizeOf(typeof(VBLCANFDMessage64));
+                        canFDMessage.mHeader.mBase.mHeaderSize = (UInt16)Marshal.SizeOf(typeof(VBLObjectHeader));
                         canFDMessage.mHeader.mBase.mHeaderVersion = 1;
                         canFDMessage.mHeader.mObjectTimeStamp = (ulong)(1000000000L * canFDMsg.timeStamp);
-                        canFDMessage.mHeader.mBase.mObjectSize = (UInt16)Marshal.SizeOf(typeof(VBLCANFDMessage64));
+                        // 对象长度按 CANoe 实际写出的 136 字节，而不是结构体的 144（多出的 8 字节是可选扩展帧数据）
+                        canFDMessage.mHeader.mBase.mObjectSize = (UInt16)BLFAPI.CanFd64ObjectSize;
                         canFDMessage.mHeader.mBase.mObjectType = (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64;
                         canFDMessage.mHeader.mObjectFlags = (uint)ObjectFlag.BL_OBJ_FLAG_TIME_ONE_NANS;
                         canFDMessage.mChannel = (byte)(canFDMsg.channel + 1);
@@ -150,12 +176,13 @@ namespace PCAN_Client.CAN_Data.blf
                             canFDMessage.mID = canFDMsg.ID;
                         }
 
-                        canFDMessage.mValidDataBytes = (byte)canFDMsg.data.Length;
+                        int fdDataLen = Math.Min(canFDMsg.data.Length, 64);
+                        canFDMessage.mValidDataBytes = (byte)fdDataLen;
                         byte[] data = new byte[64];
 
-                        Array.Copy(canFDMsg.data, 0, data, 0, canFDMsg.data.Length);
+                        Array.Copy(canFDMsg.data, 0, data, 0, fdDataLen);
                         canFDMessage.mData = data;
-                        canFDMessage.mDLC = (byte)BinlogReadWrite.getDLC(canFDMsg.data.Length);
+                        canFDMessage.mDLC = BLFAPI.GetFdDlcCode(fdDataLen);
                         Marshal.StructureToPtr(canFDMessage, msgFDPtr, false);
 
                         retval = BLFAPI.BLWriteObject(fileHandle, msgFDPtr);
@@ -171,85 +198,6 @@ namespace PCAN_Client.CAN_Data.blf
             }
             BLFAPI.BLCloseHandle(fileHandle);
             return true;
-        }
-
-        private static int getDLC(int dataLength)
-        {
-            if (dataLength >= 0 && dataLength <= 8)
-            {
-                return 8;
-            }
-            else if (dataLength > 8 && dataLength <= 12)
-            {
-                return 9;
-            }
-            else if (dataLength > 12 && dataLength <= 16)
-            {
-                return 10;
-
-            }
-            else if (dataLength > 16 && dataLength <= 20)
-            {
-                return 11;
-            }
-            else if (dataLength > 20 && dataLength <= 24)
-            {
-                return 12;
-            }
-            else if (dataLength > 24 && dataLength <= 32)
-            {
-                return 13;
-            }
-            else if (dataLength > 32 && dataLength <= 48)
-            {
-                return 14;
-            }
-            else if (dataLength > 48 && dataLength <= 64)
-            {
-                return 15;
-            }
-            else
-            {
-                return 15;
-            }
-
-        }
-
-        private static int getValidDataBytes(int MsgLenght)
-        {
-
-            if (MsgLenght > 8 && MsgLenght <= 12)
-            {
-                return 12;
-            }
-            else if (MsgLenght > 12 && MsgLenght <= 16)
-            {
-                return 16;
-            }
-            else if (MsgLenght > 16 && MsgLenght <= 20)
-            {
-                return 20;
-            }
-            else if (MsgLenght > 20 && MsgLenght <= 24)
-            {
-                return 24;
-            }
-            else if (MsgLenght > 24 && MsgLenght <= 32)
-            {
-                return 32;
-            }
-            else if (MsgLenght > 32 && MsgLenght <= 48)
-            {
-                return 48;
-            }
-            else if (MsgLenght > 48 && MsgLenght <= 64)
-            {
-                return 64;
-            }
-            else
-            {
-                return 8;
-            }
         }
     }
 }

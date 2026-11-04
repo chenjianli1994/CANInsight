@@ -261,6 +261,34 @@ namespace PCAN_Client.CAN_Data.blf
 
         public static uint BL_OBJ_SIGNATURE = 0x4A424F4C;
 
+        /// <summary>
+        /// binlog.dll 调用的全局互斥锁：句柄不是线程安全的（同一句柄被两个线程同时
+        /// BLWriteObject/BLCloseHandle 会破坏堆，表现为停止录制时偶发闪退），
+        /// 录制写线程、停止/开始、手动"保存BLF"导出统一在这把锁内串行调用。
+        /// </summary>
+        public static readonly object SyncRoot = new object();
+
+        /// <summary>
+        /// CAN FD 对象固定长度：32 字节对象头 + 40 字节 FD 字段 + 64 字节数据 = 136。
+        /// 与 CANoe 11 实际写出的 FD64 对象逐字节一致（不含 mExtDataOffset 指向的可选扩展帧数据，
+        /// 该字段为 0 时对象到此结束）。注意 Marshal.SizeOf&lt;VBLCANFDMessage64&gt;() 是 144，
+        /// 多出的 8 字节是扩展帧数据，写文件时不能计入 mObjectSize。
+        /// </summary>
+        public const int CanFd64ObjectSize = 136;
+
+        /// <summary>CAN FD 数据字节数 → BLF 的 mDLC 编码（≤8 用字节数，&gt;8 用 FD DLC 码）</summary>
+        public static byte GetFdDlcCode(int dataLength)
+        {
+            if (dataLength <= 8) return (byte)Math.Max(0, dataLength);
+            if (dataLength <= 12) return 9;
+            if (dataLength <= 16) return 10;
+            if (dataLength <= 20) return 11;
+            if (dataLength <= 24) return 12;
+            if (dataLength <= 32) return 13;
+            if (dataLength <= 48) return 14;
+            return 15;
+        }
+
         [DllImport("binlog.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr BLCreateFileW(string filePath, GENERIC genricFlag);
 

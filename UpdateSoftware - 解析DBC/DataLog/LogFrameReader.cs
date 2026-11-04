@@ -321,7 +321,8 @@ namespace PCAN_Client.DataLog
 
                     byte[] payload = new byte[dataLen];
                     Array.Copy(datas, payload, (int)dataLen);
-                    onFrame(new CanFrame(timeUs, canid, (ushort)dataLen, payload));
+                    // BLF 的 mID bit31 是扩展帧标记（CANoe 与录制器都按此写），真实 ID 在低 29 位
+                    onFrame(new CanFrame(timeUs, canid & 0x1FFFFFFF, (ushort)dataLen, payload));
                 }
             }
             finally

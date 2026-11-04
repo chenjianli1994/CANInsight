@@ -1864,9 +1864,17 @@ namespace PCAN_Client
 
         internal void MngMAIN_OpenLogging()
         {
-            if (this.IsHandleCreated)
+            if (!this.IsHandleCreated)
             {
-                this.BeginInvoke((EventHandler)(delegate
+                // 原实现此处静默返回：用户看到的就是"点开始录制毫无反应"
+                AppLog.Error("[录制] 主窗口句柄未创建，无法开始录制");
+                MessageBox.Show("开始录制失败：主窗口尚未就绪，请稍后重试。", "录制报文",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            this.BeginInvoke((EventHandler)(delegate
+            {
+                try
                 {
                     if (null == DataLog.Logging.log)
                     {
@@ -1877,10 +1885,23 @@ namespace PCAN_Client
                         /* empty */
                     }
                     Logging.SaveCSVPath = "";
-                    Logging.log.MngLogging_StartSaveData();//开始保存数据（弹窗已移除，不再Show）
+                    // 建文件失败必须让用户看见（原实现只写 Debug 输出，表现为"点了没反应"）
+                    if (!Logging.log.MngLogging_StartSaveData())
+                    {
+                        MessageBox.Show("开始录制失败：" + Logging.LastStartError, "录制报文",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
                     UpdateRecordButtonState();//录制状态同步到工具条按钮
-                }));
-            }
+                }
+                catch (Exception ex)
+                {
+                    Logging.SaveFlag = false;
+                    AppLog.Error("[录制] 开始录制异常: " + ex);
+                    MessageBox.Show("开始录制失败：" + ex.Message, "录制报文",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    UpdateRecordButtonState();
+                }
+            }));
         }
 
         private void Main_Load(object sender, EventArgs e)

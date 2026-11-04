@@ -79,9 +79,9 @@ namespace PCAN_Client
             {
                 try { ChartFrom.RecordRealtimeRawMessage(id, data, blfCh); } catch { }
             };
-            PCAN_Client.CAN_API.CAN_API.BlfWriteRequest += (id, data, ts, blfCh) =>
+            PCAN_Client.CAN_API.CAN_API.BlfWriteRequest += (id, data, ts, blfCh, isFd) =>
             {
-                try { CAN_Data.Recorder.AddCanMessageToWrite(id, data, ts, blfCh); } catch { }
+                try { CAN_Data.Recorder.AddCanMessageToWrite(id, data, ts, blfCh, 0, isFd); } catch { }
             };
             PCAN_Client.CAN_API.CAN_API.BlfFlushRequest += () =>
             {

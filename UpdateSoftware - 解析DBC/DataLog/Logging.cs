@@ -26,6 +26,9 @@ namespace PCAN_Client.DataLog
         internal static string SaveCSVPath = "";
         HighSpeedExcelWriter highSpeedExcelWriter = null;
 
+        /// <summary>最近一次开始录制失败的原因（供界面提示；成功时为空）</summary>
+        internal static string LastStartError = "";
+
         public Logging()
         {
             InitializeComponent();
@@ -66,29 +69,42 @@ namespace PCAN_Client.DataLog
             return week;
         }
 
-        public void newFile()
+        /// <summary>创建本轮录制文件。成功返回 true；失败写入 LastStartError 并保持未录制状态</summary>
+        public bool newFile()
         {
+            LastStartError = "";
             if (LoggingSet.SaveFileType.Equals("ASC"))
             {
                 NowASCFileAddr = LoggingSet.FileAddress + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".asc";
-                if (SaveCSVPath.Equals("") && LoggingSet.saveExcelFlag)
+                try
                 {
-                    SaveCSVPath = Path.ChangeExtension(NowASCFileAddr, ".csv");
-                    highSpeedExcelWriter = new HighSpeedExcelWriter(SaveCSVPath);
+                    if (SaveCSVPath.Equals("") && LoggingSet.saveExcelFlag)
+                    {
+                        SaveCSVPath = Path.ChangeExtension(NowASCFileAddr, ".csv");
+                        highSpeedExcelWriter = new HighSpeedExcelWriter(SaveCSVPath);
+                    }
+
+                    /*********************创建ASC文件**********************/
+                    FileStream fileStream = new FileStream(NowASCFileAddr, FileMode.Append);
+                    StreamWriter sw = new StreamWriter(fileStream);
+
+                    string title = "date ";
+                    title += GetWeek() + " " + DateTime.Now.ToString("yyyyMMdd HH:mm:ss ");
+                    title += "\r\nbase hex  timestamps absolute \r\nno internal events logged \r\n// version 7.0.0";
+
+                    sw.WriteLine(title);
+
+                    sw.Close();
+                    fileStream.Close();//关闭文件
                 }
-
-                /*********************创建ASC文件**********************/
-                FileStream fileStream = new FileStream(NowASCFileAddr, FileMode.Append);
-                StreamWriter sw = new StreamWriter(fileStream);
-
-                string title = "date ";
-                title += GetWeek() + " " + DateTime.Now.ToString("yyyyMMdd HH:mm:ss ");
-                title += "\r\nbase hex  timestamps absolute \r\nno internal events logged \r\n// version 7.0.0";
-
-                sw.WriteLine(title);
-
-                sw.Close();
-                fileStream.Close();//关闭文件
+                catch (Exception ex)
+                {
+                    LastStartError = "创建ASC文件失败：" + NowASCFileAddr + "（" + ex.Message + "）";
+                    AppLog.Error("[录制] " + LastStartError);
+                    NowASCFileAddr = "";
+                    SaveFlag = false;
+                    return false;
+                }
             }
             else
             {
@@ -101,9 +117,12 @@ namespace PCAN_Client.DataLog
                 string path = CAN_Data.Recorder.StartBlf(LoggingSet.FileAddress);
                 if (string.IsNullOrEmpty(path))
                 {
-                    System.Diagnostics.Debug.WriteLine("创建BLF文件失败");
+                    LastStartError = string.IsNullOrEmpty(CAN_Data.Recorder.LastStartError)
+                        ? "创建BLF文件失败：" + LoggingSet.FileAddress
+                        : CAN_Data.Recorder.LastStartError;
+                    AppLog.Error("[录制] " + LastStartError);
                     SaveFlag = false;
-                    return;
+                    return false;
                 }
                 NowBLFFileAddr_str = path;
             }
@@ -127,16 +146,22 @@ namespace PCAN_Client.DataLog
             sw.Close();
             fileStream.Close();//关闭文件
 #endif
+            return true;
         }
 
-        internal void MngLogging_StartSaveData()
+        /// <summary>开始录制。返回 false 表示建文件失败（原因在 LastStartError），调用方须提示用户</summary>
+        internal bool MngLogging_StartSaveData()
         {
             if (SaveFlag)
             {
-                return; /* 已在录制中：防止重复开始导致timer叠加、文件被另开 */
+                return true; /* 已在录制中：防止重复开始导致timer叠加、文件被另开 */
             }
             ResistanceSleep.PreventSleep(true); /* 阻止休眠 */
-            newFile();
+            if (!newFile())
+            {
+                ResistanceSleep.ResotreSleep();
+                return false;
+            }
             timer1.Interval = 1000 / DataLog.LoggingSet.Frequency;
             timer1.Start();
             // CSV信号快照保存（原在Logging_Load中启动，弹窗移除后Load不再触发，移至此）
@@ -150,6 +175,9 @@ namespace PCAN_Client.DataLog
             timer3.Tick -= timer3_Tick;
             timer3.Tick += timer3_Tick;
             timer3.Start();
+            AppLog.Info("[录制] 开始录制 类型=" + LoggingSet.SaveFileType + " 文件="
+                + (LoggingSet.SaveFileType_int == 1 ? NowBLFFileAddr_str : NowASCFileAddr));
+            return true;
         }
 
         private void Logging_Load(object sender, EventArgs e)
@@ -216,11 +244,24 @@ namespace PCAN_Client.DataLog
         /// <summary>停止录制：直接清理（弹窗已移除，不再依赖关窗触发）</summary>
         internal static void StopRecording()
         {
-            if (log != null)
+            Logging instance = log;
+            if (instance != null)
             {
-                log.CleanupRecording();
-                log.Dispose();
-                log = null;
+                try
+                {
+                    instance.CleanupRecording();
+                }
+                catch (Exception ex)
+                {
+                    /* 清理异常不得让界面卡在"录制中"（否则开始录制按钮永久置灰） */
+                    AppLog.Error("[录制] 停止录制清理异常: " + ex);
+                }
+                finally
+                {
+                    SaveFlag = false;
+                    try { instance.Dispose(); } catch { }
+                    log = null;
+                }
             }
             else
             {
@@ -233,17 +274,25 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        /// <summary>录制清理：停timer、刷BLF队列关句柄、复位标志、恢复休眠（FormClosing与主动停止共用）</summary>
+        /// <summary>录制清理：停timer、复位标志、刷BLF队列关句柄、恢复休眠（FormClosing与主动停止共用）</summary>
         internal void CleanupRecording()
         {
             timer1.Stop();
             timer2.Stop();
             timer3.Stop();
             NowASCFileAddr = "";
-            // BLF 文件关闭/队列刷新由 Core Recorder 统一管理
-            CAN_Data.Recorder.StopBlf();
+            // 先停接收侧入队（SaveFlag=false），再刷盘关句柄：否则停止瞬间仍在到达的帧会写进已关闭的队列
             SaveFlag = false;
-            ResistanceSleep.ResotreSleep();
+            try
+            {
+                // BLF 文件关闭/队列刷新由 Core Recorder 统一管理（内部串行化，停止与写线程不会并发碰句柄）
+                CAN_Data.Recorder.StopBlf();
+            }
+            finally
+            {
+                ResistanceSleep.ResotreSleep();
+                AppLog.Info("[录制] 停止录制");
+            }
         }
 
         private void Logging_FormClosing(object sender, FormClosingEventArgs e)
@@ -315,7 +364,8 @@ namespace PCAN_Client.DataLog
                 }
                 catch (Exception ex)
                 {
-                    _csvWriter.Close();
+                    // 构造失败时 _csvWriter 仍为 null，这里再抛会顶掉"开始录制"（原实现即如此）
+                    try { if (_csvWriter != null) _csvWriter.Close(); } catch { }
                     MessageBox.Show($"初始化CSV文件失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -342,7 +392,7 @@ namespace PCAN_Client.DataLog
                 }
                 catch (Exception ex)
                 {
-                    _csvWriter.Close();
+                    try { if (_csvWriter != null) _csvWriter.Close(); } catch { }
                     MessageBox.Show($"初始化CSV文件失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
