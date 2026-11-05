@@ -87,10 +87,33 @@ namespace PCAN_Client.CAN_Data.blf
                         }
                         Marshal.FreeHGlobal(pMsg);
                     }
+                    else
+                    {
+                        // 未知对象（应用文本/水印，以及闪退后残留的半截对象）必须消费掉：
+                        // 不消费 BLPeekObject 会原地返回同一个位置，变成死循环；读不动就收尾
+                        if (!SkipObject(fileHandle, headerBase)) break;
+                    }
                 }
             }
             BLFAPI.BLCloseHandle(fileHandle);
             return readMessageList;
+        }
+
+        /// <summary>跳过不关心的对象。返回 false 表示该对象读不动（文件被截断/损坏），调用方应停止读取。</summary>
+        private static bool SkipObject(IntPtr fileHandle, VBLObjectHeaderBase headerBase)
+        {
+            int size = (int)headerBase.mObjectSize;
+            if (size <= 0 || size > 16 * 1024 * 1024) return false;
+            IntPtr pBuf = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(headerBase, pBuf, false);
+                return BLFAPI.BLReadObjectSecure(fileHandle, pBuf, (UIntPtr)size) == 1;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pBuf);
+            }
         }
 
         /// <summary>写 BLF：与录制写线程共用同一把 binlog 锁（录制过程中导出手动 BLF 不会破坏堆）</summary>

@@ -114,7 +114,7 @@ namespace PCAN_Client.DataLog
                     highSpeedExcelWriter = new HighSpeedExcelWriter(SaveCSVPath);
                 }
                 // BLF 文件创建/写队列/连续写线程/分割 由 Core Recorder 统一管理
-                string path = CAN_Data.Recorder.StartBlf(LoggingSet.FileAddress);
+                string path = CAN_Data.Recorder.StartBlf(LoggingSet.FileAddress, LoggingSet.SplitSizeBytes);
                 if (string.IsNullOrEmpty(path))
                 {
                     LastStartError = string.IsNullOrEmpty(CAN_Data.Recorder.LastStartError)
@@ -175,7 +175,9 @@ namespace PCAN_Client.DataLog
             timer3.Tick -= timer3_Tick;
             timer3.Tick += timer3_Tick;
             timer3.Start();
-            AppLog.Info("[录制] 开始录制 类型=" + LoggingSet.SaveFileType + " 文件="
+            LoggingSet.RecordStartTime = DateTime.Now;   // 状态栏"已录时长"起点
+            AppLog.Info("[录制] 开始录制 类型=" + LoggingSet.SaveFileType + " 分段="
+                + (LoggingSet.SplitSizeBytes > 0 ? (LoggingSet.SplitSizeBytes / 1048576L) + "MB" : "不分割") + " 文件="
                 + (LoggingSet.SaveFileType_int == 1 ? NowBLFFileAddr_str : NowASCFileAddr));
             return true;
         }
@@ -291,6 +293,7 @@ namespace PCAN_Client.DataLog
             finally
             {
                 ResistanceSleep.ResotreSleep();
+                LoggingSet.RecordStartTime = DateTime.MinValue;
                 AppLog.Info("[录制] 停止录制");
             }
         }
@@ -311,6 +314,11 @@ namespace PCAN_Client.DataLog
             if (LoggingSet.SaveFileType_int == 1 && SaveFlag)
             {
                 CAN_API.CAN_API.FlushBLFBuffer();
+            }
+            // 状态栏：已录时长 + 当前文件大小（对话框未打开/未录制时内部直接返回）
+            if (SaveFlag && LoggingSet.loggingSet != null && !LoggingSet.loggingSet.IsDisposed)
+            {
+                LoggingSet.loggingSet.UpdateRecordingStatus();
             }
         }
 

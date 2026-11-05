@@ -28,5 +28,18 @@ namespace PCAN_Client.CAN_API
         {
             return RecordChannelFilter == null || RecordChannelFilter(channel);
         }
+
+        /// <summary>只录制 DBC 中定义的报文（GUI 录制对话框勾选；false=总线上所有报文都落盘）</summary>
+        public static bool DbcOnlyRecord;
+
+        /// <summary>报文过滤（GUI 绑定 LoggingSet.IsRecordMessage；null=不过滤）</summary>
+        public static Func<uint, byte, bool> RecordMessageFilter;
+
+        /// <summary>该报文是否要落盘：未启用"只录制DBC报文"时恒为 true（未绑定过滤器时按放行处理）</summary>
+        public static bool IsRecordMessage(uint canId, byte channel)
+        {
+            if (!DbcOnlyRecord) return true;
+            return RecordMessageFilter == null || RecordMessageFilter(canId, channel);
+        }
     }
 }

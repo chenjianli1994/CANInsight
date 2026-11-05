@@ -96,6 +96,7 @@ namespace PCAN_Client
                 try { PCAN_Client.Main.main.OnCanoeTxLinkDead(); } catch { }
             };
             PCAN_Client.CAN_API.RecordingState.RecordChannelFilter = DataLog.LoggingSet.IsRecordChannel;
+            PCAN_Client.CAN_API.RecordingState.RecordMessageFilter = DataLog.LoggingSet.IsRecordMessage;
             // 未处理异常统一落盘（问题排查关键数据；WinForms 线程异常同时挂 ThreadException）
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
@@ -110,24 +111,31 @@ namespace PCAN_Client
             /* 首次打开或版本更新后首次打开：弹窗提示（/updated、/updatefailed 为更新批处理重启时携带的参数） */
             bool justUpdated = false;
             bool updateFailed = false;
-            foreach (var arg in args)
+            string updateFailLog = null;
+            for (int i = 0; i < args.Length; i++)
             {
-                if (arg.Equals("/updated", StringComparison.OrdinalIgnoreCase))
+                if (args[i].Equals("/updated", StringComparison.OrdinalIgnoreCase))
                 {
                     justUpdated = true;
                 }
-                else if (arg.Equals("/updatefailed", StringComparison.OrdinalIgnoreCase))
+                else if (args[i].Equals("/updatefailed", StringComparison.OrdinalIgnoreCase))
                 {
                     updateFailed = true;
+                    // 替换批处理会把日志路径跟在参数后面，用来展示真实失败原因
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("/")) updateFailLog = args[i + 1];
                 }
             }
             if (updateFailed)
             {
                 /* 更新批处理没能替换程序文件：本次旧版本由批处理重新拉起，在此说明原因。
                    旧实现用 msg * 广播，会弹到同一台机器的其他会话上（别人看到莫名其妙的失败框）。 */
-                MessageBox.Show("自动更新未完成：未能替换程序文件，可能被其他程序占用。\r\n" +
-                                "当前仍为旧版本 " + BaseParamter.softVersion + "，请关闭其他 CANInsight 窗口后重试“检查更新”，" +
-                                "或手动从中转站复制新版本。",
+                string reason = util.SelfUpdater.ReadUpdateFailureReason(updateFailLog);
+                MessageBox.Show("自动更新未完成：未能替换程序文件，当前仍为旧版本 " + BaseParamter.softVersion + "。\r\n\r\n"
+                                + (reason.Length > 0 ? "原因（替换日志）：\r\n" + reason + "\r\n\r\n" : "")
+                                + "处理建议：\r\n"
+                                + "1. 关闭其他 CANInsight 窗口/进程后，用“检查更新”重试；\r\n"
+                                + "2. 若日志提示“拒绝访问”，检查安装目录里的程序文件是否只读或被写保护；\r\n"
+                                + "3. 也可直接从中转站复制 CANInsight.exe 等程序文件覆盖。",
                     "更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             if (justUpdated || !Properties.Settings.Default.NoticeShownVersion.Equals(BaseParamter.softVersion))

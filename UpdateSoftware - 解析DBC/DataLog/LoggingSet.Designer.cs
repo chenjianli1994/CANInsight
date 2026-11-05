@@ -44,6 +44,9 @@ namespace PCAN_Client.DataLog
             this.comboBoxExcelSaveTime = new System.Windows.Forms.ComboBox();
             this.groupBox3 = new System.Windows.Forms.GroupBox();
             this.checkedListBoxChannels = new System.Windows.Forms.CheckedListBox();
+            this.checkBoxDbcOnly = new System.Windows.Forms.CheckBox();
+            this.labelSplit = new System.Windows.Forms.Label();
+            this.comboSplitSize = new System.Windows.Forms.ComboBox();
             this.groupBox1.SuspendLayout();
             this.groupBox2.SuspendLayout();
             this.groupBox3.SuspendLayout();
@@ -71,6 +74,18 @@ namespace PCAN_Client.DataLog
             this.buttonStop.Text = "停止录制";
             this.buttonStop.UseVisualStyleBackColor = true;
             this.buttonStop.Click += new System.EventHandler(this.buttonStop_Click);
+            //
+            // checkBoxDbcOnly
+            //
+            this.checkBoxDbcOnly.AutoSize = true;
+            this.checkBoxDbcOnly.Location = new System.Drawing.Point(368, 166);
+            this.checkBoxDbcOnly.Margin = new System.Windows.Forms.Padding(4);
+            this.checkBoxDbcOnly.Name = "checkBoxDbcOnly";
+            this.checkBoxDbcOnly.Size = new System.Drawing.Size(300, 19);
+            this.checkBoxDbcOnly.TabIndex = 23;
+            this.checkBoxDbcOnly.Text = "只录制DBC中定义的报文（其它报文不落盘）";
+            this.checkBoxDbcOnly.UseVisualStyleBackColor = true;
+            this.checkBoxDbcOnly.CheckedChanged += new System.EventHandler(this.checkBoxDbcOnly_CheckedChanged);
             //
             // button1
             //
@@ -114,6 +129,8 @@ namespace PCAN_Client.DataLog
             //
             this.groupBox1.Controls.Add(this.radioButton2);
             this.groupBox1.Controls.Add(this.radioButton1);
+            this.groupBox1.Controls.Add(this.labelSplit);
+            this.groupBox1.Controls.Add(this.comboSplitSize);
             this.groupBox1.Location = new System.Drawing.Point(21, 60);
             this.groupBox1.Margin = new System.Windows.Forms.Padding(4);
             this.groupBox1.Name = "groupBox1";
@@ -122,6 +139,25 @@ namespace PCAN_Client.DataLog
             this.groupBox1.TabIndex = 12;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "文件类型";
+            //
+            // labelSplit
+            //
+            this.labelSplit.AutoSize = true;
+            this.labelSplit.Location = new System.Drawing.Point(14, 60);
+            this.labelSplit.Name = "labelSplit";
+            this.labelSplit.Size = new System.Drawing.Size(60, 15);
+            this.labelSplit.TabIndex = 24;
+            this.labelSplit.Text = "分段大小";
+            //
+            // comboSplitSize
+            //
+            this.comboSplitSize.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.comboSplitSize.FormattingEnabled = true;
+            this.comboSplitSize.Location = new System.Drawing.Point(86, 56);
+            this.comboSplitSize.Name = "comboSplitSize";
+            this.comboSplitSize.Size = new System.Drawing.Size(150, 23);
+            this.comboSplitSize.TabIndex = 25;
+            this.comboSplitSize.SelectedIndexChanged += new System.EventHandler(this.comboSplitSize_SelectedIndexChanged);
             //
             // radioButton2
             //
@@ -235,6 +271,7 @@ namespace PCAN_Client.DataLog
             this.Controls.Add(this.groupBox2);
             this.Controls.Add(this.groupBox1);
             this.Controls.Add(this.buttonStop);
+            this.Controls.Add(this.checkBoxDbcOnly);
             this.Controls.Add(this.button2);
             this.Controls.Add(this.button1);
             this.Controls.Add(this.fileAdress);
@@ -267,6 +304,9 @@ namespace PCAN_Client.DataLog
         private System.Windows.Forms.GroupBox groupBox2;
         private System.Windows.Forms.ComboBox comboBoxExcelSaveTime;
         private System.Windows.Forms.CheckBox checkBoxSaveExcel;
+        private System.Windows.Forms.CheckBox checkBoxDbcOnly;
+        private System.Windows.Forms.Label labelSplit;
+        private System.Windows.Forms.ComboBox comboSplitSize;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.GroupBox groupBox3;

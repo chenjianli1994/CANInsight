@@ -153,13 +153,19 @@ namespace PCAN_Client.CAN_API
             bool recordCh = RecordingState.IsRecordChannel(channel);
             // 是否 CAN FD 帧：决定 BLF 落盘对象类型（FD 帧即使有效字节≤8 也要按 FD 对象写，与 CANoe 一致）
             bool isFd = (MSGTYPE & TPCANMessageType.PCAN_MESSAGE_FD) != 0;
+            // 只录制DBC报文：录制期间未在DBC中定义的帧既不落盘、也不进实时内存副本
+            // （否则每帧的内存分配与GC开销照旧，等于没省），UI显示与DBC解析不受影响
+            bool dbcOnlyDropped = RecordingState.SaveFlag && RecordingState.DbcOnlyRecord
+                                  && !RecordingState.IsRecordMessage(ID, channel);
+            bool recordFrame = recordCh && !dbcOnlyDropped;
             // 记录实时CAN原始报文（用于ChartFrom保存BLF）；
-            // 已落盘的帧（BLF录制开启且该通道勾选录制）跳过内存副本；其余帧（未录制/ASC/未勾选通道）必须入内存，否则手动导出永久缺失
-            if (!(RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordCh))
+            // 已落盘的帧（BLF录制开启且该帧入选录制）跳过内存副本；其余帧（未录制/ASC/未勾选通道）必须入内存，否则手动导出永久缺失
+            if (!dbcOnlyDropped
+                && !(RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordFrame))
             {
                 try { RealtimeRawRecorded?.Invoke(ID, data, blfCh); } catch { }
             }
-            if (RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordCh)
+            if (RecordingState.SaveFlag && 1 == RecordingState.SaveFileTypeInt && recordFrame)
             {
                 try { BlfWriteRequest?.Invoke(ID, data, timestamp2, blfCh, isFd); } catch { }
             }
@@ -186,10 +192,10 @@ namespace PCAN_Client.CAN_API
                 {
                     time_us = timestamp2;
 
-                    // 批量缓冲数据（ASC通道列写BLF通道号）
+                    // 批量缓冲数据（ASC通道列写BLF通道号；只录制DBC报文时非DBC帧不缓冲）
                     lock (_bufferLock)
                     {
-                        FormatAndAppendMessage(_ascBuffer, msg, time_us, blfCh, recordCh);
+                        FormatAndAppendMessage(_ascBuffer, msg, time_us, blfCh, recordFrame);
                     }
 
                     time_us_last = time_us;

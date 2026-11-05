@@ -73,6 +73,7 @@ namespace PCAN_Client.CAN_Data
         }
 
         /// <summary>开始 BLF 录制：创建文件 + 启动连续写线程。返回当前文件路径（失败返回空串，原因见 LastStartError）</summary>
+        /// <param name="maxBytes">分段阈值：&lt;0=不分割，0=默认 128 MB，&gt;0=指定字节数</param>
         public static string StartBlf(string directory, long maxBytes = 0)
         {
             StopBlf();
@@ -80,7 +81,7 @@ namespace PCAN_Client.CAN_Data
             lock (BlfLock)
             {
                 _writeDir = string.IsNullOrEmpty(directory) ? AppDomain.CurrentDomain.BaseDirectory : directory;
-                _maxFileBytes = maxBytes > 0 ? maxBytes : 128L * 1024 * 1024;
+                _maxFileBytes = maxBytes < 0 ? 0 : (maxBytes > 0 ? maxBytes : 128L * 1024 * 1024);
                 DiscardQueuedMessages(); /* 上一轮停止后残留的帧不得混进新文件 */
                 CreateBlfFile();
                 if (NowBlfHandle == IntPtr.Zero) return "";
@@ -108,7 +109,7 @@ namespace PCAN_Client.CAN_Data
             }
             lock (BlfLock)
             {
-                try { FlushCanWriteQueueCore(); } catch { }
+                try { DrainCanWriteQueueCore(); } catch { }
                 if (NowBlfHandle != IntPtr.Zero)
                 {
                     try { BLFAPI.BLCloseHandle(NowBlfHandle); } catch { }
@@ -158,7 +159,7 @@ namespace PCAN_Client.CAN_Data
             BLFAPI.BLSetWriteOptions(blfHandle, 0, 0); // 减少内部缓存，确保及时写入
 
             // 切换文件：先把旧队列写进旧文件，再关旧句柄（文件分割时创建新文件）
-            try { FlushCanWriteQueueCore(); } catch { }
+            try { DrainCanWriteQueueCore(); } catch { }
             if (NowBlfHandle != IntPtr.Zero)
             {
                 try { BLFAPI.BLCloseHandle(NowBlfHandle); } catch { }
@@ -205,7 +206,7 @@ namespace PCAN_Client.CAN_Data
                 }
             }
             // 退出前把队列里剩余的帧写完（停止流程随后才关句柄）
-            try { FlushCanWriteQueue(); } catch { }
+            try { DrainCanWriteQueue(); } catch { }
         }
 
         /// <summary>超过分割阈值就新建文件。所有句柄操作都在锁内完成，避免与停止/刷新并发</summary>
@@ -234,20 +235,22 @@ namespace PCAN_Client.CAN_Data
             }
         }
 
-        /// <summary>刷新实现本体。调用方必须已持有 BlfLock（写线程、停止流程、分割共用）。</summary>
-        private static void FlushCanWriteQueueCore()
+        /// <summary>一次刷新最多处理的帧数（限批是为了不长时间占着句柄锁，队列深时由 DrainCanWriteQueue 循环）</summary>
+        private const int FlushBatchSize = 500;
+
+        /// <summary>刷新实现本体。调用方必须已持有 BlfLock（写线程、停止流程、分割共用）。返回本次出队的帧数。</summary>
+        private static int FlushCanWriteQueueCore()
         {
-            if (_canMessageQueue.IsEmpty) return;
+            if (_canMessageQueue.IsEmpty) return 0;
             if (NowBlfHandle == IntPtr.Zero)
             {
                 // 未持有句柄（未开始/已停止）：丢弃残留帧，避免队列无限增长，也绝不写进 .blf
                 DiscardQueuedMessages();
-                return;
+                return 0;
             }
 
             int dequeued = 0;
-            const int MAX_BATCH = 500;
-            while (dequeued < MAX_BATCH && _canMessageQueue.TryDequeue(out CanMessageData msg))
+            while (dequeued < FlushBatchSize && _canMessageQueue.TryDequeue(out CanMessageData msg))
             {
                 dequeued++;
                 // CAN FD 帧（或长度 >8 的帧）必须按 FD 对象落盘，否则 >8 字节的数据会被截断
@@ -256,6 +259,27 @@ namespace PCAN_Client.CAN_Data
                 else
                     WriteClassicCanObject(msg);
             }
+            return dequeued;
+        }
+
+        /// <summary>
+        /// 把队列彻底排空（停止录制 / 文件分割前调用）。
+        /// 一次刷新最多 FlushBatchSize 条，队列深时（瞬时突发、磁盘卡顿后追帧）只刷一批就把剩下的丢掉，
+        /// 表现为"停止录制后文件里少了最后一段"。这里循环到队列为空。
+        /// </summary>
+        private static void DrainCanWriteQueueCore()
+        {
+            const int MAX_ROUNDS = 2000; // 兜底：2000 × 500 = 100 万帧
+            for (int i = 0; i < MAX_ROUNDS; i++)
+            {
+                if (FlushCanWriteQueueCore() < FlushBatchSize) return;
+            }
+        }
+
+        /// <summary>排空队列（自取锁版本，供不持有锁的调用方使用）</summary>
+        private static void DrainCanWriteQueue()
+        {
+            lock (BlfLock) { DrainCanWriteQueueCore(); }
         }
 
         /// <summary>经典 CAN 对象：32 字节对象头 + 通道/标志/DLC/ID + 8 字节数据 = 48 字节</summary>

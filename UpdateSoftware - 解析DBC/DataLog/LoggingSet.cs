@@ -40,6 +40,104 @@ namespace PCAN_Client.DataLog
             return RecordLogicChannels.Count == 0 || RecordLogicChannels.Contains(logicChannel);
         }
 
+        /// <summary>只录制DBC中定义的报文（唯一真源在 Core 的 RecordingState，供接收链路直接读取）</summary>
+        public static bool DbcOnlyRecord
+        {
+            get { return PCAN_Client.CAN_API.RecordingState.DbcOnlyRecord; }
+            set { PCAN_Client.CAN_API.RecordingState.DbcOnlyRecord = value; }
+        }
+
+        /// <summary>
+        /// 报文是否在对应通道的DBC中定义（录制过滤用）。
+        /// 路由规则与显示/解析一致：多通道模式严格用该通道自己的DBC（未挂DBC的通道不录制，
+        /// 避免跨通道同ID串扰）；无通道配置时用全局聚合视图。
+        /// </summary>
+        internal static bool IsRecordMessage(uint canId, byte logicChannel)
+        {
+            if (BaseParamter.BusChannels.Count > 0)
+            {
+                var helper = BaseParamter.GetDbcHelperByChannel(logicChannel);
+                return helper?.dbcFile?.messageDict != null && helper.dbcFile.messageDict.ContainsKey(canId);
+            }
+            return BaseParamter.dbcHelper?.dbcFile?.messageDict != null
+                   && BaseParamter.dbcHelper.dbcFile.messageDict.ContainsKey(canId);
+        }
+
+        /// <summary>当前是否至少有一份可用DBC（全局聚合或任一行通道），用于"只录制DBC报文"的前置校验</summary>
+        private static bool HasAnyDbc()
+        {
+            if (BaseParamter.dbcHelper?.dbcFile?.messages != null && BaseParamter.dbcHelper.dbcFile.messages.Count > 0)
+                return true;
+            foreach (var ch in BaseParamter.BusChannels)
+            {
+                var helper = ch?.DbcHelper;
+                if (helper?.dbcFile?.messages != null && helper.dbcFile.messages.Count > 0) return true;
+            }
+            return false;
+        }
+
+        /// <summary>分段大小下拉项对应的 MB 值（0 = 不分割），索引与下拉框一一对应</summary>
+        public static readonly int[] SplitSizeMbOptions = new int[] { 0, 64, 128, 256, 512 };
+
+        /// <summary>当前分段阈值（字节）：-1 = 不分割（Recorder 约定），由下拉框索引映射，默认 128 MB</summary>
+        public static long SplitSizeBytes
+        {
+            get
+            {
+                int idx = Properties.Settings.Default.comboSplitSizeIndex;
+                if (idx < 0 || idx >= SplitSizeMbOptions.Length) idx = 2;
+                int mb = SplitSizeMbOptions[idx];
+                return mb <= 0 ? -1 : mb * 1024L * 1024L;
+            }
+        }
+
+        /// <summary>本轮录制开始时间（状态栏显示已录时长；未录制时为 MinValue）</summary>
+        public static DateTime RecordStartTime = DateTime.MinValue;
+
+        private static int _lastStatusTick;
+
+        /// <summary>录制中周期刷新状态栏（已录时长 + 当前文件大小 / 分段阈值），由录制定时器调用</summary>
+        internal void UpdateRecordingStatus()
+        {
+            if (this.IsDisposed || !this.Visible || !Logging.SaveFlag) return;
+            int now = Environment.TickCount;
+            if (now - _lastStatusTick < 1000) return;   // 1 秒一次足够
+            _lastStatusTick = now;
+            RefreshStatusLabel();
+        }
+
+        /// <summary>按当前录制状态刷新状态栏（开始/停止/周期刷新共用）</summary>
+        private void RefreshStatusLabel()
+        {
+            if (this.IsDisposed) return;
+            if (!Logging.SaveFlag)
+            {
+                labelStatus.Text = "状态：未录制";
+                labelStatus.ForeColor = System.Drawing.Color.Gray;
+                return;
+            }
+            string path = SaveFileType_int == 1 ? Logging.NowBLFFileAddr_str : Logging.NowASCFileAddr;
+            string sizeText = "";
+            try
+            {
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                    sizeText = (new FileInfo(path).Length / 1048576.0).ToString("F1") + " MB";
+            }
+            catch { }
+            string elapsed = "";
+            if (RecordStartTime != DateTime.MinValue)
+            {
+                TimeSpan ts = DateTime.Now - RecordStartTime;
+                elapsed = string.Format("{0:00}:{1:00}:{2:00}", (int)ts.TotalHours, ts.Minutes, ts.Seconds);
+            }
+            long limit = SplitSizeBytes;
+            string limitText = limit > 0 ? (limit / 1048576L) + " MB" : "不分割";
+            string scope = DbcOnlyRecord ? "（仅DBC报文）" : "";
+            labelStatus.Text = string.Format("状态：录制中{0}  已录 {1}  {2} / {3}\r\n{4}",
+                scope, elapsed, sizeText, limitText, path);
+            labelStatus.ForeColor = System.Drawing.Color.IndianRed;
+        }
+
         /// <summary>通道列表项（Tag 存逻辑通道号）</summary>
         private class ChannelItem
         {
@@ -85,6 +183,9 @@ namespace PCAN_Client.DataLog
                 checkBoxSaveExcel.Checked = false;
             }
 
+            checkBoxDbcOnly.Checked = Properties.Settings.Default.checkBoxDbcOnlyChecked;
+            DbcOnlyRecord = checkBoxDbcOnly.Checked;
+
 
             fileAdress.Text = AppDomain.CurrentDomain.BaseDirectory + "data Log\\";
 
@@ -105,6 +206,17 @@ namespace PCAN_Client.DataLog
             }
             comboBoxExcelSaveTimeSelectIndex = (uint)Properties.Settings.Default.comboBoxExcelSaveTimeSelectIndex;
             comboBoxExcelSaveTime.SelectedIndex = Properties.Settings.Default.comboBoxExcelSaveTimeSelectIndex;
+
+            // 分段大小：索引与 SplitSizeMbOptions 一一对应（0=不分割，其余为 MB）
+            comboSplitSize.Items.Clear();
+            comboSplitSize.Items.Add("不分割");
+            foreach (int mb in SplitSizeMbOptions)
+            {
+                if (mb > 0) comboSplitSize.Items.Add(mb + " MB");
+            }
+            int splitIdx = Properties.Settings.Default.comboSplitSizeIndex;
+            if (splitIdx < 0 || splitIdx >= comboSplitSize.Items.Count) splitIdx = 2; // 默认 128 MB
+            comboSplitSize.SelectedIndex = splitIdx;
         }
 
         /// <summary>按当前 BusChannels 刷新录制通道勾选列表，保留用户已勾选项</summary>
@@ -191,6 +303,12 @@ namespace PCAN_Client.DataLog
                 MessageBox.Show("若要保存CSV格式数据，请先加载dbc文件!");
                 return;
             }
+            // 只录制DBC报文的前提校验：没有任何DBC时一个报文都不会落盘，必须先拦住
+            if (checkBoxDbcOnly.Checked && !HasAnyDbc())
+            {
+                MessageBox.Show("只录制DBC中定义的报文，需要先加载DBC文件（或给录制通道配置DBC）。");
+                return;
+            }
             // 录制通道勾选校验：至少选择1个通道
             var checkedChannels = new HashSet<byte>();
             for (int i = 0; i < checkedListBoxChannels.Items.Count; i++)
@@ -245,6 +363,8 @@ namespace PCAN_Client.DataLog
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
+                // 勾选"只录制DBC报文"时口径不可逆：没写进去的报文事后补不回来，开始前必须确认一次
+                if (!ConfirmDbcOnlyStart()) return;
                 Main.main.MngMAIN_OpenLogging();
             }
             catch (Exception ex)
@@ -263,6 +383,23 @@ namespace PCAN_Client.DataLog
             catch (Exception ex) { AppLog.Warn("[设置] 保存失败: " + ex.Message); }
         }
 
+        /// <summary>
+        /// 勾选"只录制DBC中定义的报文"时的开始前确认；返回 false 表示用户取消，不得开始录制。
+        /// 未勾选时直接放行，不打扰用户。
+        /// </summary>
+        private bool ConfirmDbcOnlyStart()
+        {
+            if (!checkBoxDbcOnly.Checked) return true;
+            DialogResult confirm = MessageBox.Show(
+                "本次录制只保存DBC中定义的报文：\r\n" +
+                "· 未在DBC中定义的报文不会写入文件，事后无法补录；\r\n" +
+                "· 已配置通道未挂DBC时，该通道不会录到任何报文。\r\n\r\n" +
+                "确定按此方式开始录制吗？",
+                "只录制DBC中定义的报文",
+                MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+            return confirm == DialogResult.OK;
+        }
+
         private void buttonStop_Click(object sender, EventArgs e)
         {
             Logging.StopRecording();
@@ -279,17 +416,10 @@ namespace PCAN_Client.DataLog
             button2.Enabled = !recording;
             buttonStop.Enabled = recording;
             buttonStop.BackColor = recording ? System.Drawing.Color.IndianRed : System.Drawing.SystemColors.Control;
-            if (recording)
-            {
-                string file = SaveFileType_int == 1 ? Logging.NowBLFFileAddr_str : Logging.NowASCFileAddr;
-                labelStatus.Text = $"状态：录制中 → {file}";
-                labelStatus.ForeColor = System.Drawing.Color.IndianRed;
-            }
-            else
-            {
-                labelStatus.Text = "状态：未录制";
-                labelStatus.ForeColor = System.Drawing.Color.Gray;
-            }
+            // 录制途中不允许改过滤口径/分段大小：只对下一次录制生效，避免同一份文件里前后不一致
+            checkBoxDbcOnly.Enabled = !recording;
+            comboSplitSize.Enabled = !recording;
+            RefreshStatusLabel();
         }
 
         private void radioButton1_CheckedChanged(object sender, EventArgs e)
@@ -306,6 +436,21 @@ namespace PCAN_Client.DataLog
             SaveFileType = "BLF";
             SaveFileType_int = 1;
             Properties.Settings.Default.SaveFileType = SaveFileType;
+            SaveSettingsQuietly();
+        }
+
+        /// <summary>"只录制DBC中定义的报文"切换：写唯一真源并持久化</summary>
+        private void checkBoxDbcOnly_CheckedChanged(object sender, EventArgs e)
+        {
+            DbcOnlyRecord = checkBoxDbcOnly.Checked;
+            Properties.Settings.Default.checkBoxDbcOnlyChecked = DbcOnlyRecord;
+            SaveSettingsQuietly();
+        }
+
+        /// <summary>分段大小切换：持久化索引（下一次录制生效）</summary>
+        private void comboSplitSize_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            Properties.Settings.Default.comboSplitSizeIndex = comboSplitSize.SelectedIndex;
             SaveSettingsQuietly();
         }
 

@@ -385,6 +385,18 @@ namespace PCAN_Client.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("2")]
+        public int comboSplitSizeIndex {
+            get {
+                return ((int)(this["comboSplitSizeIndex"]));
+            }
+            set {
+                this["comboSplitSizeIndex"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
         public bool checkBoxSaveExcelChecked {
             get {
@@ -392,6 +404,18 @@ namespace PCAN_Client.Properties {
             }
             set {
                 this["checkBoxSaveExcelChecked"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool checkBoxDbcOnlyChecked {
+            get {
+                return ((bool)(this["checkBoxDbcOnlyChecked"]));
+            }
+            set {
+                this["checkBoxDbcOnlyChecked"] = value;
             }
         }
         

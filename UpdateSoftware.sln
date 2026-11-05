@@ -2,9 +2,9 @@
 # Visual Studio Version 17
 VisualStudioVersion = 17.8.34322.80
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CANInsight.Core", "CANInsight.Core\CANInsight.Core.csproj", "{F9E7B2C4-8A1D-4B3E-9C5F-6D2E8A1B4C7D}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UpdateSoftware解析DBC", "UpdateSoftware - 解析DBC\UpdateSoftware解析DBC.csproj", "{074BAC77-B5EA-4BF4-9AC2-B20E5ECEDD8E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CANInsight.Core", "CANInsight.Core\CANInsight.Core.csproj", "{F9E7B2C4-8A1D-4B3E-9C5F-6D2E8A1B4C7D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

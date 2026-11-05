@@ -92,7 +92,13 @@
     <Setting Name="comboBoxExcelSaveTimeSelectIndex" Type="System.Int32" Scope="User">
       <Value Profile="(Default)">2</Value>
     </Setting>
+    <Setting Name="comboSplitSizeIndex" Type="System.Int32" Scope="User">
+      <Value Profile="(Default)">2</Value>
+    </Setting>
     <Setting Name="checkBoxSaveExcelChecked" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="checkBoxDbcOnlyChecked" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
     <Setting Name="checkBoxSaveAscChecked" Type="System.Boolean" Scope="User">
