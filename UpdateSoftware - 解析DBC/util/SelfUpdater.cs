@@ -318,9 +318,11 @@ namespace PCAN_Client.util
                 return;
             }
 
-            // 升级包就绪:提示升级成功,用户确认后由批处理完成替换并自动重启软件
-            MessageBox.Show("升级成功！\r\n点击“确定”后软件将自动重启，完成升级。", "检查更新",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // 升级包已就绪（注意：这里只是"下载完成"，真正替换在退出后由批处理完成，结果会在重启后提示）
+            MessageBox.Show("更新包已下载完成（" + update.Files.Count + " 个文件）。\r\n" +
+                            "点击“确定”后软件将退出并自动替换程序文件，随后重新启动；\r\n" +
+                            "替换结果会在重启后提示。",
+                "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
             StartReplaceAndExit(stageDir, Application.ExecutablePath);
         }
@@ -493,6 +495,41 @@ namespace PCAN_Client.util
             }
         }
 
+        /// <summary>
+        /// 读取替换失败日志的尾部（供 /updatefailed 提示用户真实原因），并把日志复制到安装目录便于回传。
+        /// 日志由批处理用控制台编码写出，这里复用 ReadNotes 的编码识别。
+        /// </summary>
+        internal static string ReadUpdateFailureReason(string logPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(logPath) || !File.Exists(logPath)) return "";
+                string text = ReadNotes(logPath);
+                if (string.IsNullOrWhiteSpace(text)) return "";
+                var lines = text.Replace("\r", "").Split('\n');
+                var tail = new List<string>();
+                for (int i = lines.Length - 1; i >= 0 && tail.Count < 6; i--)
+                {
+                    if (!string.IsNullOrWhiteSpace(lines[i])) tail.Insert(0, lines[i].Trim());
+                }
+                try
+                {
+                    string dir = Path.GetDirectoryName(Application.ExecutablePath);
+                    if (!string.IsNullOrEmpty(dir))
+                        File.Copy(logPath, Path.Combine(dir, "更新失败日志.txt"), true);
+                }
+                catch
+                {
+                    /* 复制失败不影响提示 */
+                }
+                return string.Join("\r\n", tail.ToArray());
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
         /// <summary>从版本文本中提取 x.y.z 数字版本进行比较，返回 &gt;0 表示 remote 更新</summary>
         private static int CompareVersion(string remote, string local)
         {
@@ -599,40 +636,43 @@ namespace PCAN_Client.util
         }
 
         /// <summary>
-        /// 构造替换批处理文本。判断成败以“程序本体是否已换成新版”为准：
-        /// copy 整包时个别散落文件被占用（杀软扫描、残留进程、另一实例等）不应把已经换好 exe 的更新误报成失败，
-        /// 也绝不能因为误报失败而不重启程序（用户会以为软件自己关了）。
+        /// 构造替换批处理文本。成败只以“程序本体(exe)是否换成新版”为准：
+        /// 1) 先清目标文件的只读属性——从共享/光盘/部署包拷来的文件常带只读，copy 会直接“拒绝访问”，
+        ///    现场表现就是“提示升级成功、重启后版本没变、一直更新失败”；
+        /// 2) 只重试 exe，换成功后才把 config/DLL 一并覆盖（个别散落文件被占用不应误判失败，
+        ///    缺了由程序启动自愈补齐）；这样也不会出现“exe 没换、config/DLL 换了一半”的混合状态；
+        /// 3) 失败也要把程序拉起来，并把替换日志路径带回程序，让用户看到真实原因。
         /// </summary>
         internal static string BuildReplaceScript(string stageDir, string installDir, string exeName, string logPath)
         {
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
+            sb.AppendLine("setlocal");
             sb.AppendLine("set \"src=" + stageDir + "\"");
             sb.AppendLine("set \"dst=" + installDir + "\"");
             sb.AppendLine("set \"exe=" + exeName + "\"");
             sb.AppendLine("set \"log=" + logPath + "\"");
             sb.AppendLine("set /a n=0");
             sb.AppendLine(":retry");
-            // 整包复制：exe 被占用时 copy 失败，等待本进程退出后重试；其余 config/DLL 同步就位。
-            // 输出进日志：真出问题时能看出是哪个文件、什么原因没落地。
-            sb.AppendLine("copy /y \"%src%\\*\" \"%dst%\" >\"%log%\" 2>&1");
-            sb.AppendLine("if not errorlevel 1 goto ok");
+            // 目标文件只读时 copy 必然“拒绝访问”：每轮先清只读再试
+            sb.AppendLine("attrib -r \"%dst%\\*\" >nul 2>&1");
+            // 只换 exe：它换成功才算更新成功（输出进日志，出问题能看出是哪个文件、什么原因）
+            sb.AppendLine("copy /y \"%src%\\%exe%\" \"%dst%\\%exe%\" >\"%log%\" 2>&1");
+            sb.AppendLine("if not errorlevel 1 goto copyrest");
             sb.AppendLine("set /a n+=1");
-            sb.AppendLine("if %n% geq 30 goto verify");
+            sb.AppendLine("if %n% geq 60 goto fail");
             sb.AppendLine("ping 127.0.0.1 -n 2 >nul");
             sb.AppendLine("goto retry");
-            sb.AppendLine(":verify");
-            // 整包始终有文件没落地：以程序本体逐字节比对裁决（散落 DLL 缺了由程序启动自愈补齐）
-            sb.AppendLine("fc /b \"%src%\\%exe%\" \"%dst%\\%exe%\" >nul 2>&1");
-            sb.AppendLine("if errorlevel 1 goto fail");
-            sb.AppendLine(":ok");
+            sb.AppendLine(":copyrest");
+            // exe 已是新版：config/DLL 尽力覆盖，个别被占用不再重试（程序启动自愈会补齐）
+            sb.AppendLine("copy /y \"%src%\\*\" \"%dst%\" >>\"%log%\" 2>&1");
             sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updated");
             sb.AppendLine("rd /s /q \"%src%\"");
             sb.AppendLine("del \"%log%\"");
             sb.AppendLine("goto cleanup");
             sb.AppendLine(":fail");
-            // 失败也要把程序拉起来（否则用户看到的是软件自己关了），失败提示留在 %log% 里供排查
-            sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updatefailed");
+            // 失败也要把程序拉起来（否则用户以为软件自己关了），并把日志路径带回去供程序展示原因
+            sb.AppendLine("start \"\" \"%dst%\\%exe%\" /updatefailed \"%log%\"");
             sb.AppendLine("rd /s /q \"%src%\"");
             sb.AppendLine(":cleanup");
             // 自删除只能放最后一行:(goto) 让 cmd 先释放批处理文件再删,否则 del 之后的语句都不会再执行
