@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -287,6 +287,22 @@ namespace PCAN_Client.CAN_Data.blf
             if (dataLength <= 32) return 13;
             if (dataLength <= 48) return 14;
             return 15;
+        }
+
+        /// <summary>BLF/ASC 的 CAN FD DLC 码 → 实际数据字节数（9~15 对应 12/16/20/24/32/48/64）</summary>
+        public static int GetFdDataLength(int dlc)
+        {
+            if (dlc <= 8) return Math.Max(0, dlc);
+            switch (dlc)
+            {
+                case 9: return 12;
+                case 10: return 16;
+                case 11: return 20;
+                case 12: return 24;
+                case 13: return 32;
+                case 14: return 48;
+                default: return 64;
+            }
         }
 
         [DllImport("binlog.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode, SetLastError = true)]

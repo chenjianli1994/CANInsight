@@ -19,6 +19,8 @@ namespace PCAN_Client
         public double TimeStampSeconds { get; set; } // 绝对时间戳（秒）
         public long FilePosition { get; set; } // 读取时文件中的字节位置（用于进度条）
         public byte Channel { get; set; }       // CAN通道号（BLF文件）
+        /// <summary>该帧来自 CAN FD（BLF 的 FD 对象 / ASC 的 CANFD 行）；格式转换据此写 FD 行或 FD 对象</summary>
+        public bool IsFd { get; set; }
     }
 
     public class CanRawMessage
@@ -112,6 +114,9 @@ namespace PCAN_Client
                     uint dataLen = 0;
                     byte[] datas = null;
                     byte channel = 0;
+                    // 该对象是 CAN FD 报文（转换时按 FD 写回，避免 8 字节 FD 帧退化成经典帧）
+                    bool isFdObject = headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE
+                                   || headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64;
 
                     if (headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE)
                     {
@@ -150,7 +155,8 @@ namespace PCAN_Client
                             Data = datas,
                             TimeStampSeconds = relativeTime,
                             FilePosition = approximatePosition,
-                            Channel = channel
+                            Channel = channel,
+                            IsFd = isFdObject
                         };
                     }
                 }
@@ -263,7 +269,8 @@ namespace PCAN_Client
             }
         }
 
-        private static CanRawMessageRead ParseAscLine(string line, long filePosition)
+        /// <summary>解析一行 ASC（经典格式与 CAN FD 扩展格式都支持）；数据转换的 ASC→CSV 也复用这里</summary>
+        internal static CanRawMessageRead ParseAscLine(string line, long filePosition)
         {
             try
             {
@@ -276,10 +283,12 @@ namespace PCAN_Client
                     out double timestampSeconds))
                     return null;
 
-                if (!uint.TryParse(parts[2],
-                    System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out uint canId))
+                // CAN FD 行必须单独解析：Vector 的 FD 格式把通道放在 parts[1]、ID 放在 parts[4]，
+                // 而且没有经典格式里的 "d"/"r" 标记（按经典规则解析会取错 ID，并因找不到 "d" 把整行丢掉）
+                if (parts[1].Equals("CANFD", StringComparison.OrdinalIgnoreCase))
+                    return ParseAscFdLine(parts, timestampSeconds, filePosition);
+
+                if (!TryParseAscCanId(parts[2], out uint canId))
                     return null;
 
                 // 解析通道号（parts[1]）：Vector ASC 为 1-based 数字，部分工具输出 "CAN1" 前缀；
@@ -342,6 +351,113 @@ namespace PCAN_Client
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// 解析 Vector ASC 的 CAN FD 行：
+        ///   &lt;time&gt; CANFD &lt;channel&gt; &lt;dir&gt; &lt;id&gt; [&lt;符号名&gt;] &lt;brs&gt; &lt;esi&gt; &lt;dlc&gt; &lt;len&gt; &lt;数据...&gt; &lt;标志&gt; &lt;crc&gt; &lt;位定时...&gt;
+        /// dlc 是十六进制码、len 是十进制字节数（如 "f 64" = DLC 15 → 64 字节），用两者互相校验来定位数据起点，
+        /// 这样即使 ID 后面带符号名占位也能解析。
+        /// </summary>
+        private static CanRawMessageRead ParseAscFdLine(string[] parts, double timestampSeconds, long filePosition)
+        {
+            if (parts.Length < 10) return null;
+
+            if (!TryParseAscCanId(parts[4], out uint canId))
+                return null;
+
+            // 通道号：parts[2]（Vector 为 1-based 数字；解析不了时按单通道 1 处理，与经典格式保持一致）
+            if (!byte.TryParse(parts[2],
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out byte channel))
+                channel = 1;
+
+            // ID 之后可能还有符号名：向后找 <brs> <esi> <dlc> <len> 四连，靠 DLC↔长度一致性排除误判
+            for (int i = 5; i + 3 < parts.Length; i++)
+            {
+                if (!IsAscBitToken(parts[i]) || !IsAscBitToken(parts[i + 1])) continue;
+                if (!byte.TryParse(parts[i + 2],
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out byte dlc) || dlc > 15) continue;
+
+                int expected = BLFAPI.GetFdDataLength(dlc);
+                if (!TryParseAscDataLength(parts[i + 3], expected, out int dataLength)) continue;
+                if (dataLength < 0 || dataLength > 64) continue;
+
+                int dataStart = i + 4;
+                if (dataStart + dataLength > parts.Length) continue;
+
+                byte[] datas = new byte[dataLength];
+                bool ok = true;
+                for (int k = 0; k < dataLength; k++)
+                {
+                    if (!byte.TryParse(parts[dataStart + k],
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out datas[k]))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) continue;
+
+                return new CanRawMessageRead
+                {
+                    CanId = canId,
+                    Data = datas,
+                    TimeStampSeconds = timestampSeconds,
+                    FilePosition = filePosition,
+                    Channel = channel,
+                    IsFd = true
+                };
+            }
+            return null;
+        }
+
+        /// <summary>解析 ASC 的 CAN ID（十六进制）；部分工具给扩展帧加 "x"/"X" 后缀，这里一并容忍</summary>
+        private static bool TryParseAscCanId(string token, out uint canId)
+        {
+            if (!string.IsNullOrEmpty(token) &&
+                token.EndsWith("x", StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(0, token.Length - 1);
+            }
+            return uint.TryParse(token,
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out canId);
+        }
+
+        /// <summary>ASC 里 brs/esi 只可能是 0 或 1</summary>
+        private static bool IsAscBitToken(string token)
+        {
+            return token == "0" || token == "1";
+        }
+
+        /// <summary>
+        /// 取 FD 行的数据字节数：优先选与 DLC 对应长度一致的解释（十进制/十六进制都试），
+        /// 都不一致时退回十进制 0~64（兼容个别工具把长度写成十六进制的情况）。
+        /// </summary>
+        private static bool TryParseAscDataLength(string token, int expected, out int length)
+        {
+            if (!int.TryParse(token,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out length))
+                return false;
+            if (length == expected) return true;
+            if (int.TryParse(token,
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out int asHex) && asHex == expected)
+            {
+                length = asHex;
+                return true;
+            }
+            return length >= 0 && length <= 64;
         }
 
         #endregion
