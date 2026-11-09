@@ -104,6 +104,9 @@
     <Setting Name="checkBoxSaveAscChecked" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
+    <Setting Name="checkBoxSaveBlfChecked" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
     <Setting Name="SetSwVer" Type="System.String" Scope="User">
       <Value Profile="(Default)">NULL</Value>
     </Setting>

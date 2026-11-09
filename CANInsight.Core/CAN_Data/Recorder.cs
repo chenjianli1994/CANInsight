@@ -255,9 +255,9 @@ namespace PCAN_Client.CAN_Data
                 dequeued++;
                 // CAN FD 帧（或长度 >8 的帧）必须按 FD 对象落盘，否则 >8 字节的数据会被截断
                 if (msg.IsFd || msg.Data.Length > 8)
-                    WriteCanFdObject(msg);
+                    WriteCanFdObject(NowBlfHandle, msg);
                 else
-                    WriteClassicCanObject(msg);
+                    WriteClassicCanObject(NowBlfHandle, msg);
             }
             return dequeued;
         }
@@ -282,8 +282,8 @@ namespace PCAN_Client.CAN_Data
             lock (BlfLock) { DrainCanWriteQueueCore(); }
         }
 
-        /// <summary>经典 CAN 对象：32 字节对象头 + 通道/标志/DLC/ID + 8 字节数据 = 48 字节</summary>
-        private static void WriteClassicCanObject(CanMessageData msg)
+        /// <summary>经典 CAN 对象：32 字节对象头 + 通道/标志/DLC/ID + 8 字节数据 = 48 字节（录制与格式转换共用）</summary>
+        internal static void WriteClassicCanObject(IntPtr handle, CanMessageData msg)
         {
             int structSize = Marshal.SizeOf<VBLCANMessage>();
             IntPtr msgPtr = Marshal.AllocHGlobal(structSize);
@@ -304,7 +304,7 @@ namespace PCAN_Client.CAN_Data
                 canMessage.mData = new byte[8];
                 Array.Copy(msg.Data, canMessage.mData, Math.Min(msg.Data.Length, 8));
                 Marshal.StructureToPtr(canMessage, msgPtr, false);
-                BLFAPI.BLWriteObject(NowBlfHandle, msgPtr);
+                BLFAPI.BLWriteObject(handle, msgPtr);
             }
             finally
             {
@@ -317,7 +317,7 @@ namespace PCAN_Client.CAN_Data
         /// mHeaderSize=32、mFlags=0x3000、mValidDataBytes=实际字节数、mDLC=FD DLC 码。
         /// 原实现统一按经典对象只写前 8 字节，CAN FD 报文 &gt;8 字节的部分永久丢失。
         /// </summary>
-        private static void WriteCanFdObject(CanMessageData msg)
+        internal static void WriteCanFdObject(IntPtr handle, CanMessageData msg)
         {
             // 结构体为 144 字节（尾部 8 字节是 mExtDataOffset 指向的可选扩展帧数据，此处不使用），
             // 但对象长度按 CANoe 的 136 字节写，多出的 8 字节不参与落盘
@@ -343,7 +343,7 @@ namespace PCAN_Client.CAN_Data
                 Array.Copy(msg.Data, data, len);
                 canFd.mData = data;
                 Marshal.StructureToPtr(canFd, msgPtr, false);
-                BLFAPI.BLWriteObject(NowBlfHandle, msgPtr);
+                BLFAPI.BLWriteObject(handle, msgPtr);
             }
             finally
             {

@@ -433,6 +433,18 @@ namespace PCAN_Client.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool checkBoxSaveBlfChecked {
+            get {
+                return ((bool)(this["checkBoxSaveBlfChecked"]));
+            }
+            set {
+                this["checkBoxSaveBlfChecked"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("NULL")]
         public string SetSwVer {
             get {

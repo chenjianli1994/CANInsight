@@ -1,4 +1,4 @@
-﻿namespace PCAN_Client.DataLog
+namespace PCAN_Client.DataLog
 {
     partial class LogFileToCSV
     {
@@ -34,6 +34,7 @@
             this.button3 = new System.Windows.Forms.Button();
             this.textBox1 = new System.Windows.Forms.TextBox();
             this.checkBox_ASC = new System.Windows.Forms.CheckBox();
+            this.checkBox_BLF = new System.Windows.Forms.CheckBox();
             this.checkBox_CSV = new System.Windows.Forms.CheckBox();
             this.label1 = new System.Windows.Forms.Label();
             this.comboBoxExcelSaveTime = new System.Windows.Forms.ComboBox();
@@ -88,6 +89,17 @@
             this.checkBox_ASC.UseVisualStyleBackColor = true;
             this.checkBox_ASC.CheckedChanged += new System.EventHandler(this.checkBox_ASC_CheckedChanged);
             // 
+            // checkBox_BLF
+            // 
+            this.checkBox_BLF.AutoSize = true;
+            this.checkBox_BLF.Location = new System.Drawing.Point(116, 36);
+            this.checkBox_BLF.Name = "checkBox_BLF";
+            this.checkBox_BLF.Size = new System.Drawing.Size(83, 19);
+            this.checkBox_BLF.TabIndex = 25;
+            this.checkBox_BLF.Text = "BLF开关";
+            this.checkBox_BLF.UseVisualStyleBackColor = true;
+            this.checkBox_BLF.CheckedChanged += new System.EventHandler(this.checkBox_BLF_CheckedChanged);
+            // 
             // checkBox_CSV
             // 
             this.checkBox_CSV.AutoSize = true;
@@ -128,6 +140,7 @@
             this.Controls.Add(this.comboBoxExcelSaveTime);
             this.Controls.Add(this.checkBox_CSV);
             this.Controls.Add(this.checkBox_ASC);
+            this.Controls.Add(this.checkBox_BLF);
             this.Controls.Add(this.progressBar1);
             this.Controls.Add(this.button_Start);
             this.Controls.Add(this.button3);
@@ -152,6 +165,7 @@
         private System.Windows.Forms.Button button3;
         private System.Windows.Forms.TextBox textBox1;
         private System.Windows.Forms.CheckBox checkBox_ASC;
+        private System.Windows.Forms.CheckBox checkBox_BLF;
         private System.Windows.Forms.CheckBox checkBox_CSV;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.ComboBox comboBoxExcelSaveTime;

@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using PCAN_Client.CAN_Data.asc;
 using PCAN_Client.CAN_Data.blf;
 using static PCAN_Client.DataLog.Logging;
 
@@ -20,6 +21,8 @@ namespace PCAN_Client.DataLog
         public double[] saveExcelTimeBuf = new double[8] { 0.1, 0.5, 1, 2, 3, 4, 5, 10 };
         public bool saveExcelFlag = false;
         public bool saveAscFlag = false;
+        /// <summary>输出 BLF（仅 ASC 源可用；BLF 源已是 BLF）</summary>
+        public bool saveBlfFlag = false;
         public uint saveExcelTime = 1000; /* ms */
         public uint comboBoxExcelSaveTimeSelectIndex = 0;
         public bool changeFlag = false;
@@ -48,24 +51,12 @@ namespace PCAN_Client.DataLog
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 string path = dialog.FileName;
-                if (path.Contains(".asc"))
+                if (path.Contains(".asc") || path.Contains(".bin") ||
+                    path.Contains(".blf") || path.Contains(".BLF"))
                 {
-                    checkBox_ASC.Checked = false;
-                    checkBox_ASC.Enabled = false;
                     sourceFilePath = path;
                     textBox1.Text = sourceFilePath;
-                }
-                else if (path.Contains(".bin"))
-                {
-                    checkBox_ASC.Enabled = true;
-                    sourceFilePath = path;
-                    textBox1.Text = sourceFilePath;
-                }
-                else if (path.Contains(".blf") || path.Contains(".BLF"))
-                {
-                    checkBox_ASC.Enabled = true;
-                    sourceFilePath = path;
-                    textBox1.Text = sourceFilePath;
+                    ApplyOutputAvailability(sourceFilePath);
                 }
                 else
                 {
@@ -75,29 +66,30 @@ namespace PCAN_Client.DataLog
             }
         }
 
+        /// <summary>按源文件类型决定可用的输出格式：ASC 源→BLF/CSV，BLF 源→ASC/CSV，BIN 源→ASC/CSV</summary>
+        private void ApplyOutputAvailability(string path)
+        {
+            string ext = string.IsNullOrEmpty(path) ? "" : Path.GetExtension(path).ToLower();
+            bool isAsc = ext == ".asc";
+            bool isBlf = ext == ".blf";
+            // 转成同类格式没有意义：ASC 源禁用 ASC 输出，BLF 源禁用 BLF 输出
+            checkBox_ASC.Enabled = !isAsc;
+            checkBox_BLF.Enabled = isAsc;
+            if (isAsc) checkBox_ASC.Checked = false;
+            if (isBlf) checkBox_BLF.Checked = false;
+        }
+
         private void LogFileToCSV_DragDrop(object sender, DragEventArgs e)
         {
             string path = ((Array)e.Data.GetData(DataFormats.FileDrop)).GetValue(0).ToString();
-            if(path.Contains(".asc"))
+            if (path.Contains(".asc") || path.Contains(".bin") ||
+                path.Contains(".blf") || path.Contains(".BLF"))
             {
-                checkBox_ASC.Checked = false;
-                checkBox_ASC.Enabled = false;
                 sourceFilePath = path;
                 textBox1.Text = sourceFilePath;
+                ApplyOutputAvailability(sourceFilePath);
             }
-            else if(path.Contains(".bin"))
-            {
-                checkBox_ASC.Enabled = true;
-                sourceFilePath = path;
-                textBox1.Text = sourceFilePath;
-            }
-            else if (path.Contains(".blf") || path.Contains(".BLF"))
-            {
-                checkBox_ASC.Enabled = true;
-                sourceFilePath = path;
-                textBox1.Text = sourceFilePath;
-            }
-            else if(path.Contains(".dbc") || path.Contains(".DBC"))
+            else if (path.Contains(".dbc") || path.Contains(".DBC"))
             {
                 MessageBox.Show("DBC文件请通过绘图窗口的\"通道配置\"加载");
             }
@@ -123,9 +115,9 @@ namespace PCAN_Client.DataLog
 
         private void button_Start_Click(object sender, EventArgs e)
         {
-            if (!saveExcelFlag && !saveAscFlag)
+            if (!saveExcelFlag && !saveAscFlag && !saveBlfFlag)
             {
-                MessageBox.Show("ASC和CSV必须选择一项");
+                MessageBox.Show("ASC、BLF、CSV 至少要选择一项输出");
                 return;
             }
             if (changeFlag)
@@ -176,20 +168,18 @@ namespace PCAN_Client.DataLog
                     }
                     else if (extension == ".asc")
                     {
-                        // ASC文件转换逻辑
+                        // ASC 源：可转 BLF / CSV（ASC→ASC 无意义，UI 已禁用该勾选）
+                        if (saveBlfFlag)
+                        {
+                            string blfFileAddr = Path.ChangeExtension(sourceFilePath, ".blf");
+                            UpdateProgressSafe(1);
+                            ConvertAscToBlf(sourceFilePath, blfFileAddr, _cancellationTokenSource.Token);
+                        }
                         if (saveExcelFlag)
                         {
                             string csvFileAddr = Path.ChangeExtension(sourceFilePath, ".csv");
                             UpdateProgressSafe(1);
                             ConvertAscToCsvHighPerformance(sourceFilePath, csvFileAddr, _cancellationTokenSource.Token);
-                        }
-                        else
-                        {
-                            this.BeginInvoke(new Action(() =>
-                            {
-                                MessageBox.Show("ASC文件已存在，无需转换ASC格式");
-                            }));
-                            return;
                         }
                     }
                     else if (extension == ".blf" || extension == ".BLF")
@@ -287,42 +277,6 @@ namespace PCAN_Client.DataLog
             Properties.Settings.Default.Save();
         }
 
-        // 添加时间戳转换方法
-        private double ConvertTimestampToMicroseconds(VBLObjectHeader header)
-        {
-            double timestampMicroseconds;
-
-            // 根据mObjectFlags确定时间戳单位
-            if ((header.mObjectFlags & (uint)ObjectFlag.BL_OBJ_FLAG_TIME_ONE_NANS) != 0)
-            {
-                // 纳秒单位，转换为微秒
-                timestampMicroseconds = header.mObjectTimeStamp / 1000.0;
-            }
-            else if ((header.mObjectFlags & (uint)ObjectFlag.BL_OBJ_FLAG_TIME_TEN_MICS) != 0)
-            {
-                // 10微秒单位
-                timestampMicroseconds = header.mObjectTimeStamp * 10.0;
-            }
-            else
-            {
-                // 默认使用纳秒（更常见）
-                timestampMicroseconds = header.mObjectTimeStamp / 1000.0;
-            }
-
-            return timestampMicroseconds;
-        }
-
-        // 转换微秒为时间字符串（用于ASC输出）
-        private string ConvertMicrosecondsToTimestampString(double microseconds)
-        {
-            ulong totalMicroseconds = (ulong)microseconds;
-            ulong seconds = totalMicroseconds / 1000000;
-            ulong remainingMicroseconds = totalMicroseconds % 1000000;
-
-            // 格式化为"秒.微秒"的字符串，微秒部分固定6位
-            return $"{seconds}.{remainingMicroseconds:D6}";
-        }
-        
         // 从文件名中提取时间戳的函数
         private void TryExtractTimeFromFileName(string filePath, ref DateTime dateTime)
         {
@@ -467,210 +421,72 @@ namespace PCAN_Client.DataLog
 
             return;
         }
+        /// <summary>BLF → ASC / CSV：统一走 LogFileLoader 解析（经典与 CAN FD 帧都取到正确长度），按勾选写出</summary>
         private void ConvertBlfToAscHighPerformance(string sourceFilePath, string ascFilePath, string csvFilePath, CancellationToken cancellationToken)
         {
             if (!File.Exists(sourceFilePath))
                 throw new FileNotFoundException($"源文件不存在: {sourceFilePath}");
 
-            IntPtr fileHandle = BLFAPI.BLCreateFileW(sourceFilePath, GENERIC.GENERIC_READ);
-
-            StreamWriter ascWriter = null;
-            HighSpeedExcelWriter csvWriter = null;
-
-            int lastProgress = 0;
-            int messageCount = 0;
-            double startTimeMicroseconds = -1;  // 第一个时间戳（微秒）
-            double currentTimeMicroseconds = 0; // 当前时间戳（微秒）
-            double lastTimeMicroseconds = 0;    // 上一个时间戳（微秒）
-            ulong SaveCSVFileIntervalUs = 1000000;
-            ulong LastSaveCSVFileTimeUs = 0;
             DateTime dateTime = DateTime.Now;
-            uint canid = 0;
-            uint dataLen = 0;
-            byte[] datas = new byte[64];
-            long currentPosition = 0;
-            const int BUFFER_SIZE = 512 * 1024;
-            const int BATCH_SIZE = 2000;
-
-            // 读取文件信息
-            VBLFileStatistics myFileStatistics;
-            myFileStatistics.mStatisticsSize = 28;
-            int retval = BLFAPI.BLGetFileStatistics(fileHandle, out myFileStatistics);
-            long fileSize = (long)myFileStatistics.mUncompressedFileSize;
-
             TryExtractTimeFromFileName(sourceFilePath, ref dateTime);
+
+            AscStreamWriter ascWriter = null;
+            HighSpeedExcelWriter csvWriter = null;
             try
             {
                 if (saveAscFlag)
                 {
-                    ascWriter = new StreamWriter(ascFilePath, false, Encoding.UTF8, BUFFER_SIZE);
-
-                    // 写入文件头
-                    string title = $"date {GetWeek()} {dateTime:yyyyMMdd HH:mm:ss}\r\n" +
-                                  "base hex  timestamps absolute\r\n" +
-                                  "no internal events logged\r\n" +
-                                  "// version 7.0.0";
-                    ascWriter.WriteLine(title);
+                    ascWriter = new AscStreamWriter(ascFilePath, dateTime);
+                    if (ascWriter.LastError.Length > 0) throw new Exception(ascWriter.LastError);
                 }
-
                 if (saveExcelFlag)
                 {
                     csvWriter = new HighSpeedExcelWriter(csvFilePath);
-                    SaveCSVFileIntervalUs = (uint)(saveExcelTimeBuf[comboBoxExcelSaveTimeSelectIndex] * 1000000.0f);
                 }
 
-                VBLObjectHeaderBase headerBase;
-                StringBuilder batchBuilder = new StringBuilder(BATCH_SIZE * 80);
+                ulong saveCsvIntervalUs = (ulong)(saveExcelTimeBuf[comboBoxExcelSaveTimeSelectIndex] * 1000000.0f);
+                ulong lastSaveCsvTimeUs = 0;
+                double lastSeconds = 0;
+                long fileSize = new FileInfo(sourceFilePath).Length;
                 long progressUpdateThreshold = Math.Max(fileSize / 1000, 16 * 1024);
                 long nextProgressUpdate = progressUpdateThreshold;
 
-                while (retval == 1)
+                foreach (CanRawMessageRead msg in LogFileLoader.EnumerateCanMessages(sourceFilePath))
                 {
-                    retval = BLFAPI.BLPeekObject(fileHandle, out headerBase);
-                    if (retval == 1)
+                    if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException();
+
+                    // 进度：BLF 的 FilePosition 是按对象长度累计的近似值
+                    if (msg.FilePosition >= nextProgressUpdate)
                     {
-                        double timestampMicroseconds = 0;
-                        byte msgChannel = 1; // BLF mChannel（1-based）
+                        int progress = fileSize > 0 ? (int)(msg.FilePosition * 100L / fileSize) : 0;
+                        if (progress > 0 && progress < 100) UpdateProgressSafe(progress);
+                        nextProgressUpdate = msg.FilePosition + progressUpdateThreshold;
+                    }
 
-                        // 处理不同的对象类型
-                        switch (headerBase.mObjectType)
+                    if (ascWriter != null)
+                    {
+                        ascWriter.Write(msg.CanId, msg.Data, msg.TimeStampSeconds, msg.Channel, msg.IsFd);
+                    }
+
+                    if (csvWriter != null)
+                    {
+                        // 与旧实现一致：用帧间时间差驱动 DBC 解析（CANDataDeal 期望时间增量）
+                        double deltaUs = msg.TimeStampSeconds - lastSeconds;
+                        lastSeconds = msg.TimeStampSeconds;
+                        if (msg.TimeStampSeconds <= 0) deltaUs = 0;
+                        BaseParamter.dbcHelper.CANDataDeal(msg.CanId, (ushort)msg.Data.Length, msg.Data,
+                            (ulong)Math.Max(0.0, deltaUs * 1000000.0), BaseParamter.GetLogicChannelByBlfId(msg.Channel));
+
+                        ulong nowUs = (ulong)(msg.TimeStampSeconds * 1000000.0);
+                        if (nowUs - lastSaveCsvTimeUs > saveCsvIntervalUs)
                         {
-                            case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE:
-                                timestampMicroseconds = ProcessCANMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
-                                break;
-
-                            case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE2:
-                                timestampMicroseconds = ProcessCANMessage2(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
-                                break;
-
-                            case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE:
-                                timestampMicroseconds = ProcessCANFDMessage(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
-                                break;
-
-                            case (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64:
-                                timestampMicroseconds = ProcessCANFDMessage64(fileHandle, headerBase, ref canid, ref dataLen, ref datas, ref msgChannel);
-                                break;
-
-                            case (uint)BLFObjectType.BL_OBJ_TYPE_APP_TEXT:
-                                SkipAppText(fileHandle, headerBase);
-                                break;
-
-                            default:
-                                SkipObject(fileHandle, headerBase);
-                                break;
-                        }
-
-                        currentPosition += headerBase.mObjectSize;
-
-                        // 更新进度
-                        if (currentPosition >= nextProgressUpdate)
-                        {
-                            int progress = (int)((currentPosition * 100L) / fileSize);
-                            if (progress != lastProgress && progress < 100)
-                            {
-                                lastProgress = progress;
-                                UpdateProgressSafe(progress);
-                            }
-                            nextProgressUpdate = currentPosition + progressUpdateThreshold;
-                        }
-
-                        // 处理CAN消息数据
-                        if (headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE ||
-                            headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_MESSAGE2 ||
-                            headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE ||
-                            headerBase.mObjectType == (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64)
-                        {
-                            // 设置起始时间（第一个有效消息的时间）
-                            if (startTimeMicroseconds < 0)
-                            {
-                                startTimeMicroseconds = timestampMicroseconds;
-                            }
-
-                            // 计算相对时间（从第一个消息开始）
-                            currentTimeMicroseconds = timestampMicroseconds - startTimeMicroseconds;
-
-                            // 确保时间戳非负
-                            if (currentTimeMicroseconds < 0) currentTimeMicroseconds = 0;
-
-                            // 计算与上一个消息的时间差（用于DBC处理）
-                            double deltaTimeMicroseconds = currentTimeMicroseconds - lastTimeMicroseconds;
-                            if (lastTimeMicroseconds == 0) deltaTimeMicroseconds = 0;
-
-                            lastTimeMicroseconds = currentTimeMicroseconds;
-
-                            if (msgChannel == 0) msgChannel = 1; // 容错：BLF通道号应1-based
-                            byte logicCh = BaseParamter.GetLogicChannelByBlfId(msgChannel); // BLF通道号→逻辑通道号（解码路由用）
-                            canid &= 0x1FFFFFFF; // BLF 的 mID bit31 是扩展帧标记（CANoe 与录制器都按此写），真实 ID 在低 29 位
-
-                            if (saveExcelFlag)
-                            {
-                                // 使用时间差（微秒）处理DBC数据（按通道选择对应DBC解析）
-                                BaseParamter.dbcHelper.CANDataDeal(canid, (ushort)dataLen, datas, (ulong)deltaTimeMicroseconds, logicCh);
-                            }
-
-                            // 生成ASC格式输出（通道列写BLF实际通道号）
-                            if (saveAscFlag && ascWriter != null)
-                            {
-                                string timestamp = ConvertMicrosecondsToTimestampString(currentTimeMicroseconds);
-
-                                StringBuilder dataHexBuilder = new StringBuilder((int)(dataLen * 3));
-                                for (int i = 0; i < dataLen; i++)
-                                {
-                                    if (i > 0) dataHexBuilder.Append(' ');
-                                    dataHexBuilder.Append(datas[i].ToString("X2"));
-                                }
-
-                                batchBuilder.AppendLine($"{timestamp} {msgChannel} {canid:X2}             Rx    d {dataLen} {dataHexBuilder}");
-
-                                if (messageCount % BATCH_SIZE == 0)
-                                {
-                                    ascWriter.Write(batchBuilder.ToString());
-                                    ascWriter.Flush();
-                                    batchBuilder.Clear();
-                                }
-                            }
-
-                            messageCount++;
-
-                            // CSV保存逻辑 - 使用绝对时间
-                            if (saveExcelFlag)
-                            {
-                                // 计算从开始到现在的时间（秒）
-                                double elapsedSeconds = currentTimeMicroseconds / 1000000.0;
-                                DateTime currentTime = dateTime.AddSeconds(elapsedSeconds);
-
-                                // 检查是否需要保存
-                                ulong currentTimeUs = (ulong)currentTimeMicroseconds;
-                                if ((currentTimeUs - LastSaveCSVFileTimeUs) > SaveCSVFileIntervalUs)
-                                {
-                                    LastSaveCSVFileTimeUs = currentTimeUs;
-                                    csvWriter?.WriteSignalRow(currentTime);
-                                }
-                            }
-                        }
-
-                        // GC优化
-                        if (messageCount % 50000 == 0 && GC.GetTotalMemory(false) > 200 * 1024 * 1024)
-                        {
-                            GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, false);
+                            lastSaveCsvTimeUs = nowUs;
+                            csvWriter.WriteSignalRow(dateTime.AddSeconds(msg.TimeStampSeconds));
                         }
                     }
                 }
 
-                // 写入剩余数据
-                if (saveAscFlag && ascWriter != null && batchBuilder.Length > 0)
-                {
-                    ascWriter.Write(batchBuilder.ToString());
-                    ascWriter.WriteLine("End TriggerBlock");
-                    ascWriter.Flush();
-                    ascWriter.Close();
-                }
-
-                BLFAPI.BLCloseHandle(fileHandle);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"BLF转换失败: {ex.Message}");
+                UpdateProgressSafe(100);
             }
             finally
             {
@@ -679,156 +495,109 @@ namespace PCAN_Client.DataLog
             }
         }
 
-        // 处理不同类型的方法（channel输出BLF mChannel通道号）
-        private double ProcessCANMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
+        /// <summary>ASC → BLF：逐帧流式落盘（不把整份文件读进内存），CAN FD 帧写成 FD 对象</summary>
+        private void ConvertAscToBlf(string sourceFilePath, string blfFilePath, CancellationToken cancellationToken)
         {
-            int structSize = Marshal.SizeOf<VBLCANMessage>();
-            IntPtr pMsg = Marshal.AllocHGlobal(structSize);
+            if (!File.Exists(sourceFilePath))
+                throw new FileNotFoundException($"源文件不存在: {sourceFilePath}");
+
+            // 测量起始时间优先取 ASC 文件头的 date 行（解析不了退回文件名/当前时间）
+            DateTime startTime = DateTime.Now;
+            TryExtractTimeFromFileName(sourceFilePath, ref startTime);
+            TryReadAscDateHeader(sourceFilePath, ref startTime);
+
+            long fileSize = new FileInfo(sourceFilePath).Length;
+            long progressUpdateThreshold = Math.Max(fileSize / 1000, 16 * 1024);
+            long nextProgressUpdate = progressUpdateThreshold;
+
+            using (var blfWriter = new BlfStreamWriter(blfFilePath, startTime))
+            {
+                if (blfWriter.LastError.Length > 0) throw new Exception(blfWriter.LastError);
+
+                foreach (CanRawMessageRead msg in LogFileLoader.EnumerateCanMessages(sourceFilePath))
+                {
+                    if (cancellationToken.IsCancellationRequested) throw new OperationCanceledException();
+
+                    if (msg.FilePosition >= nextProgressUpdate)
+                    {
+                        int progress = fileSize > 0 ? (int)(msg.FilePosition * 100L / fileSize) : 0;
+                        if (progress > 0 && progress < 100) UpdateProgressSafe(progress);
+                        nextProgressUpdate = msg.FilePosition + progressUpdateThreshold;
+                    }
+
+                    blfWriter.Write(msg.CanId, msg.Data, msg.TimeStampSeconds, msg.Channel, msg.IsFd);
+                }
+            }
+
+            UpdateProgressSafe(100);
+        }
+
+        /// <summary>读 ASC 文件头 date 行作为测量起始时间（解析不了就保持入参）</summary>
+        private static void TryReadAscDateHeader(string ascFilePath, ref DateTime dateTime)
+        {
             try
             {
-                VBLCANMessage msg = new VBLCANMessage();
-                msg.mHeader.mBase = headerBase;
-                Marshal.StructureToPtr(msg, pMsg, false);
-                int retval = BLFAPI.BLReadObjectSecure(fileHandle, pMsg, (UIntPtr)structSize);
-                VBLCANMessage retMsg = Marshal.PtrToStructure<VBLCANMessage>(pMsg);
-
-                // 获取时间戳（微秒）
-                double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
-
-                canid = retMsg.mID;
-                channel = (byte)retMsg.mChannel;
-                dataLen = Math.Min((uint)retMsg.mData.Length, 8);
-                Array.Resize(ref datas, (int)dataLen);
-                Array.Copy(retMsg.mData, 0, datas, 0, (int)dataLen);
-
-                return timestampMicroseconds;
+                using (var stream = new FileStream(ascFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    for (int i = 0; i < 5; i++)
+                    {
+                        string line = reader.ReadLine();
+                        if (line == null) break;
+                        if (!line.StartsWith("date")) continue;
+                        DateTime parsed;
+                        if (TryParseAscDateText(line, out parsed))
+                        {
+                            dateTime = parsed;
+                            return;
+                        }
+                    }
+                }
             }
-            finally
+            catch
             {
-                Marshal.FreeHGlobal(pMsg);
+                /* 头信息只是显示用，读不到不算错 */
             }
         }
 
-        private double ProcessCANMessage2(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
+        /// <summary>解析 ASC 的 date 行（支持中文星期、英文星期、带/不带 AM·PM 等常见写法）</summary>
+        private static bool TryParseAscDateText(string line, out DateTime dateTime)
         {
-            int structSize = Marshal.SizeOf<VBLCANMessage2>();
-            IntPtr pMsg = Marshal.AllocHGlobal(structSize);
-            try
+            dateTime = DateTime.Now;
+            int firstSpace = line.IndexOf(' ');
+            if (firstSpace < 0) return false;
+            string text = line.Substring(firstSpace + 1).Trim();
+
+            // 中文星期 + yyyyMMdd HH:mm:ss
+            if (text.Contains("周") || text.Contains("星期"))
             {
-                VBLCANMessage2 msg = new VBLCANMessage2();
-                msg.mHeader.mBase = headerBase;
-                Marshal.StructureToPtr(msg, pMsg, false);
-                int retval = BLFAPI.BLReadObjectSecure(fileHandle, pMsg, (UIntPtr)structSize);
-                VBLCANMessage2 retMsg = Marshal.PtrToStructure<VBLCANMessage2>(pMsg);
-
-                double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
-
-                canid = retMsg.mID;
-                channel = (byte)retMsg.mChannel;
-                dataLen = Math.Min((uint)retMsg.mDLC, 8);
-                if (dataLen > 8) dataLen = 8;
-                Array.Resize(ref datas, (int)dataLen);
-                Array.Copy(retMsg.mData, 0, datas, 0, (int)dataLen);
-
-                return timestampMicroseconds;
+                string[] parts = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3 &&
+                    DateTime.TryParseExact(parts[1] + " " + parts[2], "yyyyMMdd HH:mm:ss",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out dateTime))
+                    return true;
+                return false;
             }
-            finally
+
+            // 英文写法：Jan 1 00:00:00 2007 / Nov 8 11:32:06 AM 2025 / Thu Nov 5 10:13:57 2026
+            string[] formats =
             {
-                Marshal.FreeHGlobal(pMsg);
+                "MMM d HH:mm:ss yyyy", "MMM dd HH:mm:ss yyyy",
+                "MMM d h:mm:ss tt yyyy", "MMM dd h:mm:ss tt yyyy",
+                "ddd MMM d HH:mm:ss yyyy", "ddd MMM dd HH:mm:ss yyyy",
+                "ddd MMM d h:mm:ss tt yyyy", "ddd MMM dd h:mm:ss tt yyyy"
+            };
+            foreach (string format in formats)
+            {
+                if (DateTime.TryParseExact(text, format,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AllowWhiteSpaces, out dateTime))
+                    return true;
             }
+            return DateTime.TryParse(text, out dateTime);
         }
 
-        private double ProcessCANFDMessage(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
-        {
-            int structSize = Marshal.SizeOf<VBLCANFDMessage>();
-            IntPtr pMsg = Marshal.AllocHGlobal(structSize);
-            try
-            {
-                VBLCANFDMessage msg = new VBLCANFDMessage();
-                msg.mHeader.mBase = headerBase;
-                Marshal.StructureToPtr(msg, pMsg, false);
-                int retval = BLFAPI.BLReadObjectSecure(fileHandle, pMsg, (UIntPtr)structSize);
-                VBLCANFDMessage retMsg = Marshal.PtrToStructure<VBLCANFDMessage>(pMsg);
-
-                double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
-
-                canid = retMsg.mID;
-                channel = (byte)retMsg.mChannel;
-                dataLen = retMsg.mValidDataBytes;
-                if (dataLen > 16) dataLen = 16;
-                Array.Resize(ref datas, (int)dataLen);
-                Array.Copy(retMsg.mData, 0, datas, 0, (int)dataLen);
-
-                return timestampMicroseconds;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(pMsg);
-            }
-        }
-
-        private double ProcessCANFDMessage64(IntPtr fileHandle, VBLObjectHeaderBase headerBase, ref uint canid, ref uint dataLen, ref byte[] datas, ref byte channel)
-        {
-            int structSize = Marshal.SizeOf<VBLCANFDMessage64>();
-            IntPtr pMsg = Marshal.AllocHGlobal(structSize);
-            try
-            {
-                VBLCANFDMessage64 msg = new VBLCANFDMessage64();
-                msg.mHeader.mBase = headerBase;
-                Marshal.StructureToPtr(msg, pMsg, false);
-                int retval = BLFAPI.BLReadObjectSecure(fileHandle, pMsg, (UIntPtr)structSize);
-                VBLCANFDMessage64 retMsg = Marshal.PtrToStructure<VBLCANFDMessage64>(pMsg);
-
-                double timestampMicroseconds = ConvertTimestampToMicroseconds(retMsg.mHeader);
-
-                canid = retMsg.mID;
-                channel = (byte)retMsg.mChannel;
-                dataLen = retMsg.mValidDataBytes;
-                if (dataLen > 64) dataLen = 64;
-                Array.Resize(ref datas, (int)dataLen);
-                Array.Copy(retMsg.mData, 0, datas, 0, (int)dataLen);
-
-                return timestampMicroseconds;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(pMsg);
-            }
-        }
-        private void SkipAppText(IntPtr fileHandle, VBLObjectHeaderBase headerBase)
-        {
-            // 分配内存读取整个AppText对象
-            IntPtr pObj = Marshal.AllocHGlobal((int)headerBase.mObjectSize);
-            try
-            {
-                Marshal.StructureToPtr(headerBase, pObj, false);
-                BLFAPI.BLReadObjectSecure(fileHandle, pObj, (UIntPtr)headerBase.mObjectSize);
-
-                // 如果需要，可以在这里提取数据库信息
-                 VBLAppText appText = Marshal.PtrToStructure<VBLAppText>(pObj);
-                 string text = Marshal.PtrToStringAnsi(pObj + Marshal.SizeOf<VBLAppText>());
-                Console.WriteLine(text);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(pObj);
-            }
-        }
-
-        private void SkipObject(IntPtr fileHandle, VBLObjectHeaderBase headerBase)
-        {
-            // 跳过不支持的对象
-            IntPtr pBuffer = Marshal.AllocHGlobal((int)headerBase.mObjectSize);
-            try
-            {
-                Marshal.StructureToPtr(headerBase, pBuffer, false);
-                BLFAPI.BLReadObjectSecure(fileHandle, pBuffer, (UIntPtr)headerBase.mObjectSize);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(pBuffer);
-            }
-        }
 
         // 高性能ASC到CSV转换器
         private void ConvertAscToCsvHighPerformance(string sourceFilePath, string csvFilePath, CancellationToken cancellationToken)
@@ -860,7 +629,6 @@ namespace PCAN_Client.DataLog
 
                 string line;
                 bool headerParsed = false;
-                bool isCanFdFormat = false;
 
                 while ((line = reader.ReadLine()) != null && !cancellationToken.IsCancellationRequested)
                 {
@@ -887,99 +655,36 @@ namespace PCAN_Client.DataLog
                             if (line.StartsWith("date") || line.StartsWith("base") ||
                                 line.StartsWith("no internal") || line.StartsWith("//") || string.IsNullOrWhiteSpace(line))
                             {
-                                // 尝试从日期行解析基准时间
-                                if (line.StartsWith("date"))
+                                // 从 date 行解析基准时间（与 ASC→BLF 共用同一套写法识别）
+                                DateTime headerTime;
+                                if (line.StartsWith("date") && TryParseAscDateText(line, out headerTime))
                                 {
-                                    // 格式1: "date 周五 20251106 13:47:04"
-                                    // 格式2: "date Mon Jan  1 00:00:00 2007"
-                                    // 格式3: "date Sat Nov 8 11:32:06 AM 2025"
-
-                                    // 提取日期时间部分：从第一个空格后的所有内容
-                                    int firstSpace = line.IndexOf(' ');
-                                    if (firstSpace >= 0)
-                                    {
-                                        string dateTimePart = line.Substring(firstSpace + 1).Trim();
-
-                                        // 检查是否是格式1 (包含中文星期)
-                                        if (dateTimePart.Contains("周") || dateTimePart.Contains("星期"))
-                                        {
-                                            // 格式1: "周五 20251106 13:47:04"
-                                            string[] parts = dateTimePart.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                                            if (parts.Length >= 3)
-                                            {
-                                                string datePart = parts[1];
-                                                string timePart = parts[2];
-                                                if (DateTime.TryParseExact(datePart + " " + timePart, "yyyyMMdd HH:mm:ss",
-                                                    System.Globalization.CultureInfo.InvariantCulture,
-                                                    System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
-                                                {
-                                                    baseDateTime = parsedDate;
-                                                    System.Diagnostics.Debug.WriteLine($"解析到基准时间(格式1): {baseDateTime}");
-                                                }
-                                            }
-                                        }
-                                        else
-                                        {
-                                            // 格式2和格式3: 尝试多种可能的日期格式
-                                            string[] possibleFormats = new string[]
-                                            {
-                                        "MMM d HH:mm:ss yyyy",           // "Jan 1 00:00:00 2007"
-                                        "MMM dd HH:mm:ss yyyy",          // "Jan 01 00:00:00 2007"
-                                        "MMM  d HH:mm:ss yyyy",          // "Jan  1 00:00:00 2007" (有额外空格)
-                                        "MMM  dd HH:mm:ss yyyy",         // "Jan  01 00:00:00 2007" (有额外空格)
-                                        "MMM d h:mm:ss tt yyyy",         // "Nov 8 11:32:06 AM 2025"
-                                        "MMM dd h:mm:ss tt yyyy",        // "Nov 08 11:32:06 AM 2025"
-                                        "MMM  d h:mm:ss tt yyyy",        // "Nov  8 11:32:06 AM 2025" (有额外空格)
-                                        "MMM  dd h:mm:ss tt yyyy"        // "Nov  08 11:32:06 AM 2025" (有额外空格)
-                                            };
-
-                                            bool dateParsed = false;
-                                            foreach (string format in possibleFormats)
-                                            {
-                                                if (DateTime.TryParseExact(dateTimePart, format,
-                                                    System.Globalization.CultureInfo.InvariantCulture,
-                                                    System.Globalization.DateTimeStyles.AllowWhiteSpaces, out DateTime parsedDate))
-                                                {
-                                                    baseDateTime = parsedDate;
-                                                    System.Diagnostics.Debug.WriteLine($"解析到基准时间(格式2/3): {baseDateTime}, 格式: {format}");
-                                                    dateParsed = true;
-                                                    break;
-                                                }
-                                            }
-
-                                            // 如果标准格式解析失败，尝试系统的默认解析
-                                            if (!dateParsed && DateTime.TryParse(dateTimePart, out DateTime defaultParsedDate))
-                                            {
-                                                baseDateTime = defaultParsedDate;
-                                                System.Diagnostics.Debug.WriteLine($"使用默认解析到基准时间: {baseDateTime}");
-                                            }
-                                        }
-                                    }
+                                    baseDateTime = headerTime;
                                 }
                                 continue;
                             }
                             headerParsed = true;
-
-                            // 检查第一行数据以确定格式
-                            if (line.Contains("CANFD"))
-                            {
-                                isCanFdFormat = true;
-                                System.Diagnostics.Debug.WriteLine("检测到CANFD格式");
-                            }
                         }
 
                         // 跳过结束标记
                         if (line.StartsWith("End TriggerBlock"))
                             continue;
 
-                        // 根据格式解析数据行
-                        if (isCanFdFormat)
+                        // 统一走 LogFileLoader 的 ASC 解析器：经典/ CAN FD 同一套规则，
+                        // FD 的数据长度按十进制并与 DLC 互校（旧实现按十六进制读，"f 64" 会被判成 100 字节而丢帧）
+                        CanRawMessageRead ascMsg = LogFileLoader.ParseAscLine(line, currentPosition);
+                        if (ascMsg == null) continue;
+
+                        double ascSeconds = ascMsg.TimeStampSeconds;
+                        NowTimeUs = (ulong)(ascSeconds * 1000000.0);
+                        BaseParamter.dbcHelper.CANDataDeal(ascMsg.CanId, (ushort)ascMsg.Data.Length, ascMsg.Data,
+                            NowTimeUs, BaseParamter.GetLogicChannelByBlfId(ascMsg.Channel));
+                        messageCount++;
+
+                        if ((NowTimeUs - LastSaveCSVFileTimeUs) > SaveCSVFileIntervalUs)
                         {
-                            ParseCanFdLine(line, ref NowTimeUs, ref messageCount, baseDateTime, ref LastSaveCSVFileTimeUs, SaveCSVFileIntervalUs, highSpeedExcelWriter);
-                        }
-                        else
-                        {
-                            ParseStandardCanLine(line, ref NowTimeUs, ref messageCount, baseDateTime, ref LastSaveCSVFileTimeUs, SaveCSVFileIntervalUs, highSpeedExcelWriter);
+                            LastSaveCSVFileTimeUs = NowTimeUs;
+                            highSpeedExcelWriter?.WriteSignalRow(baseDateTime.AddSeconds(ascSeconds));
                         }
 
                         // 每处理1000条消息输出一次调试信息
@@ -1007,163 +712,6 @@ namespace PCAN_Client.DataLog
 
             System.Diagnostics.Debug.WriteLine($"ASC转换完成，共处理 {messageCount} 条消息");
             UpdateProgressSafe(100);
-        }
-
-        // 解析标准CAN格式行
-        private void ParseStandardCanLine(string line, ref ulong NowTimeUs, ref int messageCount, DateTime baseDateTime,
-            ref ulong LastSaveCSVFileTimeUs, ulong SaveCSVFileIntervalUs, HighSpeedExcelWriter highSpeedExcelWriter)
-        {
-            // 解析ASC数据行格式: "0.000000 1 363             Rx    d 8 23 00 00 88 00 7D 80 05"
-            string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 7)
-                return;
-
-            // 解析时间戳 (格式: seconds.millisecondsmicroseconds)
-            string timestampStr = parts[0];
-            if (!double.TryParse(timestampStr, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double timestampSeconds))
-                return;
-
-            NowTimeUs = (ulong)(timestampSeconds * 1000000.0);
-
-            // 解析通道号（第2列，ASC标准格式 "时间 通道 ID Rx d ..."）
-            byte msgChannel = 1;
-            if (!byte.TryParse(parts[1], out msgChannel) || msgChannel == 0) msgChannel = 1;
-
-            // 解析CAN ID
-            if (!uint.TryParse(parts[2], System.Globalization.NumberStyles.HexNumber,
-                System.Globalization.CultureInfo.InvariantCulture, out uint canId))
-                return;
-
-            // 查找数据长度位置 - 改进的查找逻辑
-            int dataLengthIndex = -1;
-            for (int i = 3; i < parts.Length - 1; i++)
-            {
-                // 查找 "d" 或 "r" 标识符，后面跟着数字表示数据长度
-                if ((parts[i] == "d" || parts[i] == "r") &&
-                    i + 1 < parts.Length &&
-                    int.TryParse(parts[i + 1], out _))
-                {
-                    dataLengthIndex = i + 1;
-                    break;
-                }
-            }
-
-            if (dataLengthIndex < 0 || dataLengthIndex >= parts.Length)
-                return;
-
-            // 解析数据长度
-            if (!int.TryParse(parts[dataLengthIndex], out int dataLength) || dataLength < 0 || dataLength > 64)
-                return;
-
-            // 解析数据字节
-            if (dataLengthIndex + dataLength >= parts.Length)
-                return;
-
-            byte[] datas = new byte[dataLength];
-            bool dataValid = true;
-            for (int i = 0; i < dataLength; i++)
-            {
-                if (!byte.TryParse(parts[dataLengthIndex + 1 + i], System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture, out datas[i]))
-                {
-                    dataValid = false;
-                    break;
-                }
-            }
-
-            if (!dataValid)
-                return;
-
-            // 处理CAN数据（ASC通道列为BLF通道号语义，转逻辑通道号路由对应DBC解析）
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
-
-            messageCount++;
-
-            // CSV保存逻辑
-            DateTime currentTime = baseDateTime.AddSeconds(timestampSeconds);
-            if ((NowTimeUs - LastSaveCSVFileTimeUs) > SaveCSVFileIntervalUs)
-            {
-                LastSaveCSVFileTimeUs = NowTimeUs;
-                highSpeedExcelWriter?.WriteSignalRow(currentTime);
-            }
-        }
-
-        // 解析CANFD格式行
-        private void ParseCanFdLine(string line, ref ulong NowTimeUs, ref int messageCount, DateTime baseDateTime,
-            ref ulong LastSaveCSVFileTimeUs, ulong SaveCSVFileIntervalUs, HighSpeedExcelWriter highSpeedExcelWriter)
-        {
-            // 解析CANFD数据行格式: "00000000.110000 CANFD 12 Rx 6ca   1 0 8 08 00 00 00 00 00 00 00 00  111000 141 203040 80000000 46500250 4b280150"
-            string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 9) // 至少需要有时间戳、CANFD、通道、方向、CANID、标志位、数据长度和数据
-                return;
-
-            // 检查是否是CANFD格式
-            if (parts[1] != "CANFD" && parts[1] != "CAND")
-                return;
-
-            // 解析时间戳 (格式: integer.fractional)
-            string timestampStr = parts[0];
-            if (!double.TryParse(timestampStr, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double timestampSeconds))
-                return;
-
-            NowTimeUs = (ulong)(timestampSeconds * 1000000.0);
-
-            // 解析通道号（CANFD格式第3列 "时间 CANFD 通道 Rx ..."）
-            byte msgChannel = 1;
-            if (!byte.TryParse(parts[2], out msgChannel) || msgChannel == 0) msgChannel = 1;
-
-            // 解析CAN ID (第5个字段)
-            if (!uint.TryParse(parts[4], System.Globalization.NumberStyles.HexNumber,
-                System.Globalization.CultureInfo.InvariantCulture, out uint canId))
-                return;
-
-            // 数据长度在第9个字段（索引8）
-            int dataLengthIndex = 8;
-            if (dataLengthIndex >= parts.Length)
-                return;
-
-            // 解析数据长度
-            if (!int.TryParse(parts[dataLengthIndex], System.Globalization.NumberStyles.HexNumber,
-                System.Globalization.CultureInfo.InvariantCulture, out int dataLength) || dataLength < 0 || dataLength > 64)
-                return;
-
-            // 解析数据字节（从索引8开始，共dataLength个字节）
-            int dataStartIndex = dataLengthIndex + 1;
-            if (dataStartIndex + dataLength > parts.Length)
-                return;
-
-            byte[] datas = new byte[dataLength];
-            bool dataValid = true;
-            for (int i = 0; i < dataLength; i++)
-            {
-                if (!byte.TryParse(parts[dataStartIndex + i], System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture, out datas[i]))
-                {
-                    dataValid = false;
-                    break;
-                }
-            }
-
-            if (!dataValid)
-                return;
-
-            // 处理CAN数据（ASC通道列为BLF通道号语义，转逻辑通道号路由对应DBC解析）
-            BaseParamter.dbcHelper.CANDataDeal(canId, (ushort)dataLength, datas, NowTimeUs, BaseParamter.GetLogicChannelByBlfId(msgChannel));
-            if(canId == 0x5a0)
-            {
-                Console.WriteLine($"ID:{canId:X2} len:{dataLength} { string.Join(" ", datas.Select(b => b.ToString("X2")))}" );
-            }
-            messageCount++;
-
-            // CSV保存逻辑
-            DateTime currentTime = baseDateTime.AddSeconds(timestampSeconds);
-            if ((NowTimeUs - LastSaveCSVFileTimeUs) > SaveCSVFileIntervalUs)
-            {
-                LastSaveCSVFileTimeUs = NowTimeUs;
-                highSpeedExcelWriter?.WriteSignalRow(currentTime);
-            }
         }
 
         private void LogFileToCSV_Load(object sender, EventArgs e)
@@ -1209,6 +757,17 @@ namespace PCAN_Client.DataLog
             {
                 checkBox_ASC.Checked = false;
             }
+
+            if (Properties.Settings.Default.checkBoxSaveBlfChecked)
+            {
+                checkBox_BLF.Checked = true;
+            }
+            else
+            {
+                checkBox_BLF.Checked = false;
+            }
+            // 未选源文件时 BLF 输出不可用（只有 ASC 源能转 BLF）
+            ApplyOutputAvailability(sourceFilePath);
         }
 
         private void checkBox_ASC_CheckedChanged(object sender, EventArgs e)
@@ -1216,6 +775,14 @@ namespace PCAN_Client.DataLog
             saveAscFlag = checkBox_ASC.Checked;
 
             Properties.Settings.Default.checkBoxSaveAscChecked = saveAscFlag;
+            Properties.Settings.Default.Save();
+        }
+
+        private void checkBox_BLF_CheckedChanged(object sender, EventArgs e)
+        {
+            saveBlfFlag = checkBox_BLF.Checked;
+
+            Properties.Settings.Default.checkBoxSaveBlfChecked = saveBlfFlag;
             Properties.Settings.Default.Save();
         }
 
