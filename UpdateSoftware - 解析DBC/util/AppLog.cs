@@ -44,6 +44,13 @@ namespace PCAN_Client
                 _thread = new Thread(Loop) { IsBackground = true, Name = "AppLog" };
                 _thread.Start();
                 _queue.Enqueue("===== 会话开始: " + sessionTag + " @ " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " =====");
+#if DEBUG
+                // Debug 构建关闭 JIT 优化：实测同一份 ASC 解析 Debug 17.2s / Release 6.0s，
+                // 测性能（尤其回放速度）必须用 Release，否则会误判"优化没生效"
+                _queue.Enqueue("构建配置: Debug（JIT 优化关闭，性能约为 Release 的 1/3 —— 测性能请用 Release 构建）");
+#else
+                _queue.Enqueue("构建配置: Release");
+#endif
             }
             catch { /* 日志失败不影响应用 */ }
         }

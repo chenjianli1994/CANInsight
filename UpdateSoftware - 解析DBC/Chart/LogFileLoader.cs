@@ -269,72 +269,395 @@ namespace PCAN_Client
             }
         }
 
+        // ===== ASC 行解析快路径（H7：回放提速）=====
+        // 实测：475MB/322 万帧的 ASC 纯解析要 21.9s，占"最快"回放总耗时的约 85%（BLF 同数据仅 2s）。
+        // 原实现对每行 string.Split（每行分配 string[] + N 个子串，总计约 4000 万个小字符串），
+        // 且每个数据字节都走 byte.TryParse(HexNumber, InvariantCulture)（带样式/文化开销）。
+        // 这里改为：按索引切 token（零分配）+ 手写数字/十六进制解析；
+        // 遇到非常规写法（指数、超长数字、奇怪前缀等）**立即回退到框架解析**，保证与改造前逐字段一致。
+        // 对拍工具：.build-check/team/probes/AscEqProbe（旧实现副本 vs 生产实现，逐帧逐字段比对）。
+        [ThreadStatic] private static int[] t_ascTokStart;
+        [ThreadStatic] private static int[] t_ascTokLen;
+        private const int AscInitTokenCapacity = 128;
+
+        private static readonly double[] AscPow10 =
+        {
+            1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+            1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+        };
+
+        /// <summary>按单个空格切 token（与 Split(' ', RemoveEmptyEntries) 等价），结果写线程级缓冲，返回 token 数</summary>
+        private static int TokenizeAscLine(string line)
+        {
+            int[] starts = t_ascTokStart;
+            int[] lens = t_ascTokLen;
+            if (starts == null || starts.Length < AscInitTokenCapacity)
+            {
+                starts = new int[AscInitTokenCapacity];
+                lens = new int[AscInitTokenCapacity];
+                t_ascTokStart = starts;
+                t_ascTokLen = lens;
+            }
+
+            int count = 0, i = 0, n = line.Length;
+            while (i < n)
+            {
+                while (i < n && line[i] == ' ') i++;
+                if (i >= n) break;
+                int s = i;
+                while (i < n && line[i] != ' ') i++;
+                if (count == starts.Length)
+                {
+                    Array.Resize(ref starts, count * 2);
+                    Array.Resize(ref lens, count * 2);
+                    t_ascTokStart = starts;
+                    t_ascTokLen = lens;
+                }
+                starts[count] = s;
+                lens[count] = i - s;
+                count++;
+            }
+            return count;
+        }
+
+        /// <summary>token 与字面量序数比较（区分大小写，等价 string ==）</summary>
+        private static bool TokEq(string line, int idx, string lit)
+        {
+            int len = t_ascTokLen[idx];
+            if (len != lit.Length) return false;
+            int s = t_ascTokStart[idx];
+            for (int k = 0; k < len; k++)
+                if (line[s + k] != lit[k]) return false;
+            return true;
+        }
+
+        /// <summary>token 与字面量序数比较（忽略大小写，等价 string.Equals(OrdinalIgnoreCase)）</summary>
+        private static bool TokEqIgnoreCase(string line, int idx, string lit)
+        {
+            int len = t_ascTokLen[idx];
+            if (len != lit.Length) return false;
+            int s = t_ascTokStart[idx];
+            for (int k = 0; k < len; k++)
+            {
+                char a = line[s + k];
+                char b = lit[k];
+                if (a == b) continue;
+                if (char.ToUpperInvariant(a) != char.ToUpperInvariant(b)) return false;
+            }
+            return true;
+        }
+
+        /// <summary>token 是否以给定前缀开头（忽略大小写，等价 StartsWith(OrdinalIgnoreCase)）</summary>
+        private static bool TokStartsWithIgnoreCase(string line, int idx, string prefix)
+        {
+            if (t_ascTokLen[idx] < prefix.Length) return false;
+            int s = t_ascTokStart[idx];
+            for (int k = 0; k < prefix.Length; k++)
+                if (char.ToUpperInvariant(line[s + k]) != char.ToUpperInvariant(prefix[k])) return false;
+            return true;
+        }
+
+        /// <summary>ASC 的 brs/esi 只可能是 "0" 或 "1"</summary>
+        private static bool AscTokIsBit(string line, int idx)
+        {
+            if (t_ascTokLen[idx] != 1) return false;
+            char c = line[t_ascTokStart[idx]];
+            return c == '0' || c == '1';
+        }
+
+        /// <summary>十进制整数（带符号），语义等价 int.TryParse(s, NumberStyles.Integer, InvariantCulture)</summary>
+        private static bool AscParseInt(string line, int idx, out int value)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            int i = s, end = s + len;
+            bool neg = false;
+            if (i < end && (line[i] == '-' || line[i] == '+')) { neg = line[i] == '-'; i++; }
+            long acc = 0;
+            int digits = 0;
+            bool overflow = false;
+            while (i < end && line[i] >= '0' && line[i] <= '9')
+            {
+                acc = acc * 10 + (line[i] - '0');
+                if (acc > 2000000000L) { overflow = true; break; }
+                i++;
+                digits++;
+            }
+            if (!overflow && digits > 0 && i == end)
+            {
+                value = (int)(neg ? -acc : acc);
+                return true;
+            }
+            return int.TryParse(line.Substring(s, len),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        /// <summary>十进制整数（无符号位、默认文化），语义等价 int.TryParse(s, out v)（用于 d/r 后的长度探测）</summary>
+        private static bool AscParseIntDefaultCulture(string line, int idx, out int value)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            int i = s, end = s + len;
+            long acc = 0;
+            int digits = 0;
+            bool overflow = false;
+            while (i < end && line[i] >= '0' && line[i] <= '9')
+            {
+                acc = acc * 10 + (line[i] - '0');
+                if (acc > 2000000000L) { overflow = true; break; }
+                i++;
+                digits++;
+            }
+            if (!overflow && digits > 0 && i == end)
+            {
+                value = (int)acc;
+                return true;
+            }
+            return int.TryParse(line.Substring(s, len), out value);
+        }
+
+        /// <summary>十进制字节（0~255，Invariant），语义等价 byte.TryParse(s, Integer, InvariantCulture)</summary>
+        private static bool AscParseByte(string line, int idx, out byte value)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            int i = s, end = s + len;
+            int acc = 0;
+            int digits = 0;
+            while (i < end && line[i] >= '0' && line[i] <= '9')
+            {
+                acc = acc * 10 + (line[i] - '0');
+                if (acc > 255) break;
+                i++;
+                digits++;
+            }
+            if (digits > 0 && i == end && acc <= 255)
+            {
+                value = (byte)acc;
+                return true;
+            }
+            return byte.TryParse(line.Substring(s, len),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        /// <summary>从 token 的第 skip 个字符起按十进制解析成字节（用于 "CAN7" 这类写法）</summary>
+        private static bool AscParseByteFrom(string line, int idx, int skip, out byte value)
+        {
+            int s = t_ascTokStart[idx] + skip, len = t_ascTokLen[idx] - skip;
+            value = 0;
+            if (len <= 0) return false;
+            int end = s + len;
+            int i = s, acc = 0, digits = 0;
+            while (i < end && line[i] >= '0' && line[i] <= '9')
+            {
+                acc = acc * 10 + (line[i] - '0');
+                if (acc > 255) break;
+                i++;
+                digits++;
+            }
+            if (digits > 0 && i == end && acc <= 255) { value = (byte)acc; return true; }
+            return byte.TryParse(line.Substring(s, len),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        /// <summary>十六进制无符号整数（1~8 位，无前缀/无符号位）</summary>
+        private static bool AscParseHexUIntAt(string line, int start, int hexLen, out uint value)
+        {
+            value = 0;
+            if (hexLen <= 0 || hexLen > 8) return false;
+            ulong acc = 0;
+            for (int k = 0; k < hexLen; k++)
+            {
+                char c = line[start + k];
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else return false;
+                acc = (acc << 4) | (uint)d;
+            }
+            if (acc > uint.MaxValue) return false;
+            value = (uint)acc;
+            return true;
+        }
+
+        /// <summary>十六进制字节（1~2 位），语义等价 byte.TryParse(s, HexNumber, InvariantCulture)</summary>
+        private static bool AscParseHexByte(string line, int idx, out byte value)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            value = 0;
+            if (len <= 0 || len > 2)
+            {
+                // 多于 2 位（例如带前导零的 "00F"）交给框架判定，保持与改造前一致
+                return byte.TryParse(line.Substring(s, len),
+                    System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out value);
+            }
+            int acc = 0;
+            for (int k = 0; k < len; k++)
+            {
+                char c = line[s + k];
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else
+                {
+                    return byte.TryParse(line.Substring(s, len),
+                        System.Globalization.NumberStyles.HexNumber,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out value);
+                }
+                acc = (acc << 4) | d;
+            }
+            value = (byte)acc;
+            return true;
+        }
+
+        /// <summary>十进制定点数（ASC 时间戳形如 123.456789）。
+        /// 用整数尾数 + 精确 10 的幂做一次除法，得到与 double.TryParse 相同的正确舍入结果；
+        /// 指数写法或超长有效数字回退框架解析</summary>
+        private static bool AscParseDouble(string line, int idx, out double value)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            int i = s, end = s + len;
+            bool neg = false;
+            if (i < end && (line[i] == '-' || line[i] == '+')) { neg = line[i] == '-'; i++; }
+
+            long mant = 0;
+            int digits = 0, fracDigits = 0;
+            bool dot = false;
+            while (i < end)
+            {
+                char c = line[i];
+                if (c >= '0' && c <= '9')
+                {
+                    // 有效数字超过 15 位就不再走快路径，避免尾数溢出导舍入差异
+                    if (mant > 900000000000000L) return AscParseDoubleFallback(line, s, len, out value);
+                    mant = mant * 10 + (c - '0');
+                    digits++;
+                    if (dot) fracDigits++;
+                    i++;
+                }
+                else if (c == '.' && !dot)
+                {
+                    dot = true;
+                    i++;
+                }
+                else
+                {
+                    return AscParseDoubleFallback(line, s, len, out value);   // 指数/异常字符
+                }
+            }
+
+            if (digits == 0 || fracDigits > 22) return AscParseDoubleFallback(line, s, len, out value);
+            double v = mant;
+            if (fracDigits > 0) v = v / AscPow10[fracDigits];
+            value = neg ? -v : v;
+            return true;
+        }
+
+        private static bool AscParseDoubleFallback(string line, int start, int len, out double value)
+        {
+            return double.TryParse(line.Substring(start, len),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value);
+        }
+
+        /// <summary>ASC 的 CAN ID（十六进制，允许带 "x"/"X" 扩展帧后缀）</summary>
+        private static bool AscParseCanId(string line, int idx, out uint canId)
+        {
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            canId = 0;
+            if (len <= 0) return false;
+            char last = line[s + len - 1];
+            int hexLen = (last == 'x' || last == 'X') ? len - 1 : len;
+            if (AscParseHexUIntAt(line, s, hexLen, out canId)) return true;
+            // 回退：与原实现完全一致（先去 x 后缀再按 HexNumber 解析）
+            return TryParseAscCanId(line.Substring(s, len), out canId);
+        }
+
+        /// <summary>取 FD 行的数据字节数：优先选与 DLC 对应长度一致的解释（十进制/十六进制都试），
+        /// 都不一致时退回十进制 0~64（兼容个别工具把长度写成十六进制）</summary>
+        private static bool AscParseDataLength(string line, int idx, int expected, out int length)
+        {
+            if (!AscParseInt(line, idx, out length)) return false;
+            if (length == expected) return true;
+
+            int s = t_ascTokStart[idx], len = t_ascTokLen[idx];
+            if (len > 0 && len <= 8 && AscParseHexUIntAt(line, s, len, out uint hexVal) && hexVal <= int.MaxValue)
+            {
+                int asHex = (int)hexVal;
+                if (asHex == expected)
+                {
+                    length = asHex;
+                    return true;
+                }
+            }
+            return length >= 0 && length <= 64;
+        }
+
         /// <summary>解析一行 ASC（经典格式与 CAN FD 扩展格式都支持）；数据转换的 ASC→CSV 也复用这里</summary>
         internal static CanRawMessageRead ParseAscLine(string line, long filePosition)
         {
             try
             {
-                string[] parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 7) return null;
+                int count = TokenizeAscLine(line);
+                if (count < 7) return null;
 
-                if (!double.TryParse(parts[0],
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out double timestampSeconds))
-                    return null;
+                if (!AscParseDouble(line, 0, out double timestampSeconds)) return null;
 
-                // CAN FD 行必须单独解析：Vector 的 FD 格式把通道放在 parts[1]、ID 放在 parts[4]，
+                // CAN FD 行必须单独解析：Vector 的 FD 格式把通道放在 token1、ID 放在 token4，
                 // 而且没有经典格式里的 "d"/"r" 标记（按经典规则解析会取错 ID，并因找不到 "d" 把整行丢掉）
-                if (parts[1].Equals("CANFD", StringComparison.OrdinalIgnoreCase))
-                    return ParseAscFdLine(parts, timestampSeconds, filePosition);
+                if (TokEqIgnoreCase(line, 1, "CANFD"))
+                    return ParseAscFdLineTokens(line, count, timestampSeconds, filePosition);
 
-                if (!TryParseAscCanId(parts[2], out uint canId))
+                if (!AscParseCanId(line, 2, out uint canId))
                     return null;
 
-                // 解析通道号（parts[1]）：Vector ASC 为 1-based 数字，部分工具输出 "CAN1" 前缀；
+                // 解析通道号（token1）：Vector ASC 为 1-based 数字，部分工具输出 "CAN1" 前缀；
                 // 无法解析时默认 1（单通道文件）。此前该列被忽略导致报文 Channel 恒为 0，
                 // 通道配置（BlfChannelId）匹配不上，绘图区无法解码绘制
                 byte channel = 1;
-                if (parts.Length >= 3 && parts[1].Length > 0)
+                if (count >= 3 && t_ascTokLen[1] > 0)
                 {
-                    if (!byte.TryParse(parts[1],
-                        System.Globalization.NumberStyles.Integer,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out channel))
+                    if (!AscParseByte(line, 1, out channel))
                     {
                         channel = 1;
-                        if (parts[1].StartsWith("CAN", StringComparison.OrdinalIgnoreCase))
-                            byte.TryParse(parts[1].Substring(3),
-                                System.Globalization.NumberStyles.Integer,
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                out channel);
+                        if (TokStartsWithIgnoreCase(line, 1, "CAN"))
+                        {
+                            // 与原实现一致：byte.TryParse 失败时 out 会被置 0
+                            if (!AscParseByteFrom(line, 1, 3, out channel)) channel = 0;
+                        }
                     }
                 }
 
                 int dataLengthIndex = -1;
-                for (int i = 3; i < parts.Length - 1; i++)
+                for (int i = 3; i < count - 1; i++)
                 {
-                    if ((parts[i] == "d" || parts[i] == "r") &&
-                        i + 1 < parts.Length &&
-                        int.TryParse(parts[i + 1], out _))
+                    if ((TokEq(line, i, "d") || TokEq(line, i, "r")) &&
+                        i + 1 < count &&
+                        AscParseIntDefaultCulture(line, i + 1, out _))
                     {
                         dataLengthIndex = i + 1;
                         break;
                     }
                 }
 
-                if (dataLengthIndex < 0 || dataLengthIndex >= parts.Length) return null;
-                if (!int.TryParse(parts[dataLengthIndex], out int dataLength) || dataLength < 0 || dataLength > 64)
+                if (dataLengthIndex < 0 || dataLengthIndex >= count) return null;
+                if (!AscParseInt(line, dataLengthIndex, out int dataLength) || dataLength < 0 || dataLength > 64)
                     return null;
-                if (dataLengthIndex + dataLength >= parts.Length) return null;
+                if (dataLengthIndex + dataLength >= count) return null;
 
                 byte[] datas = new byte[dataLength];
                 for (int i = 0; i < dataLength; i++)
                 {
-                    if (!byte.TryParse(parts[dataLengthIndex + 1 + i],
-                        System.Globalization.NumberStyles.HexNumber,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out datas[i]))
+                    if (!AscParseHexByte(line, dataLengthIndex + 1 + i, out datas[i]))
                         return null;
                 }
 
@@ -359,44 +682,35 @@ namespace PCAN_Client
         /// dlc 是十六进制码、len 是十进制字节数（如 "f 64" = DLC 15 → 64 字节），用两者互相校验来定位数据起点，
         /// 这样即使 ID 后面带符号名占位也能解析。
         /// </summary>
-        private static CanRawMessageRead ParseAscFdLine(string[] parts, double timestampSeconds, long filePosition)
+        private static CanRawMessageRead ParseAscFdLineTokens(string line, int count, double timestampSeconds, long filePosition)
         {
-            if (parts.Length < 10) return null;
+            if (count < 10) return null;
 
-            if (!TryParseAscCanId(parts[4], out uint canId))
+            if (!AscParseCanId(line, 4, out uint canId))
                 return null;
 
-            // 通道号：parts[2]（Vector 为 1-based 数字；解析不了时按单通道 1 处理，与经典格式保持一致）
-            if (!byte.TryParse(parts[2],
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out byte channel))
+            // 通道号：token2（Vector 为 1-based 数字；解析不了时按单通道 1 处理，与经典格式保持一致）
+            if (!AscParseByte(line, 2, out byte channel))
                 channel = 1;
 
             // ID 之后可能还有符号名：向后找 <brs> <esi> <dlc> <len> 四连，靠 DLC↔长度一致性排除误判
-            for (int i = 5; i + 3 < parts.Length; i++)
+            for (int i = 5; i + 3 < count; i++)
             {
-                if (!IsAscBitToken(parts[i]) || !IsAscBitToken(parts[i + 1])) continue;
-                if (!byte.TryParse(parts[i + 2],
-                    System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out byte dlc) || dlc > 15) continue;
+                if (!AscTokIsBit(line, i) || !AscTokIsBit(line, i + 1)) continue;
+                if (!AscParseHexByte(line, i + 2, out byte dlc) || dlc > 15) continue;
 
                 int expected = BLFAPI.GetFdDataLength(dlc);
-                if (!TryParseAscDataLength(parts[i + 3], expected, out int dataLength)) continue;
+                if (!AscParseDataLength(line, i + 3, expected, out int dataLength)) continue;
                 if (dataLength < 0 || dataLength > 64) continue;
 
                 int dataStart = i + 4;
-                if (dataStart + dataLength > parts.Length) continue;
+                if (dataStart + dataLength > count) continue;
 
                 byte[] datas = new byte[dataLength];
                 bool ok = true;
                 for (int k = 0; k < dataLength; k++)
                 {
-                    if (!byte.TryParse(parts[dataStart + k],
-                        System.Globalization.NumberStyles.HexNumber,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out datas[k]))
+                    if (!AscParseHexByte(line, dataStart + k, out datas[k]))
                     {
                         ok = false;
                         break;
@@ -417,7 +731,7 @@ namespace PCAN_Client
             return null;
         }
 
-        /// <summary>解析 ASC 的 CAN ID（十六进制）；部分工具给扩展帧加 "x"/"X" 后缀，这里一并容忍</summary>
+        /// <summary>解析 ASC 的 CAN ID（十六进制）；部分工具给扩展帧加 "x"/"X" 后缀，这里一并容忍（快路径的回退实现）</summary>
         private static bool TryParseAscCanId(string token, out uint canId)
         {
             if (!string.IsNullOrEmpty(token) &&
@@ -429,35 +743,6 @@ namespace PCAN_Client
                 System.Globalization.NumberStyles.HexNumber,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out canId);
-        }
-
-        /// <summary>ASC 里 brs/esi 只可能是 0 或 1</summary>
-        private static bool IsAscBitToken(string token)
-        {
-            return token == "0" || token == "1";
-        }
-
-        /// <summary>
-        /// 取 FD 行的数据字节数：优先选与 DLC 对应长度一致的解释（十进制/十六进制都试），
-        /// 都不一致时退回十进制 0~64（兼容个别工具把长度写成十六进制的情况）。
-        /// </summary>
-        private static bool TryParseAscDataLength(string token, int expected, out int length)
-        {
-            if (!int.TryParse(token,
-                System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out length))
-                return false;
-            if (length == expected) return true;
-            if (int.TryParse(token,
-                    System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out int asHex) && asHex == expected)
-            {
-                length = asHex;
-                return true;
-            }
-            return length >= 0 && length <= 64;
         }
 
         #endregion

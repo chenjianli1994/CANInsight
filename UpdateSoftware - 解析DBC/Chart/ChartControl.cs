@@ -29,7 +29,12 @@ namespace PCAN_Client
 
         // 渲染缩放因子（默认1.0，截图时按比例放大线宽/字体）
         private float _renderScale = 1.0f;
-        public void SetRenderScale(float scale) { _renderScale = Math.Max(scale, 0.1f); }
+        public void SetRenderScale(float scale)
+        {
+            _renderScale = Math.Max(scale, 0.1f);
+            _sceneValid = false;   // 线宽/字体/点径都随缩放变化，静态层必须重建
+            SmartInvalidate();
+        }
         private struct PenKey : IEquatable<PenKey>
         {
             public int ColorArgb;
@@ -90,10 +95,72 @@ namespace PCAN_Client
         private double? _contextMenuMeasureX = null;
         private Point _measurementMenuLocation;
 
-        // 帧率控制：避免过度重绘导致CPU占用过高
-        private DateTime _lastPaintTime = DateTime.MinValue;
-        private bool _needsRepaint = false; // 是否需要重绘标记
-        private System.Windows.Forms.Timer _frameTimer; // 帧率控制定时器
+        // ===== 静态层缓存（H6-A）=====
+        /// <summary>静态层位图：背景 + 面板底 + 坐标轴/刻度/标签 + 灰分隔线 + 颜色线/通道名 + 曲线 + 数据点</summary>
+        private Bitmap _sceneBitmap;
+        /// <summary>位图当前分辨率（必须等于绘制 Graphics 的 DPI，否则文字度量随 DPI 漂移）</summary>
+        private float _sceneDpiX = 96f;
+        /// <summary>位图当前分辨率（纵向）</summary>
+        private float _sceneDpiY = 96f;
+        /// <summary>建图时使用的缓存键；与当前帧的键不等即重建</summary>
+        private SceneKey _sceneKey;
+        /// <summary>位图内容是否对应当前 _sceneKey</summary>
+        private bool _sceneValid;
+        /// <summary>静态层重建次数（诊断：探针断言命中/重建）</summary>
+        private int _sceneBuildCount;
+        /// <summary>位图分配失败后的旁路标志：首次失败即置位，此后一律直绘，不再每帧重试分配（契约 §7.1-2）</summary>
+        private bool _sceneBypass;
+        /// <summary>缓存位图像素上限（4K≈8.3M 仍可缓存）</summary>
+        private const long SceneCacheMaxPixels = 12000000L;
+
+        // ===== 帧调度（H6-B）=====
+        /// <summary>帧定时器判定节拍（ms）：只判定"是否到了开画时刻"，不对应实际帧率</summary>
+        private const int FrameTimerIntervalMs = 10;
+        /// <summary>空闲帧最小间隔（ms，与改造前的 67ms 定时器一致，零回归）</summary>
+        private const int IdleFrameMinGapMs = 67;
+        /// <summary>交互帧最小间隔（ms，拖动/缩放期间）</summary>
+        private const int DragFrameMinGapMs = 20;
+        /// <summary>墙钟计时（Stopwatch 不受系统时间调整影响），用于节流闸门</summary>
+        private readonly System.Diagnostics.Stopwatch _frameClock = System.Diagnostics.Stopwatch.StartNew();
+        /// <summary>上次真正发起重绘的墙钟时刻（ms）；初值取大负数，保证启动后首帧立即开画</summary>
+        private long _lastFrameTickMs = -100000;
+        /// <summary>是否需要重绘标记（唯一的重绘请求来源，由帧定时器消费）</summary>
+        private bool _needsRepaint = false;
+        /// <summary>本帧跳过节拍等待（仅 immediate=true 置位；拖动路径不得使用）</summary>
+        private bool _forceFrame;
+        /// <summary>帧定时器：常驻运行（不再 Pause/Resume），实际帧率由上面的 Stopwatch 闸门决定</summary>
+        private System.Windows.Forms.Timer _frameTimer;
+
+        /// <summary>
+        /// 静态层缓存键：任一字段变化都必须重建位图。覆盖层状态（测线位置/框选框）不在键内——它们每帧直画。
+        /// 观测式键（不给出入口装事件）是唯一不漏的做法，另有 InvalidateScene() 显式兜底。
+        /// </summary>
+        private struct SceneKey : IEquatable<SceneKey>
+        {
+            public int Width;
+            public int Height;
+            public float RenderScale;
+            public float DpiX;
+            public float DpiY;
+            public double XMin;
+            public double XMax;
+            public bool AutoScroll;
+            public int LeftMargin;
+            public bool IsXAxisSelected;
+            public int ChannelSignature;
+
+            /// <summary>逐字段精确比较（float/double 用 ==：位不一致即变化，宁可多重建一帧也不贴脏像素）</summary>
+            public bool Equals(SceneKey o)
+            {
+                return Width == o.Width && Height == o.Height && RenderScale == o.RenderScale
+                    && DpiX == o.DpiX && DpiY == o.DpiY && XMin == o.XMin && XMax == o.XMax
+                    && AutoScroll == o.AutoScroll && LeftMargin == o.LeftMargin
+                    && IsXAxisSelected == o.IsXAxisSelected && ChannelSignature == o.ChannelSignature;
+            }
+
+            public override bool Equals(object obj) { return obj is SceneKey && Equals((SceneKey)obj); }
+            public override int GetHashCode() { return Width ^ (Height << 16) ^ ChannelSignature; }
+        }
 
         // Y轴区域左右拖拽调整相关
         private int _leftMarginWidth = 115;
@@ -110,16 +177,23 @@ namespace PCAN_Client
             InitializeMeasurementMenu();
             InitializeMeasurementMenuTimer();
 
-            // 初始化帧率控制定时器（67ms ≈ 15fps，精确匹配目标帧率）
+            // 初始化帧调度定时器：常驻运行、节拍固定 10ms，真正的帧间隔由 Stopwatch 闸门决定
+            // 时序（WM_TIMER 粒度约 15.6ms，故闸门值需取 15.6 的整倍上取）：
+            //   交互（拖动/缩放）闸门 20ms ⇒ 实际 ≈31.2ms（≈32fps）
+            //   空闲闸门 67ms ⇒ 实际 ≈78ms（与改造前 67ms 定时器一致，零回归）
+            //   鼠标按下→首帧 ≈19~22ms，最坏 ≈37ms
             _frameTimer = new System.Windows.Forms.Timer();
-            _frameTimer.Interval = 67; // 15fps对应的间隔
+            _frameTimer.Interval = FrameTimerIntervalMs;
             _frameTimer.Tick += (s, e) =>
             {
-                if (_needsRepaint)
-                {
-                    _needsRepaint = false;
-                    Invalidate();
-                }
+                if (!_needsRepaint) return;
+                long minGap = IsInteracting() ? DragFrameMinGapMs : IdleFrameMinGapMs;
+                long now = _frameClock.ElapsedMilliseconds;
+                if (!_forceFrame && now - _lastFrameTickMs < minGap) return;
+                _forceFrame = false;
+                _lastFrameTickMs = now;
+                _needsRepaint = false;
+                Invalidate();
             };
             _frameTimer.Start();
         }
@@ -182,6 +256,12 @@ namespace PCAN_Client
         {
             if (disposing)
             {
+                if (_sceneBitmap != null)
+                {
+                    _sceneBitmap.Dispose();
+                    _sceneBitmap = null;
+                }
+                _sceneValid = false;
                 _frameTimer?.Stop();
                 _frameTimer?.Dispose();
                 _axisFont?.Dispose();
@@ -210,48 +290,21 @@ namespace PCAN_Client
         }
 
         /// <summary>
-        /// 智能重绘：通过帧率控制定时器调度，避免过度重绘
-        /// 用户交互操作（拖拽、缩放等）直接重绘，数据更新走帧率控制
+        /// 请求重绘（唯一的失效入口）。所有失效入口（内部 22 处 + 外部 15 处）统一走这里，
+        /// 由常驻帧定时器按 Stopwatch 墙钟闸门节拍：交互中最小间隔 20ms、空闲最小间隔 67ms。
+        /// immediate=true 只表示"跳过本帧的节拍等待"（≤10ms），不再同步发起重绘；拖动路径禁止使用。
         /// </summary>
         public void SmartInvalidate(bool immediate = false)
         {
-            if (immediate || _isDragging || _isZooming || _isYAxisDragging || _isDraggingMeasureLine1 || _isDraggingMeasureLine2)
-            {
-                // 交互操作时立即重绘，保证流畅性
-                _lastPaintTime = DateTime.Now;
-                Invalidate();
-            }
-            else
-            {
-                // 数据更新时通过帧率控制，降低CPU占用
-                _needsRepaint = true;
-            }
+            _needsRepaint = true;
+            if (immediate) _forceFrame = true;
         }
 
-        /// <summary>
-        /// 暂停帧率定时器（交互操作期间避免与直接Invalidate竞争）
-        /// </summary>
-        private void PauseFrameTimer()
+        /// <summary>是否处于交互中（决定帧间隔取交互闸门还是空闲闸门）</summary>
+        private bool IsInteracting()
         {
-            if (_frameTimer != null && _frameTimer.Enabled)
-            {
-                _frameTimer.Stop();
-            }
-        }
-
-        /// <summary>
-        /// 恢复帧率定时器
-        /// </summary>
-        private void ResumeFrameTimer()
-        {
-            // 只在没有进行任何交互操作时才恢复
-            if (_frameTimer != null && !_frameTimer.Enabled &&
-                !_isDragging && !_isZooming && !_isYAxisDragging &&
-                !_isDraggingMeasureLine1 && !_isDraggingMeasureLine2)
-            {
-                _frameTimer.Start();
-                _needsRepaint = true; // 恢复后触发一次刷新
-            }
+            return _isDragging || _isZooming || _isYAxisDragging
+                || _isDraggingMeasureLine1 || _isDraggingMeasureLine2 || _isDraggingLeftMargin;
         }
 
         public void SetChannels(List<ChannelData> channels)
@@ -260,6 +313,7 @@ namespace PCAN_Client
             {
                 _channels = channels;
             }
+            InvalidateScene();
             OnMeasureLinesChanged?.Invoke();
             SmartInvalidate(true); // 设置通道时立即刷新
         }
@@ -295,15 +349,14 @@ namespace PCAN_Client
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-            DrawBackground(g);
-            DrawPanels(g);
-            DrawMeasureLines(g);
-            DrawZoomRectangle(g);
+            // 静态层（背景 + 面板）走复用离屏位图：命中只贴图；覆盖层（测线 + 框选框）每帧直画
+            RenderScene(g);
+            RenderOverlay(g);
         }
 
         /// <summary>
         /// 离屏渲染到指定 Graphics（用于报告截图）。
-        /// 调用前可临时放大 this.Size 以获得高清输出；复用 OnPaint 的全部绘制逻辑。
+        /// 调用前可临时放大 this.Size 以获得高清输出。
         /// </summary>
         public void RenderTo(Graphics g)
         {
@@ -311,10 +364,202 @@ namespace PCAN_Client
             // 始终开启抗锯齿，确保曲线平滑清晰
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            // 故意不走静态层缓存：离屏渲染只画一帧，无复用价值（3200×1920 会白占约 24MB），
+            // 且直绘路径与改造前逐字节一致（报告截图不允许有任何像素差）
+            DrawStaticContent(g);
+            RenderOverlay(g);
+        }
+
+        /// <summary>静态层内容（背景 + 面板）。缓存与直绘共用；禁止读取覆盖层状态。</summary>
+        private void DrawStaticContent(Graphics g)
+        {
             DrawBackground(g);
             DrawPanels(g);
+        }
+
+        /// <summary>覆盖层（测线 + 框选框）。每帧直画，顺序与改造前一致。</summary>
+        private void RenderOverlay(Graphics g)
+        {
             DrawMeasureLines(g);
             DrawZoomRectangle(g);
+        }
+
+        /// <summary>
+        /// 画静态层：命中缓存则贴图；键变化则重建整屏后贴图；旁路条件满足则直绘。
+        /// 命中时不做任何绘制工作，只做一次 1:1 像素拷贝。
+        /// </summary>
+        private void RenderScene(Graphics g)
+        {
+            // 旁路：分配失败过（_sceneBypass，避免每帧重试分配）、报告截图放大（_renderScale>1.01f）、
+            // 超出像素上限、控件尚未布局（尺寸为 0 时 Bitmap 构造必然抛异常）
+            if (_sceneBypass || _renderScale > 1.01f || (long)Width * (long)Height > SceneCacheMaxPixels
+                || Width <= 0 || Height <= 0)
+            {
+                DrawStaticContent(g);
+                return;
+            }
+
+            SceneKey key = BuildSceneKey(g);
+            if (!_sceneValid || !_sceneKey.Equals(key))
+            {
+                if (!EnsureSceneBitmap(key))
+                {
+                    DrawStaticContent(g);
+                    return;
+                }
+                Graphics sg = Graphics.FromImage(_sceneBitmap);
+                try
+                {
+                    // 必须先清成"刚分配"状态：GDI+ 抗锯齿填充会把首行/首列画成半透明像素，
+                    // 复用同一张位图重画时这些像素会在上一次的内容上二次混合（实测每重建一次
+                    // 首行 1000 + 首列 779 个像素漂移），清底后重建与"新分配+首建"逐字节一致。
+                    sg.Clear(Color.Transparent);
+                    // 位图 Graphics 的 DPI 取自位图本身（已在 EnsureSceneBitmap 里 SetResolution），
+                    // 故这里绘制出的文字度量与屏幕直绘一致
+                    sg.SmoothingMode = SmoothingMode.AntiAlias;
+                    sg.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                    DrawStaticContent(sg);
+                }
+                finally
+                {
+                    sg.Dispose();
+                }
+                _sceneKey = key;
+                _sceneValid = true;
+                _sceneBuildCount++;
+            }
+
+            // 贴图用显式 Pixel 单位 + 显式目标矩形：消除"位图 DPI 必须等于屏幕 DPI"的隐式依赖。
+            // 位图尺寸与控件尺寸已由键相等保证，此处是 1:1 像素拷贝（不缩放）。
+            System.Diagnostics.Debug.Assert(_sceneBitmap.Width == Width && _sceneBitmap.Height == Height,
+                "静态层位图尺寸与控件尺寸不一致，贴图会被缩放");
+            // 必须用 SourceCopy（整块替换）：GDI+ 抗锯齿填充会把位图首行/首列边缘画成半透明像素，
+            // 若用默认的 SourceOver，重复贴图会把这些像素与上一帧结果二次混合（实测每帧固定 1779 个
+            // 像素漂移：首行 1000 + 首列 779），静态层就不再与直绘逐字节一致；替换语义下重复贴图幂等。
+            CompositingMode prevCompositing = g.CompositingMode;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            try
+            {
+                g.DrawImage(_sceneBitmap, new Rectangle(0, 0, Width, Height),
+                    0, 0, _sceneBitmap.Width, _sceneBitmap.Height, GraphicsUnit.Pixel);
+            }
+            finally
+            {
+                g.CompositingMode = prevCompositing;
+            }
+        }
+
+        /// <summary>按当前观测状态构造缓存键（覆盖所有影响静态层像素的输入）</summary>
+        private SceneKey BuildSceneKey(Graphics g)
+        {
+            SceneKey k = new SceneKey();
+            k.Width = Width;
+            k.Height = Height;
+            k.RenderScale = _renderScale;
+            k.DpiX = g.DpiX;
+            k.DpiY = g.DpiY;
+            k.XMin = _globalXMin;
+            k.XMax = _globalXMax;
+            k.AutoScroll = _autoScroll;
+            k.LeftMargin = _leftMarginWidth;
+            k.IsXAxisSelected = _isXAxisSelected;
+            k.ChannelSignature = ComputeChannelSignature();
+            return k;
+        }
+
+        /// <summary>
+        /// 可见通道签名（覆盖 CF/CRA 对 ChannelData 的直写）。
+        /// 只读 _channels 不加 _lockObj：调用方与 SetChannels 同在 UI 线程。
+        /// </summary>
+        private int ComputeChannelSignature()
+        {
+            if (_channels == null) return 0;
+            int h = 17, visible = 0;
+            for (int i = 0; i < _channels.Count; i++)
+            {
+                ChannelData ch = _channels[i];
+                if (ch == null || !ch.Visible) continue;
+                visible++;
+                h = h * 31 + (ch.Name != null ? ch.Name.GetHashCode() : 0);
+                h = h * 31 + ch.Color.ToArgb();
+                h = h * 31 + ch.LineWidth;
+                h = h * 31 + ch.DotSize;
+                h = h * 31 + ch.YMin.GetHashCode();
+                h = h * 31 + ch.YMax.GetHashCode();
+                h = h * 31 + (ch.IsYAxisSelected ? 1 : 0) + (ch.IsHighlighted ? 2 : 0);
+                h = h * 31 + ch.DataVersion;
+                // Y 轴标签直接由 (枚举值, 描述) 决定，只哈希 Count 会漏掉"改描述/换枚举值"导致的重建
+                // （Dictionary 枚举顺序变化会多触发一次重建，只多一帧开销，可接受）
+                h = h * 31 + HashEnumDefinitions(ch.EnumDefinitions);
+            }
+            return h * 31 + visible;
+        }
+
+        /// <summary>枚举定义内容哈希（有序 key/value 逐个混合；null/空返回 0）</summary>
+        private static int HashEnumDefinitions(Dictionary<double, string> definitions)
+        {
+            if (definitions == null || definitions.Count == 0) return 0;
+            int h = definitions.Count;
+            foreach (var kvp in definitions)
+            {
+                h = h * 31 + kvp.Key.GetHashCode();
+                h = h * 31 + (kvp.Value != null ? kvp.Value.GetHashCode() : 0);
+            }
+            return h;
+        }
+
+        /// <summary>确保静态层位图尺寸/分辨率与键匹配；分配失败返回 false（并置旁路标志）。</summary>
+        private bool EnsureSceneBitmap(SceneKey key)
+        {
+            if (_sceneBitmap != null && _sceneBitmap.Width == key.Width && _sceneBitmap.Height == key.Height
+                && _sceneDpiX == key.DpiX && _sceneDpiY == key.DpiY) return true;
+            if (_sceneBitmap != null)
+            {
+                _sceneBitmap.Dispose();
+                _sceneBitmap = null;
+            }
+            Bitmap bmp = null;
+            try
+            {
+                bmp = new Bitmap(key.Width, key.Height, PixelFormat.Format32bppArgb);
+                if (key.DpiX >= 1f && key.DpiY >= 1f) bmp.SetResolution(key.DpiX, key.DpiY);
+                _sceneBitmap = bmp;
+                _sceneDpiX = key.DpiX;
+                _sceneDpiY = key.DpiY;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // new Bitmap 成功但 SetResolution 抛异常时 bmp 尚未被字段持有，必须在此释放，
+                // 否则每帧泄漏一块整屏位图（评审 B-7）
+                bmp?.Dispose();
+                // 首次失败后置旁路标志：此后一律直绘，不再每帧"一次异常 + 一次大块分配"（契约 §7.1-2）
+                _sceneBypass = true;
+                _sceneValid = false;
+                System.Diagnostics.Debug.WriteLine("[ChartControl] 静态层位图分配失败，退回直绘: " + ex.Message);
+                return false;
+            }
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            // 尺寸变化会改变面板布局（且位图也要换尺寸），显式失效后按新尺寸开画
+            _sceneValid = false;
+            SmartInvalidate();
+        }
+
+        /// <summary>声明"静态层内容已变"（仅失效，不发起重绘）。</summary>
+        public void InvalidateScene()
+        {
+            _sceneValid = false;
+        }
+
+        /// <summary>通道数据/外观被直接改写后调用：静态层失效 + 请求一帧。</summary>
+        public void InvalidateChannels()
+        {
+            _sceneValid = false;
+            SmartInvalidate();
         }
 
         private void DrawBackground(Graphics g)
@@ -842,7 +1087,7 @@ namespace PCAN_Client
                         {
                             clickedChannel.Color = colorDialog.Color;
                             OnChannelColorChanged?.Invoke(clickedChannel);
-                            Invalidate();
+                            SmartInvalidate();   // 颜色在通道签名内，键变化自动重建静态层
                         }
                     }
                 }
@@ -880,7 +1125,6 @@ namespace PCAN_Client
                     if (Math.Abs(e.X - screenX1) < 10)
                     {
                         _isDraggingMeasureLine1 = true;
-                        PauseFrameTimer();
                         _isXAxisSelected = false;
                         lock (_lockObj)
                         {
@@ -890,7 +1134,7 @@ namespace PCAN_Client
                             }
                         }
                         _selectedChannel = null;
-                        Invalidate();
+                        SmartInvalidate();   // 取消Y轴选中会改变轴笔颜色，键变化自动重建静态层
                         return;
                     }
                 }
@@ -901,7 +1145,6 @@ namespace PCAN_Client
                     if (Math.Abs(e.X - screenX2) < 10)
                     {
                         _isDraggingMeasureLine2 = true;
-                        PauseFrameTimer();
                         _isXAxisSelected = false;
                         lock (_lockObj)
                         {
@@ -911,7 +1154,7 @@ namespace PCAN_Client
                             }
                         }
                         _selectedChannel = null;
-                        Invalidate();
+                        SmartInvalidate();   // 取消Y轴选中会改变轴笔颜色，键变化自动重建静态层
                         return;
                     }
                 }
@@ -920,7 +1163,6 @@ namespace PCAN_Client
                 if (ModifierKeys == Keys.Control)
                 {
                     _isZooming = true;
-                    PauseFrameTimer();
                     _zoomStart = e.Location;
                     _zoomRect = new Rectangle();
                     return;
@@ -939,22 +1181,19 @@ namespace PCAN_Client
                         clickedChannel.IsYAxisSelected = true;
                         _selectedChannel = clickedChannel;
                         _isYAxisDragging = true;
-                        PauseFrameTimer();
                         _lastMousePos = e.Location;
                     }
-                    Invalidate();
+                    SmartInvalidate();   // Y轴选中/高亮变化进通道签名，键变化自动重建静态层
                     OnChannelClicked?.Invoke(clickedChannel);
                 }
                 else if (_isXAxisSelected)
                 {
                     _isDragging = true;
-                    PauseFrameTimer();
                     _lastMousePos = e.Location;
                 }
                 else
                 {
                     _isDragging = true;
-                    PauseFrameTimer();
                     _lastMousePos = e.Location;
                 }
             }
@@ -970,7 +1209,7 @@ namespace PCAN_Client
                 int paddingRight = 20;
                 Rectangle plotArea = new Rectangle(paddingLeft, 10, Width - paddingLeft - paddingRight, Height - 50);
                 _measureLine1X = ScreenToValueX(e.X, plotArea);
-                Invalidate();
+                SmartInvalidate();   // 测线属覆盖层，不改静态层
                 OnMeasureLinesChanged?.Invoke();
                 return;
             }
@@ -981,7 +1220,7 @@ namespace PCAN_Client
                 int paddingRight = 20;
                 Rectangle plotArea = new Rectangle(paddingLeft, 10, Width - paddingLeft - paddingRight, Height - 50);
                 _measureLine2X = ScreenToValueX(e.X, plotArea);
-                Invalidate();
+                SmartInvalidate();   // 测线属覆盖层，不改静态层
                 OnMeasureLinesChanged?.Invoke();
                 return;
             }
@@ -989,7 +1228,7 @@ namespace PCAN_Client
             if (_isDraggingLeftMargin)
             {
                 _leftMarginWidth = Math.Max(_graySeparatorAbsX + 40, Math.Min(300, _dragStartMarginWidth + (e.X - _dragStartMarginX)));
-                Invalidate();
+                SmartInvalidate();   // 左边距在缓存键内，拖到新宽度时静态层会自动重建
                 return;
             }
 
@@ -1002,7 +1241,7 @@ namespace PCAN_Client
                 _selectedChannel.YMin += yDelta;
                 _selectedChannel.YMax += yDelta;
                 _lastMousePos = e.Location;
-                Invalidate();
+                SmartInvalidate();   // YMin/YMax 在通道签名内，静态层按需重建
             }
             else if (_isDragging)
             {
@@ -1021,7 +1260,7 @@ namespace PCAN_Client
                 }
                 _autoScrollManuallyDisabled = true;  // 拖动过程中禁止自动恢复
 
-                Invalidate();
+                SmartInvalidate();   // X 范围/AutoScroll 在缓存键内，静态层按需重建
             }
             else if (_isZooming)
             {
@@ -1030,7 +1269,7 @@ namespace PCAN_Client
                     Math.Min(_zoomStart.Y, e.Y),
                     Math.Abs(e.X - _zoomStart.X),
                     Math.Abs(e.Y - _zoomStart.Y));
-                Invalidate();
+                SmartInvalidate();   // 框选框属覆盖层，不改静态层
             }
             else
             {
@@ -1054,14 +1293,14 @@ namespace PCAN_Client
             if (_isDraggingLeftMargin)
             {
                 _isDraggingLeftMargin = false;
-                Invalidate();
+                SmartInvalidate();
                 return;
             }
 
             if (_isDraggingMeasureLine1)
             {
                 _isDraggingMeasureLine1 = false;
-                ResumeFrameTimer();
+                SmartInvalidate();   // 交互结束补一帧（原恢复帧定时器的调用点）
                 OnMeasureLinesChanged?.Invoke();
                 return;
             }
@@ -1069,7 +1308,7 @@ namespace PCAN_Client
             if (_isDraggingMeasureLine2)
             {
                 _isDraggingMeasureLine2 = false;
-                ResumeFrameTimer();
+                SmartInvalidate();   // 交互结束补一帧（原恢复帧定时器的调用点）；CF 随后会改 SplitterDistance
                 OnMeasureLinesChanged?.Invoke();
                 return;
             }
@@ -1078,7 +1317,7 @@ namespace PCAN_Client
             {
                 _isYAxisDragging = false;
                 _selectedChannel = null;
-                ResumeFrameTimer();
+                SmartInvalidate();   // 交互结束补一帧（原恢复帧定时器的调用点）
             }
             else if (_isZooming)
             {
@@ -1097,13 +1336,12 @@ namespace PCAN_Client
                 _isZooming = false;
                 _zoomRect = new Rectangle();
                 _autoScrollManuallyDisabled = true;  // 缩放后禁止自动恢复
-                Invalidate();
-                ResumeFrameTimer();
+                SmartInvalidate();   // 原「立即重绘 + 恢复帧定时器」合并为一次请求：定时器常驻后只需请求一帧
             }
 
             _isDragging = false;
             _autoScrollManuallyDisabled = true;  // 拖动后禁止自动恢复，防止视图回跳
-            ResumeFrameTimer();
+            SmartInvalidate();   // 交互结束补一帧（原恢复帧定时器的调用点）
         }
 
         protected override void OnDoubleClick(EventArgs e)
@@ -1121,7 +1359,7 @@ namespace PCAN_Client
                     clickedChannel.ResetYRange();
                     clickedChannel.IsYAxisSelected = false;
                     _selectedChannel = null;
-                    Invalidate();
+                    SmartInvalidate();   // Y 范围/选中状态在通道签名内，键变化自动重建静态层
                 }
             }
             else if (mouseArgs.Button == MouseButtons.Right)
@@ -1138,7 +1376,7 @@ namespace PCAN_Client
                     if (Math.Abs(mouseArgs.X - screenX1) < 10 && plotArea.Contains(mouseArgs.Location))
                     {
                         _measureLine1X = null;
-                        Invalidate();
+                        SmartInvalidate();   // 测线属覆盖层，不改静态层
                         OnMeasureLinesChanged?.Invoke();
                         return;
                     }
@@ -1150,7 +1388,7 @@ namespace PCAN_Client
                     if (Math.Abs(mouseArgs.X - screenX2) < 10 && plotArea.Contains(mouseArgs.Location))
                     {
                         _measureLine2X = null;
-                        Invalidate();
+                        SmartInvalidate();   // 测线属覆盖层，不改静态层
                         OnMeasureLinesChanged?.Invoke();
                         return;
                     }
@@ -1206,7 +1444,7 @@ namespace PCAN_Client
                 
                 selectedChannel.YMin = center - newRange / 2;
                 selectedChannel.YMax = center + newRange / 2;
-                Invalidate();
+                SmartInvalidate();   // Y 范围在通道签名内，键变化自动重建静态层
             }
             else
             {
@@ -1231,7 +1469,7 @@ namespace PCAN_Client
                     _globalXMin = _globalXMax - newRange;
                 }
 
-                Invalidate();
+                SmartInvalidate();   // X 范围/AutoScroll 在缓存键内，键变化自动重建静态层
             }
         }
 
@@ -1252,7 +1490,7 @@ namespace PCAN_Client
                 }
             }
             OnMeasureLinesChanged?.Invoke();
-            Invalidate();
+            SmartInvalidate();   // 视野/选中/测线全部复位，缓存键自然变化
         }
 
         public void SetAutoScroll(bool enabled)
@@ -1260,6 +1498,9 @@ namespace PCAN_Client
             _autoScroll = enabled;
             _autoScrollManuallyDisabled = !enabled;
             OnAutoScrollChanged?.Invoke(enabled);
+            // AutoScroll 决定 Y 范围来源（GetYRange vs GetYRangeInXRange），静态层必须重建
+            InvalidateScene();
+            SmartInvalidate();
         }
 
         public bool IsAutoScrollEnabled()
@@ -1301,8 +1542,8 @@ namespace PCAN_Client
                 _globalXMax = currentTime;
                 _globalXMin = currentTime - scrollRange;
             }
-            // 不在此处直接 Invalidate()，由调用方通过 SmartInvalidate 统一走帧率控制
-            _needsRepaint = true;
+            // 不在此处直接重绘，由调用方（或本方法末尾）通过 SmartInvalidate 统一走帧调度
+            SmartInvalidate();
         }
 
         public void AutoFitView()
@@ -1349,7 +1590,7 @@ namespace PCAN_Client
                 _isXAxisSelected = false;
             }
 
-            Invalidate();
+            SmartInvalidate();   // 视野/Y 范围/选中变化，缓存键自然变化
         }
 
         private ChannelData GetSelectedChannel()
@@ -1408,7 +1649,7 @@ namespace PCAN_Client
                             ch.IsYAxisSelected = false;
                         }
                         _selectedChannel = null;
-                        Invalidate();
+                        SmartInvalidate();   // X 轴选中态在缓存键内
                         return null;
                     }
 
@@ -1688,7 +1929,7 @@ namespace PCAN_Client
                 _measureLine1X = _measureLine2X;
                 _measureLine2X = xValue;
             }
-            Invalidate();
+            SmartInvalidate();   // 测线属覆盖层，不改静态层
             OnMeasureLinesChanged?.Invoke();
         }
 
@@ -1702,7 +1943,7 @@ namespace PCAN_Client
         {
             _measureLine1X = null;
             _measureLine2X = null;
-            Invalidate();
+            SmartInvalidate();   // 测线属覆盖层，不改静态层
             OnMeasureLinesChanged?.Invoke();
         }
 
