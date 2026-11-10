@@ -174,6 +174,9 @@ namespace PCAN_Client
         internal ToolStripButton _btnPause;
         internal ToolStripButton _btnClear;
         internal ToolStripButton _btnDbcOnly;
+        internal ToolStripButton _btnPlaybackStart;   // 回放：开始
+        internal ToolStripButton _btnPlaybackPause;   // 回放：暂停/继续
+        internal ToolStripButton _btnPlaybackStop;    // 回放：停止
         internal bool _dbcOnlyMode = false;
 
         // === CAN通道列排序状态 ===
@@ -753,6 +756,44 @@ namespace PCAN_Client
             _pauseUpdate = paused;
             _btnPause.Checked = paused;
             _btnPause.Text = paused ? "Paused" : "Pause";
+        }
+
+        /// <summary>流式回放中：增量追加报文并保持"跟随最新"（列表随读取滚动，只渲染最新若干帧，开销恒定）。
+        /// 用户手动按了列表"Pause"时尊重其暂停，不强行刷新。</summary>
+        internal void AppendPlaybackFrames(List<CanRawMessage> frames)
+        {
+            if (frames == null || frames.Count == 0) return;
+            if (InvokeRequired) { BeginInvoke(new Action<List<CanRawMessage>>(AppendPlaybackFrames), frames); return; }
+            BatchImportRawMessages(frames);
+            if (_pauseUpdate) return;        // 用户已冻结列表：数据仍然入账，只是不刷新视图
+            _msgDisplayRefreshPending = true;
+            RefreshMessageDisplay();
+        }
+
+        /// <summary>流式回放收尾：追加剩余报文并冻结显示全部帧供回看（与改造前的收尾行为一致，但不再丢弃过程中已显示的内容）</summary>
+        internal void FinishPlaybackFrames(List<CanRawMessage> frames)
+        {
+            if (frames == null || frames.Count == 0) return;
+            if (InvokeRequired) { BeginInvoke(new Action<List<CanRawMessage>>(FinishPlaybackFrames), frames); return; }
+            BatchImportRawMessages(frames);
+            _flatRowsDirty = true;
+            SetPauseState(true);
+            ForceRefreshDisplay();
+        }
+
+        /// <summary>回放状态变化时同步报文列表工具栏的开始/暂停/停止按钮</summary>
+        internal void SyncPlaybackButtons(bool active, bool paused)
+        {
+            if (_btnPlaybackStart == null) return;
+            _btnPlaybackStart.Enabled = !active;
+            if (_btnPlaybackPause != null)
+            {
+                _btnPlaybackPause.Text = paused ? "继续" : "暂停";
+                _btnPlaybackPause.Image = ToolbarIcons.Get(paused ? "play" : "pause");
+                _btnPlaybackPause.Enabled = active;
+            }
+            if (_btnPlaybackStop != null)
+                _btnPlaybackStop.Enabled = active;
         }
 
         /// <summary>重建扁平行列表：消息行 + 展开的信号行</summary>
@@ -1858,6 +1899,45 @@ namespace PCAN_Client
                 RefreshMessageDisplay();
             };
             _toolbarPanel.Items.Add(_btnDbcOnly);
+
+            // === 回放控制（与「曲线绘制」页共用同一套播放状态）===
+            _btnPlaybackStart = new ToolStripButton("开始", ToolbarIcons.Get("play"), (s, e) =>
+            {
+                var cf = chartFromShow;
+                if (cf == null || cf.IsDisposed)
+                {
+                    MessageBox.Show("请先在「曲线绘制」页加载报文文件，再回到此处开始播放。", "提示",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                cf.ExternalPlay();
+                SyncPlaybackButtons(cf.IsPlaybackActive, cf.IsPlaybackPaused);
+            });
+            _btnPlaybackStart.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnPlaybackStart.ToolTipText = "开始播放（曲线页回放）";
+            _toolbarPanel.Items.Add(_btnPlaybackStart);
+
+            _btnPlaybackPause = new ToolStripButton("暂停", ToolbarIcons.Get("pause"), (s, e) =>
+            {
+                var cf = chartFromShow;
+                if (cf == null || cf.IsDisposed) return;
+                cf.ExternalPauseOrResume();
+                SyncPlaybackButtons(cf.IsPlaybackActive, cf.IsPlaybackPaused);
+            });
+            _btnPlaybackPause.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnPlaybackPause.ToolTipText = "暂停/继续（从暂停位置接着播放，不丢报文）";
+            _toolbarPanel.Items.Add(_btnPlaybackPause);
+
+            _btnPlaybackStop = new ToolStripButton("停止", ToolbarIcons.Get("stop"), (s, e) =>
+            {
+                var cf = chartFromShow;
+                if (cf != null && !cf.IsDisposed) cf.ExternalStop();
+                SyncPlaybackButtons(false, false);
+            });
+            _btnPlaybackStop.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
+            _btnPlaybackStop.ToolTipText = "停止播放";
+            _toolbarPanel.Items.Add(_btnPlaybackStop);
+            SyncPlaybackButtons(false, false);
 
             this.Controls.Add(_toolbarPanel);
         }

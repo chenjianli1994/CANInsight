@@ -110,6 +110,19 @@ namespace PCAN_Client
         private Label _measurementTitleLabel;
         private readonly object _lockObj = new object();
         private System.Windows.Forms.Timer _loadingRefreshTimer;
+        // ===== H6-D：测量线变化处理链节流（合并式，80ms 一次）=====
+        /// <summary>网格刷新节拍（ms）：拖动测线时左侧网格 Value/Delta 与两个时间输入框的最长滞后</summary>
+        private const int GridRefreshIntervalMs = 80;
+        /// <summary>待刷新标志：测线回调只置位，由常驻的 _gridRefreshTimer 合并执行（回调不重启定时器）</summary>
+        private bool _gridRefreshPending;
+        /// <summary>网格刷新节拍定时器：构造函数创建并 Start，常驻运行；FormClosed/Dispose 里 Stop+Dispose</summary>
+        private System.Windows.Forms.Timer _gridRefreshTimer;
+        /// <summary>SplitterDistance 已应用的目标值（-1=尚未应用）：只在 380↔290 翻转时真正赋值</summary>
+        private int _gridSplitterTargetApplied = -1;
+        /// <summary>诊断计数器：实际执行的网格刷新次数（契约 §4-B-2 验收口径：拖动 10s ≤12 次/秒 ⇒ 累计 ≤120 次）</summary>
+        private int _gridRefreshCount;
+        /// <summary>诊断用：网格刷新累计次数（调试器/反射读取，供验收核对节流有效性）</summary>
+        internal int GridRefreshCount { get { return _gridRefreshCount; } }
         private double _loadingBatchMaxTime = 0;
         private int _loadingProcessedCount = 0;
         private int _lastPopupShownCount = -1;       // 上次弹窗显示的数量，避免闪烁
@@ -151,6 +164,15 @@ namespace PCAN_Client
         private Color _playbackModeColor = Color.Gray;            // 播放时确定的模式颜色
         private System.Windows.Forms.Timer _playbackTimer;       // 回放定时器
         private double _playbackSpeed = 0;                       // 播放倍速（0=最快）
+        // ===== 回放暂停/继续状态（开始按钮充当"暂停/继续"开关） =====
+        private volatile bool _playbackActive;                    // 回放进行中（含已暂停）
+        private volatile bool _playbackPaused;                    // 已暂停（点继续从原位置接着走）
+        private bool _playbackUsesTimer;                          // 本次回放由 _playbackTimer 推进（倍速模式）
+        private bool _playbackPausable;                           // 本次运行可暂停（仅文件回放；实时采集不可暂停）
+        private DateTime _lastStreamingFlushUtc = DateTime.MinValue; // 流式回放：上次把报文推给主窗口列表的时间
+        private double _pauseStartedWallTime;                     // 暂停时刻的 wall clock（秒），续播时补偿虚拟时间
+        /// <summary>流式回放边读边推报文的节流间隔（ms）：过密会拖慢解析，过疏列表滚动手感差</summary>
+        private const int StreamingFlushIntervalMs = 300;
         private int _playbackRawIndex = 0;                       // _rawMessages 中的当前播放位置
         private double _playbackStartWallTime = 0;               // 开始播放时的 wall clock（秒）
         private Dictionary<int, Dictionary<uint, List<(CAN_Data.Signal signal, int channelIndex)>>> _canIdSignalMap; // 播放用查找表（外层key=BusChannelIndex，内层key=CAN ID）
@@ -186,17 +208,48 @@ namespace PCAN_Client
             }
         }
 
-        private void ShowStreamingRecordedFrames()
+        /// <summary>取出已累积的流式报文（无则返回 null）</summary>
+        private List<CanRawMessage> TakeStreamingFrames()
         {
-            List<CanRawMessage> frames;
             lock (_streamingRecordedLock)
             {
-                if (_streamingRecordedFrames.Count == 0) return;
-                frames = new List<CanRawMessage>(_streamingRecordedFrames);
+                if (_streamingRecordedFrames.Count == 0) return null;
+                var frames = new List<CanRawMessage>(_streamingRecordedFrames);
                 _streamingRecordedFrames.Clear();
+                return frames;
             }
-            // 必须在UI线程调用（内部会操作UI控件）
-            Main.main.DisplayFramesInScrollMode(frames);
+        }
+
+        /// <summary>把流式回放累积的报文交给主窗口报文列表。
+        /// finish=true：收尾（追加剩余报文并冻结供回看）；false：整表替换
+        /// （倍速模式边播边用 RecordCanMessage 已显示，收尾用记录副本整表刷新一次即可）。</summary>
+        private void ShowStreamingRecordedFrames(bool finish)
+        {
+            var frames = TakeStreamingFrames();
+            if (frames == null) return;
+            var m = Main.main;
+            if (m == null) return;
+            // 两个入口内部都会自行切到 UI 线程
+            if (finish) m.FinishPlaybackFrames(frames);
+            else m.DisplayFramesInScrollMode(frames);
+        }
+
+        /// <summary>流式回放过程中按节流间隔把已累积报文增量推给主窗口列表（force=true 走收尾语义）</summary>
+        private void FlushStreamingFramesToMain(bool force)
+        {
+            if (!_streamingMode) return;
+            if (!force)
+            {
+                DateTime now = DateTime.UtcNow;
+                if ((now - _lastStreamingFlushUtc).TotalMilliseconds < StreamingFlushIntervalMs) return;
+                _lastStreamingFlushUtc = now;
+                var frames = TakeStreamingFrames();
+                if (frames == null) return;
+                var m = Main.main;
+                if (m != null) m.AppendPlaybackFrames(frames);
+                return;
+            }
+            ShowStreamingRecordedFrames(true);
         }
 
         /// <summary>
@@ -284,6 +337,12 @@ namespace PCAN_Client
             this._playbackTimer = new System.Windows.Forms.Timer();
             this._playbackTimer.Interval = 20;  // 50fps
             this._playbackTimer.Tick += _playbackTimer_Tick;
+            // 初始化测线处理链节流定时器（H6-D）：常驻 80ms 合并刷新；
+            // 回调只置 _gridRefreshPending，绝不重启本定时器 ⇒ 拖动期间每 80ms 刷新一次（合并，不是防抖）
+            this._gridRefreshTimer = new System.Windows.Forms.Timer();
+            this._gridRefreshTimer.Interval = GridRefreshIntervalMs;
+            this._gridRefreshTimer.Tick += _gridRefreshTimer_Tick;
+            this._gridRefreshTimer.Start();
             // 加载已保存的流式阈值
             int savedThreshold = PCAN_Client.Properties.Settings.Default.StreamingThresholdMB;
             _streamingThresholdMB = (savedThreshold >= 50) ? savedThreshold : 150;
@@ -308,38 +367,9 @@ namespace PCAN_Client
             {
                 ShowMessagesAtTime(xValue);
             };
-            // 测量线变化时更新通道网格的当前值和差值
-            this._chartControl.OnMeasureLinesChanged += () =>
-            {
-                if (InvokeRequired)
-                    Invoke(new Action(() =>
-                    {
-                        UpdateChannelGridValues();
-                        // 有两条竖线时，自动填充时间输入框
-                        var x1 = _chartControl.MeasureLineX1;
-                        var x2 = _chartControl.MeasureLineX2;
-                        if (x1.HasValue && x2.HasValue)
-                        {
-                            double t1 = Math.Min(x1.Value, x2.Value);
-                            double t2 = Math.Max(x1.Value, x2.Value);
-                            _txtStartTime.Text = t1.ToString("F1");
-                            _txtEndTime.Text = t2.ToString("F1");
-                        }
-                    }));
-                else
-                {
-                    UpdateChannelGridValues();
-                    var x1 = _chartControl.MeasureLineX1;
-                    var x2 = _chartControl.MeasureLineX2;
-                    if (x1.HasValue && x2.HasValue)
-                    {
-                        double t1 = Math.Min(x1.Value, x2.Value);
-                        double t2 = Math.Max(x1.Value, x2.Value);
-                        _txtStartTime.Text = t1.ToString("F1");
-                        _txtEndTime.Text = t2.ToString("F1");
-                    }
-                }
-            };
+            // 测量线变化时更新通道网格的当前值和差值。
+            // H6-D：事件回调只"标脏"，真正的网格/时间框刷新由常驻的 _gridRefreshTimer 按 80ms 合并执行
+            this._chartControl.OnMeasureLinesChanged += OnChartMeasureLinesChanged;
             // 绘图区选中通道(Y轴区域点击) → 左侧信号列表同步选中该行
             this._chartControl.OnChannelClicked += (channel) =>
             {
@@ -1285,8 +1315,9 @@ namespace PCAN_Client
             _toolAutoScroll.Checked = _chartControl != null && _chartControl.IsAutoScrollEnabled();
             // 开始/停止的 Enabled 互斥即运行状态反馈(图标绿/红语义色辅助)
             UpdateModeToggleDisplay();
-            _speedComboBox.Enabled = _btnStart.Enabled && !_isLoadingFile;
-            _toolSpeedComboBox.Enabled = _btnStart.Enabled && !_isLoadingFile;
+            // 倍速只在"未在回放"时可改：回放中开始按钮仍可用，但它是暂停/继续开关
+            _speedComboBox.Enabled = !_playbackActive && !_isLoadingFile;
+            _toolSpeedComboBox.Enabled = !_playbackActive && !_isLoadingFile;
 
             if (_speedComboBox.SelectedIndex >= 0 &&
                 _speedComboBox.SelectedIndex < _toolSpeedComboBox.Items.Count &&
@@ -1412,7 +1443,8 @@ namespace PCAN_Client
             if (channel != null)
             {
                 channel.Visible = isChecked;
-                _chartControl.SmartInvalidate();
+                // 直写了 Visible（静态层签名含可见通道集合）：失效静态层并请求一帧
+                _chartControl.InvalidateChannels();
             }
         }
 
@@ -1458,25 +1490,94 @@ namespace PCAN_Client
             _chartControl.SmartInvalidate(); // 使用智能重绘，通过帧率控制降低CPU
         }
 
+        /// <summary>
+        /// 测线变化回调（H6-D 处理链节流的第一段）：只记录"有待刷新"，绝不做实际刷新。
+        /// - 合并而非防抖：不重启 _gridRefreshTimer（那样整段拖动都不刷新、松手才跳一次）；
+        /// - trailing flush：最后一次回调后 ≤1 个 tick（80ms）内必有一次刷新，且刷新时读取的是
+        ///   那一刻的最新线位置（见 _gridRefreshTimer_Tick / UpdateGridMeasureTimeTexts），数值与最终线位置一致；
+        /// - 保留 InvokeRequired 分支：ChartControl.SetChannels 也会触发该事件，而本窗体多处用 Invoke 包裹调用点。
+        /// 可接受性：用户视线内的竖线与 "Δt = x.xxx s" 标签在图表覆盖层，每帧直画不受本节流影响；
+        /// 滞后的只有左侧网格 Value/Delta 与两个时间输入框（≤80ms）。
+        /// </summary>
+        private void OnChartMeasureLinesChanged()
+        {
+            if (IsDisposed) return; // 窗体销毁中丢弃回调
+            if (InvokeRequired)
+            {
+                Invoke(new Action(OnChartMeasureLinesChanged));
+                return;
+            }
+            _gridRefreshPending = true;
+        }
+
+        /// <summary>
+        /// 测线节拍（H6-D）：首行判 IsDisposed；只有 pending 时才执行一次刷新并清标志。
+        /// 坐标一律在刷新瞬间从 ChartControl 读取（最新线位置），不使用回调时的快照。
+        /// </summary>
+        private void _gridRefreshTimer_Tick(object sender, EventArgs e)
+        {
+            if (IsDisposed) return;
+            if (!_gridRefreshPending) return;
+            _gridRefreshPending = false;
+            _gridRefreshCount++; // 诊断计数器：验收口径见 GridRefreshCount
+            UpdateChannelGridValues();
+            UpdateGridMeasureTimeTexts();
+        }
+
+        /// <summary>把两条测线的时间（按小→大）填进工具栏时间输入框；坐标取调用瞬间的最新值，两线不齐备时不填（与改造前一致）</summary>
+        private void UpdateGridMeasureTimeTexts()
+        {
+            double? x1 = _chartControl.MeasureLineX1;
+            double? x2 = _chartControl.MeasureLineX2;
+            if (!x1.HasValue || !x2.HasValue) return;
+            double t1 = Math.Min(x1.Value, x2.Value);
+            double t2 = Math.Max(x1.Value, x2.Value);
+            _txtStartTime.Text = t1.ToString("F1");
+            _txtEndTime.Text = t2.ToString("F1");
+        }
+
+        /// <summary>停止并释放测线节拍定时器（幂等：FormClosed 与 Dispose 可能先后调用）</summary>
+        private void StopGridRefreshTimer()
+        {
+            if (_gridRefreshTimer == null) return;
+            _gridRefreshTimer.Stop();
+            _gridRefreshTimer.Tick -= _gridRefreshTimer_Tick;
+            _gridRefreshTimer.Dispose();
+            _gridRefreshTimer = null;
+        }
+
+        /// <summary>
+        /// 差值列显隐 + 通道网格宽度目标值锁存（H6-D 第 3 条）。
+        /// 目标值：两线齐备 → 380，否则 → 290（两个方向都必须写；只写 380 会让 Delta 列隐藏后网格永久变宽＝布局回归）。
+        /// 只在目标值变化时才真正赋值：拖动过程中 hasTwoLines 不变 ⇒ 每个 tick 都不改 SplitterDistance
+        /// （改它会触发 Panel2 里绘图控件 resize ⇒ 整屏重建）；翻转的那一 tick 必须应用，否则 Delta 列显示但网格仍 290。
+        /// 为什么不直接读 ChartControl 的拖动状态：_isDraggingMeasureLine1/2 是 ChartControl 私有字段
+        /// （契约 §3.1 未开放访问器，该文件属分片1 写集），故按"目标值锁存"实现——它比"拖动期跳过"更严格
+        /// （连拖动期发生的 380↔290 翻转也不会重复 resize），且保证最终宽度一定正确。
+        /// </summary>
+        private void UpdateGridSplitterForDeltaColumn(bool hasTwoLines)
+        {
+            if (_channelGrid.Columns.Contains("Delta"))
+            {
+                if (_channelGrid.Columns["Delta"].Visible != hasTwoLines)
+                    _channelGrid.Columns["Delta"].Visible = hasTwoLines;
+            }
+
+            int target = hasTwoLines ? 380 : 290;
+            if (target == _gridSplitterTargetApplied) return;
+            _gridSplitterTargetApplied = target;
+            if (splitContainer.SplitterDistance != target)
+                splitContainer.SplitterDistance = target;
+        }
+
         private void UpdateChannelGridValues()
         {
             double? redLineX = _chartControl.MeasureLineX1;
             double? greenLineX = _chartControl.MeasureLineX2;
             bool hasTwoLines = redLineX.HasValue && greenLineX.HasValue && greenLineX.Value != redLineX.Value;
 
-            // 有两条竖线时显示差值列并加宽通道网格，否则隐藏差值列并缩窄
-            if (_channelGrid.Columns.Contains("Delta"))
-            {
-                if (_channelGrid.Columns["Delta"].Visible != hasTwoLines)
-                {
-                    _channelGrid.Columns["Delta"].Visible = hasTwoLines;
-                    splitContainer.SplitterDistance = hasTwoLines ? 380 : 290;
-                }
-            }
-            else if (hasTwoLines)
-            {
-                splitContainer.SplitterDistance = 380;
-            }
+            // 有两条竖线时显示差值列并加宽通道网格，否则隐藏差值列并缩窄（H6-D：目标值锁存，不每次 resize）
+            UpdateGridSplitterForDeltaColumn(hasTwoLines);
 
             for (int i = 0; i < _channelGrid.Rows.Count; i++)
             {
@@ -1484,20 +1585,15 @@ namespace PCAN_Client
                 var channel = row.Tag as ChannelData;
                 if (channel == null) continue;
 
-                double currentValue;
-                if (redLineX.HasValue)
-                {
-                    var nearest = _chartControl.FindNearestPoint(channel, redLineX.Value);
-                    currentValue = nearest != null ? nearest.Y : channel.LastValue;
-                }
-                else
-                    currentValue = channel.LastValue;
-
+                // 红线查询只做一次：Value 列与 Delta 列共用（两线时 FindNearestPoint 3N→2N）
+                ChannelPoint redNearest = redLineX.HasValue
+                    ? _chartControl.FindNearestPoint(channel, redLineX.Value)
+                    : null;
+                double currentValue = redNearest != null ? redNearest.Y : channel.LastValue;
                 row.Cells["Value"].Value = FormatGridValueWithEnum(channel, currentValue);
 
                 if (hasTwoLines)
                 {
-                    var redNearest = _chartControl.FindNearestPoint(channel, redLineX.Value);
                     var greenNearest = _chartControl.FindNearestPoint(channel, greenLineX.Value);
                     if (redNearest != null && greenNearest != null)
                     {
@@ -1551,11 +1647,22 @@ namespace PCAN_Client
 
         private void ChartFrom_FormClosed(object sender, FormClosedEventArgs e)
         {
+            // H6-D：停掉测线节拍定时器并释放（Tick 里的 IsDisposed 只防刷新，不负责释放）
+            StopGridRefreshTimer();
+
             CAN_Data.DbcHelper.ChartShowOpenFlag = false;
 
             // 主动触发GC回收大块内存（gen2）
             GC.Collect();
             GC.WaitForPendingFinalizers();
+        }
+
+        /// <summary>释放测线节拍定时器（覆盖"窗体未关闭就被 Dispose"的路径；StopGridRefreshTimer 幂等）</summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                StopGridRefreshTimer();
+            base.Dispose(disposing);
         }
 
         private void ChartFrom_FormClosing(object sender, FormClosingEventArgs e)
@@ -1669,6 +1776,15 @@ namespace PCAN_Client
             _cancelPlayback = false;
             if (_isLoadingFile) return;
 
+            // 回放进行中：开始按钮充当"暂停/继续"开关（媒体播放器语义；停止仍由停止按钮负责）
+            if (_playbackActive)
+            {
+                if (!_playbackPausable) return;      // 实时采集不可暂停（与改造前一致：此时开始按钮本就不可点）
+                if (_playbackPaused) ResumePlayback();
+                else PausePlayback();
+                return;
+            }
+
             // 开始前的模式校验(放在任何状态变更之前):分支以 RealTimeDataSta(用户选的模式)为准,
             // _isFileMode 只表示"是否已加载/已勾选报文文件",不再由它决定跑实时还是回放——
             // 否则报文模式未加载文件时会弹"实时模式"警告,连着硬件时更会直接按实时采集。
@@ -1690,11 +1806,14 @@ namespace PCAN_Client
                 return;
             }
 
-            _btnStart.Enabled = false;
-            _btnStop.Enabled = true;
+            // 启动回放/采集：开始按钮转为"暂停"，停止按钮可用
+            _playbackActive = true;
+            _playbackPaused = false;
+            _playbackUsesTimer = false;
+            _playbackPausable = !RealTimeDataSta;   // 只有文件回放支持暂停
             _speedComboBox.Enabled = false;
             _toolSpeedComboBox.Enabled = false;
-            SyncToolbarStateFromLegacyControls();
+            UpdatePlayButtons();
             _statusLabel.Text = "状态: 运行中";
             _statusLabel.ForeColor = Color.Green;
 
@@ -1795,7 +1914,7 @@ namespace PCAN_Client
                     {
                         _chartControl.SetChannels(Channels);
                         _chartControl.SetGlobalXRange(0, Math.Max(_fileMaxTime, 1));
-                        _chartControl.Invalidate();
+                        _chartControl.SmartInvalidate();
                         SetReportStartTime(0);
                     }));
 
@@ -1803,6 +1922,7 @@ namespace PCAN_Client
                     {
                         try
                         {
+                            var playbackSw = System.Diagnostics.Stopwatch.StartNew();   // 最快模式总耗时（用于日志定位性能）
                             double maxTime = 0;
                             long msgCount = 0;
                             long lastUpdateMsgCount = 0;
@@ -1810,6 +1930,19 @@ namespace PCAN_Client
 
                             foreach (var rawMsg in EnumerateRawMessages())
                             {
+                                // 暂停闸门：后台 Task 推进到此处挂起（不停读文件、不丢帧位置），
+                                // 点"继续"清标志后从同一条报文接着走。
+                                // 注：不能带 RunStatus 条件——"最快"分支本就不置 RunStatus（只有倍速/实时分支置），
+                                // 带上它会让最快模式下的暂停形同虚设（图标变了但照旧读）。
+                                // 停止/关闭窗口由 _btnStop_Click 置 _cancelPlayback 放行，避免 Task 永久挂起。
+                                if (_playbackPaused && !_cancelPlayback)
+                                {
+                                    AppLog.Info("[回放] 读取循环挂起：已暂停（已读 " + msgCount + " 条）");
+                                    while (_playbackPaused && !_cancelPlayback)
+                                        System.Threading.Thread.Sleep(20);
+                                    AppLog.Info("[回放] 读取循环恢复" + (_cancelPlayback ? "（收到停止请求）" : "（继续播放）"));
+                                }
+
                                 msgCount++;
                                 // 流式模式：记录最新的5w帧原始报文(原始帧记录不依赖DBC解码,放在通道匹配之前,未配置通道的报文也要保留到报文列表)
                                 if (isStreaming)
@@ -1874,10 +2007,13 @@ namespace PCAN_Client
                                         // 用户未关闭自动滑动时才扩展X轴
                                         if (_chartControl.IsAutoScrollEnabled() && maxTime > 0)
                                             _chartControl.SetGlobalXRange(0, maxTime + 1);
-                                        _chartControl.Invalidate();
+                                        _chartControl.SmartInvalidate();
                                         UpdateChannelGridValues();
                                     }));
                                 }
+
+                                // 流式模式：边读边把报文增量推给主窗口报文列表（原来只在结束/停止时一次性显示，导致列表全程空白）
+                                FlushStreamingFramesToMain(false);
 
                                 // 检查停止请求（流式模式 >150MB）
                                 if (isStreaming && _cancelPlayback)
@@ -1885,17 +2021,18 @@ namespace PCAN_Client
                                     _cancelPlayback = false;
                                     Invoke(new Action(() =>
                                     {
-                                        _chartControl.Invalidate();
+                                        _chartControl.SmartInvalidate();
                                         UpdateChannelGridValues();
                                         _statusLabel.Text = "状态: 已停止播放";
                                         _statusLabel.ForeColor = Color.Red;
-                                        _btnStart.Enabled = true;
-                                        _btnStop.Enabled = false;
+                                        // 停止：开始按钮复位、停止变灰，并把剩余报文补推给主窗口列表
+                                        _playbackActive = false;
+                                        _playbackPaused = false;
+                                        _playbackUsesTimer = false;
+                                        UpdatePlayButtons();
                                         _speedComboBox.Enabled = true;
                                         _toolSpeedComboBox.Enabled = true;
-                                        // 流式模式：停止后将记录的5w帧显示到Main.cs界面（需在UI线程调用）
-                                        ShowStreamingRecordedFrames();
-                                        SyncToolbarStateFromLegacyControls();
+                                        FlushStreamingFramesToMain(true);
                                     }));
                                     return;
                                 }
@@ -1922,15 +2059,29 @@ namespace PCAN_Client
                                     _chartControl.SetAutoScroll(false);
                                     _btnAutoScroll.Text = "自动滑动";
                                 }
-                                _chartControl.Invalidate();
+                                _chartControl.SmartInvalidate();
 
                                 UpdateChannelGridValues();
 
                                 _statusLabel.Text = $"状态: 播放完成 ({totalMsgCount}条报文)";
                                 _statusLabel.ForeColor = Color.Blue;
-                                _btnStart.Enabled = true;
-                                _btnStop.Enabled = false;
-                                SyncToolbarStateFromLegacyControls();
+                                // 性能日志：帧数/总耗时/速率/模式/文件类型，便于定位"回放慢"到底慢在解析还是别处
+                                {
+                                    long ms = playbackSw.ElapsedMilliseconds;
+                                    string extTag = "?";
+                                    if (_logFilePaths != null && _logFilePaths.Count > 0)
+                                        extTag = System.IO.Path.GetExtension(_logFilePaths[0]);
+                                    else if (!string.IsNullOrEmpty(_streamingFilePath))
+                                        extTag = System.IO.Path.GetExtension(_streamingFilePath);
+                                    AppLog.Info("[回放] 最快模式完成: " + msgCount + " 帧, 用时 " + ms + " ms ("
+                                        + (ms > 0 ? (msgCount * 1000L / ms) : 0) + " 帧/s), 模式="
+                                        + (isStreaming ? "流式" : "内存") + ", 类型=" + extTag);
+                                }
+                                // 播放结束：开始按钮复位为"开始"，停止按钮变灰（不显示暂停图标）
+                                _playbackActive = false;
+                                _playbackPaused = false;
+                                _playbackUsesTimer = false;
+                                UpdatePlayButtons();
                                 SetReportEndTime(GetMaxChannelTime());
                                 // 缓存模式：切回内存模式
                                 FinalizeCachePlayback(totalMsgCount);
@@ -1938,13 +2089,10 @@ namespace PCAN_Client
                                 AutoResetPlaceholderRangesOnce();
                             }));
 
-                            // 流式模式：播放完毕后将记录的5w帧显示到Main.cs界面
+                            // 流式模式：把尾部剩余报文补推给主窗口列表（追加语义，不覆盖已滚动显示的内容）
                             if (isStreaming)
                             {
-                                Invoke(new Action(() =>
-                                {
-                                    ShowStreamingRecordedFrames();
-                                }));
+                                FlushStreamingFramesToMain(true);
                             }
                             // 内存/缓存模式（含首次流式转缓存后的再次回放）：最快路径回放过程不写报文列表，
                             // 完成后把内存数据批量显示到Main（否则只有首次流式回放有报文，再次回放列表空白）
@@ -1995,6 +2143,7 @@ namespace PCAN_Client
                         _playbackTimer.Interval = 100;
 
                     _playbackTimer.Start();
+                    _playbackUsesTimer = true;   // 暂停时停掉定时器即停在当前位置，继续时重启
                     RunStatus = true;
                     UpdateModeIndicator();
                 }
@@ -2087,8 +2236,9 @@ namespace PCAN_Client
                 if (ch != null) ch.DotSize = _globalDotSize;
             }
             // 走帧率调度而非强制同步重绘：长时间运行/大量信号时单帧绘制本身可能耗时数十毫秒，
-            // 立即 Invalidate 会与正在排队的帧竞争，表现为下拉框"卡住"
-            _chartControl.SmartInvalidate();
+            // 立即 Invalidate 会与正在排队的帧竞争，表现为下拉框"卡住"；
+            // 上面直写了各通道 DotSize（静态层签名含 DotSize）⇒ 走 InvalidateChannels 同时失效静态层
+            _chartControl.InvalidateChannels();
         }
 
         /// <summary>全局线宽改变:应用到所有通道并刷新绘图(新通道创建时继承_globalLineWidth)</summary>
@@ -2102,8 +2252,9 @@ namespace PCAN_Client
             {
                 if (ch != null) ch.LineWidth = _globalLineWidth;
             }
-            // 同点大小：交给帧率调度，避免在绘制繁忙时强制同步重绘造成界面无响应
-            _chartControl.SmartInvalidate();
+            // 同点大小：交给帧率调度，避免在绘制繁忙时强制同步重绘造成界面无响应；
+            // 上面直写了各通道 LineWidth（静态层签名含 LineWidth）⇒ 走 InvalidateChannels 同时失效静态层
+            _chartControl.InvalidateChannels();
         }
 
         /// <summary>
@@ -2303,7 +2454,7 @@ namespace PCAN_Client
                 // 仍有消息但被 virtualTime 挡住了，等下次 Tick
                 // 仅当未耗尽时才滚动
                 _chartControl.AutoScrollToLatest(scrollToTime);
-                _chartControl.Invalidate();
+                _chartControl.SmartInvalidate();
                 UpdateChannelGridValues();
             }
 
@@ -2324,14 +2475,17 @@ namespace PCAN_Client
                     ? (_cacheWhileStreaming ? (_rawMessages?.Count ?? 0) : _streamingTotalCount)
                     : (_rawMessages?.Count ?? 0);
 
-                // 流式模式：播放完毕后将记录的5w帧显示到Main.cs界面
+                // 流式模式：播放完毕后把记录副本整表刷新到主窗口（倍速模式边播边显示，收尾对齐一次）
                 if (_streamingMode)
-                    ShowStreamingRecordedFrames();
+                    ShowStreamingRecordedFrames(false);
 
                 Invoke(new Action(() =>
                 {
-                    _btnStart.Enabled = true;
-                    _btnStop.Enabled = false;
+                    // 播放结束：开始按钮复位为"开始"，停止按钮变灰
+                    _playbackActive = false;
+                    _playbackPaused = false;
+                    _playbackUsesTimer = false;
+                    UpdatePlayButtons();
                     _statusLabel.Text = $"状态: 播放完成 ({totalMsgCount}条报文)";
                     _statusLabel.ForeColor = Color.Blue;
                     _btnAutoScroll.Text = "自动滑动";
@@ -2765,12 +2919,100 @@ namespace PCAN_Client
             _modeIndicatorLabel.ForeColor = _playbackModeColor;
         }
 
+        /// <summary>暂停回放：开始按钮变"继续"，再点从原位置接着播放（不丢报文位置）</summary>
+        internal void PausePlayback()
+        {
+            if (!_playbackActive || _playbackPaused) return;
+            _playbackPaused = true;
+            AppLog.Info("[回放] 暂停请求：active=" + _playbackActive + " pausable=" + _playbackPausable + " usesTimer=" + _playbackUsesTimer);
+            // 倍速模式：停掉定时器即停在当前位置；"最快"是后台 Task，靠循环里的暂停闸门挂起
+            if (_playbackUsesTimer)
+            {
+                _playbackTimer.Stop();
+                _pauseStartedWallTime = Environment.TickCount / 1000.0;   // 记下暂停时刻
+            }
+            _statusLabel.Text = "状态: 已暂停（点「继续」从原位置接着播放）";
+            _statusLabel.ForeColor = Color.DarkOrange;
+            UpdatePlayButtons();
+        }
+
+        /// <summary>继续回放：从暂停前的位置接着走</summary>
+        internal void ResumePlayback()
+        {
+            if (!_playbackActive || !_playbackPaused) return;
+            _playbackPaused = false;
+            if (_playbackUsesTimer)
+            {
+                // 倍速模式按"真实经过时间 × 倍速"推进虚拟时间：必须把暂停时长从起点补偿掉，
+                // 否则续播会瞬间跳过「暂停时长 × 倍速」的数据（表现为丢报文/曲线跳变）
+                double pausedSeconds = Environment.TickCount / 1000.0 - _pauseStartedWallTime;
+                if (pausedSeconds > 0) _playbackStartWallTime += pausedSeconds;
+                _playbackTimer.Start();
+            }
+            _statusLabel.Text = "状态: 运行中";
+            _statusLabel.ForeColor = Color.Green;
+            UpdatePlayButtons();
+        }
+
+        /// <summary>按当前回放状态刷新开始/停止按钮外观（开始→暂停→继续，播放结束回到开始）</summary>
+        private void UpdatePlayButtons()
+        {
+            // 只有文件回放才把开始按钮变成"暂停/继续"开关；实时采集进行中保持不可点（与改造前一致）
+            bool toggle = _playbackActive && _playbackPausable;
+            string text = toggle ? (_playbackPaused ? "继续" : "暂停") : "开始";
+            string icon = (toggle && !_playbackPaused) ? "pause" : "play";
+
+            _btnStart.Text = text;
+            _btnStart.Enabled = toggle || !_playbackActive;
+            _btnStop.Enabled = _playbackActive;
+
+            if (_toolStart != null)
+            {
+                _toolStart.Text = text;
+                _toolStart.Image = ToolbarIcons.Get(icon);
+                _toolStart.ToolTipText = !toggle ? "开始播放或绘制"
+                    : (_playbackPaused ? "继续播放" : "暂停播放（再点继续）");
+            }
+            if (_toolStop != null)
+                _toolStop.Enabled = _playbackActive;
+
+            SyncToolbarStateFromLegacyControls();
+            // 主窗口报文列表工具栏的回放按钮同步
+            var m = Main.main;
+            if (m != null) m.SyncPlaybackButtons(toggle, _playbackPaused);
+        }
+
+        // ===== 给主窗口（报文列表工具栏）用的外部回放控制入口 =====
+        /// <summary>外部"开始"：不在回放时启动播放（与点开始按钮等价）</summary>
+        internal void ExternalPlay() { if (!_playbackActive) _btnStart_Click(null, null); }
+
+        /// <summary>外部"暂停/继续"：回放中切换暂停状态</summary>
+        internal void ExternalPauseOrResume()
+        {
+            if (!_playbackActive) return;
+            if (_playbackPaused) ResumePlayback(); else PausePlayback();
+        }
+
+        /// <summary>外部"停止"</summary>
+        internal void ExternalStop() { if (_playbackActive || RunStatus) _btnStop_Click(null, null); }
+
+        /// <summary>当前回放是否进行中（含已暂停）</summary>
+        internal bool IsPlaybackActive { get { return _playbackActive; } }
+        /// <summary>当前回放是否已暂停</summary>
+        internal bool IsPlaybackPaused { get { return _playbackPaused; } }
+
         private void _btnStop_Click(object sender, EventArgs e)
         {
-            // 请求停止流式模式的"最快"后台Task
-            if (_streamingMode)
-                _cancelPlayback = true;
+            // 记住本次回放由定时器推进还是后台Task推进（决定收尾时列表是追加还是整表刷新）
+            bool wasTimerMode = _playbackUsesTimer;
+            // 请求停止"最快"后台Task：无条件置位——暂停中按停止必须能把挂起的读取循环放行，
+            // 否则（原来只在流式模式置位）内存模式下暂停后按停止会让 Task 永久停在暂停闸门上
+            _cancelPlayback = true;
             RunStatus = false;
+            // 停止即退出回放态：开始按钮复位为"开始"，暂停标志清零
+            _playbackActive = false;
+            _playbackPaused = false;
+            _playbackUsesTimer = false;
             // 停止后指示器回到"模式"语义:播放中的"流式/内存"只描述本次播放方式,不能代表当前模式
             _playbackModeText = RealTimeDataSta ? "实时数据" : "报文数据";
             _playbackModeColor = Color.Gray;
@@ -2784,8 +3026,7 @@ namespace PCAN_Client
                 _streamingEnumerator = null;
             }
             _streamingPendingMessage = null;
-            _btnStart.Enabled = true;
-            _btnStop.Enabled = false;
+            UpdatePlayButtons();
             _statusLabel.Text = "状态: 已停止 (" + (RealTimeDataSta ? "实时模式" : "报文模式")
                 + (!RealTimeDataSta && _isFileMode ? " — 可重新播放" : "") + ")";
             _statusLabel.ForeColor = Color.Red;
@@ -2797,9 +3038,9 @@ namespace PCAN_Client
             _chartControl.SetAutoScroll(false);
             _btnAutoScroll.Text = "自动滑动";
 
-            // 流式模式：停止后将记录的5w帧显示到Main.cs界面
+            // 流式模式：停止后把剩余报文补推给主窗口列表（最快模式追加；倍速模式整表刷新对齐）
             if (_streamingMode)
-                ShowStreamingRecordedFrames();
+                ShowStreamingRecordedFrames(!wasTimerMode);
 
             // 缓存模式：切回内存模式（即使播放未完成也保存已缓存的数据）
             if (_cacheWhileStreaming && _rawMessages != null && _rawMessages.Count > 0)
@@ -3167,7 +3408,8 @@ namespace PCAN_Client
                 if (row.Tag is ChannelData channel)
                     channel.IsHighlighted = true;
             }
-            _chartControl.SmartInvalidate();
+            // 直写了 IsHighlighted（静态层签名含高亮位）：失效静态层并请求一帧
+            _chartControl.InvalidateChannels();
         }
 
         private void _channelGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
@@ -3343,7 +3585,8 @@ namespace PCAN_Client
 
                 channel.Color = colorDialog.Color;
                 UpdateChannelGridColor(channel);
-                _chartControl.Invalidate();
+                // 直写了通道 Color（静态层签名才会变）：失效静态层并请求一帧
+                _chartControl.InvalidateChannels();
             }
         }
 
@@ -3555,7 +3798,7 @@ namespace PCAN_Client
 
             SelectChannelGridRow(channel);
             _chartControl.SetChannels(Channels);
-            _chartControl.Invalidate();
+            _chartControl.SmartInvalidate();
         }
 
         private void InsertChannelGridRow(int rowIndex, ChannelData channel, bool isChecked)
@@ -3991,7 +4234,7 @@ namespace PCAN_Client
             _playbackModeColor = Color.Gray;
             UpdateModeIndicator();
 
-            _chartControl.Invalidate();
+            _chartControl.SmartInvalidate();
         }
 
         /// <summary>集中切换到报文数据模式</summary>
@@ -4052,7 +4295,8 @@ namespace PCAN_Client
             _playbackModeText = "报文数据";
             _playbackModeColor = Color.Gray;
             UpdateModeIndicator();
-            _chartControl.Invalidate();
+            // 上面已 channel.Clear()（数据被清空）：失效静态层并请求一帧
+            _chartControl.InvalidateChannels();
         }
 
         /// <summary>
@@ -4077,7 +4321,7 @@ namespace PCAN_Client
             {
                 _chartControl.SetGlobalXRange(0, _loadingBatchMaxTime + 1);
             }
-            _chartControl.Invalidate();
+            _chartControl.SmartInvalidate();
         }
 
         private void _btnLoadFile_Click(object sender, EventArgs e)
@@ -4324,7 +4568,8 @@ namespace PCAN_Client
             foreach (var ch in Channels) ch.Clear();
             _chartControl.SetChannels(Channels);
             _chartControl.ResetView();
-            _chartControl.Invalidate();
+            // ch.Clear() + ResetView 后静态层必然过期：失效静态层并请求一帧
+            _chartControl.InvalidateChannels();
             UpdateChannelGridValues();
         }
 

@@ -45,6 +45,8 @@ namespace PCAN_Client
                 case "swap": return Draw(g => { g.DrawLine(P(Ink), 3, 7, 16, 7); g.DrawLine(P(Ink), 13, 4, 16, 7); g.DrawLine(P(Ink), 13, 10, 16, 7); g.DrawLine(P(Ink), 17, 13, 4, 13); g.DrawLine(P(Ink), 7, 10, 4, 13); g.DrawLine(P(Ink), 7, 16, 4, 13); });
                 case "play": return Draw(g => { g.FillPolygon(B(Green), new[] { new Point(6, 4), new Point(16, 10), new Point(6, 16) }); });
                 case "stop": return Draw(g => { g.FillRectangle(B(Red), 5, 5, 10, 10); });
+                // 暂停：两根竖条（与 play 同语义色）
+                case "pause": return Draw(g => { g.FillRectangle(B(Green), 6, 4, 3, 12); g.FillRectangle(B(Green), 12, 4, 3, 12); });
                 case "clock": return Draw(g => { g.DrawEllipse(P(Ink), 3, 3, 14, 14); g.DrawLine(P(Ink), 10, 10, 10, 5); g.DrawLine(P(Ink), 10, 10, 14, 12); });
                 case "fit": return Draw(g => { g.DrawLine(P(Ink), 3, 8, 3, 3); g.DrawLine(P(Ink), 3, 3, 8, 3); g.DrawLine(P(Ink), 12, 3, 17, 3); g.DrawLine(P(Ink), 17, 3, 17, 8); g.DrawLine(P(Ink), 17, 12, 17, 17); g.DrawLine(P(Ink), 17, 17, 12, 17); g.DrawLine(P(Ink), 8, 17, 3, 17); g.DrawLine(P(Ink), 3, 17, 3, 12); });
                 case "scroll": return Draw(g => { g.DrawLine(P(Ink), 3, 5, 17, 5); g.DrawLine(P(Ink), 3, 10, 11, 10); g.DrawLine(P(Ink), 3, 15, 11, 15); g.FillPolygon(B(Blue), new[] { new Point(13, 7), new Point(18, 10), new Point(13, 13) }); });

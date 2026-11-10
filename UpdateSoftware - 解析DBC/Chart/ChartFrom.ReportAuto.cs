@@ -512,7 +512,7 @@ namespace PCAN_Client
             }
 
             _chartControl.SetChannels(Channels);
-            _chartControl.Invalidate();
+            _chartControl.SmartInvalidate();
             PopulateChannelGrid();
 
             _statusLabel.Text = $"状态: 已加载工况分类 \"{type.Name}\" 的信号列表 ({type.SignalList.Count}个)";
@@ -692,7 +692,7 @@ namespace PCAN_Client
 
             // 刷新通道显示(信号列表中可见但未勾选,不参与绘图)
             _chartControl.SetChannels(Channels);
-            _chartControl.Invalidate();
+            _chartControl.SmartInvalidate();
             PopulateChannelGrid();
 
             // 后台线程补采(状态栏显示进度,可取消),完成后回调;未加载数据时随下次加载自动采集
@@ -934,7 +934,7 @@ namespace PCAN_Client
             try
             {
                 _chartControl.SetGlobalXRange(t0, t1);
-                _chartControl.Invalidate();
+                _chartControl.SmartInvalidate();
                 _statusLabel.Text = $"状态: 已缩放到 {t0:F2}-{t1:F2} 秒";
                 _statusLabel.ForeColor = Color.Green;
             }
