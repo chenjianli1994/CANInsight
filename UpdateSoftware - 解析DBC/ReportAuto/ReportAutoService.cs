@@ -247,8 +247,14 @@ namespace PCAN_Client.ReportAuto
             Thread.Sleep(150);             // 从80ms增至150ms，确保复杂图表渲染完成
 
             // 2) 截图:绘图区离屏高清 + 信号列表，合成为一张左右拼接图
-            var chartBmp = ChartCapturer.RenderChart(form.ChartView, 3200, 1920);
-            var compositeBmp = ChartCapturer.ComposeScreenshot(chartBmp, form.SignalGridView);
+            //    截图作用域内强制展开分组且不输出组头（可嵌套，Dispose 恢复折叠态与首行位置）
+            Bitmap chartBmp;
+            Bitmap compositeBmp;
+            using (form.ExpandGroupsForScreenshot())
+            {
+                chartBmp = ChartCapturer.RenderChart(form.ChartView, 3200, 1920);
+                compositeBmp = ChartCapturer.ComposeScreenshot(chartBmp, form.SignalGridView);
+            }
             var images = new Dictionary<string, Bitmap>();
             if (compositeBmp != null) images["chart"] = compositeBmp;
 

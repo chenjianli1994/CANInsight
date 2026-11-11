@@ -95,7 +95,7 @@ namespace PCAN_Client
             _btnSaveReport.ToolTipText = "保存累积的报告为PPT文件";
             _btnSaveReport.Click += _btnSaveReport_Click;
 
-            // 追加到行2工具栏(信号组之后):工况组+报告组
+            // 追加到行2工具栏(信号清单之后):工况组+报告组
             _analysisToolStrip.Items.Add(new ToolStripSeparator());
             _analysisToolStrip.Items.Add(new ToolStripLabel("工况:"));
             _analysisToolStrip.Items.Add(_btnAnalysisTypeSelector);
@@ -292,7 +292,6 @@ namespace PCAN_Client
                 _btnAddReportPage.Enabled = false;
                 EnsureReportSignalChannels(type, () =>
                 {
-                    _btnAddReportPage.Enabled = true;
                     try
                     {
                         int n = ReportAutoService.AppendPage(this, type, t0, t1);
@@ -305,6 +304,11 @@ namespace PCAN_Client
                             MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         _statusLabel.Text = "状态: 添加报告页失败";
                         _statusLabel.ForeColor = Color.Red;
+                    }
+                    finally
+                    {
+                        // 恢复按钮放在 AppendPage 之后（含异常路径）：截图期间的行重建可能重入本方法
+                        _btnAddReportPage.Enabled = true;
                     }
                 });
             }

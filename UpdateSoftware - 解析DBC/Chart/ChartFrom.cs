@@ -62,7 +62,7 @@ namespace PCAN_Client
         private ToolStrip _analysisToolStrip;   // 第二行工具栏(信号与报告)
         private ToolStripButton _btnShowMainForm;   // 唤出报文列表窗口(Main)
         private ToolStripButton _toolLoadLog, _toolStart, _toolStop, _toolShowAll, _toolAutoScroll, _toolClear;
-        private ToolStripDropDownButton _toolSignalGroup;   // 信号组(加载/保存)下拉
+        private ToolStripDropDownButton _toolSignalGroup;   // 信号清单(加载/保存)下拉
         private ToolStripDropDownButton _toolModeToggle;    // 实时/报文模式选择下拉
         private ToolStripComboBox _toolSpeedComboBox;
         private ToolStripComboBox _toolLineWidthComboBox;   // 全局线宽选择(对所有信号同时生效)
@@ -83,6 +83,35 @@ namespace PCAN_Client
         private int _channelDragRowIndex = -1;
         private Rectangle _channelDragBoxFromMouseDown = Rectangle.Empty;
         private int _channelDropInsertIndex = -1;
+        // ===== 通道分组（会话内分组，不落盘）=====
+        private readonly ChannelGroupModel _groups = new ChannelGroupModel();   // 分组模型：仅本次会话有效
+        private ChannelDropTarget? _channelDropTarget;   // 拖放落点语义（DragOver 写入、DragDrop 读取、Clear 清空）
+        private bool _rebuildingRows;                    // 重建行期间 true：抑制所有行事件与 SelectionChanged
+        private int _groupsForceExpandDepth;             // >0 = 报表截图作用域（可嵌套，Dispose 归零才恢复）
+        private ChannelGroup _groupForContextMenu;       // 右键 Opening 命中的组头（未命中为 null）
+        private ToolStripMenuItem menuItemCreateGroup, menuItemRenameGroup, menuItemDissolveGroup, menuItemDeleteGroup;
+        /// <summary>组头行底色（与行 DefaultCellStyle / SelectionBackColor 同色，点组头能看出选中）</summary>
+        // 组头行外观：浅蓝灰底 + 左侧竖色条 + 粗体组名，与普通信号行（白底）明显区分
+        private static readonly Color GroupHeaderBackColor = Color.FromArgb(226, 233, 243);
+        private static readonly Color GroupHeaderAccentColor = Color.FromArgb(70, 110, 170);
+        private static readonly Color GroupHeaderBorderColor = Color.FromArgb(150, 165, 190);
+        /// <summary>组成员整行右缩进的像素数（勾选框/色块/名称/当前值一起右移，最左留出这段空白）</summary>
+        private const int GroupMemberIndentPx = 14;
+        /// <summary>组成员行底色（比普通行略深一点，让"组头 + 成员"整块读起来是一个单元）</summary>
+        private static readonly Color GroupMemberBackColor = Color.FromArgb(246, 249, 253);
+        private Font _groupHeaderFont;                    // 组头行粗体（懒创建，随窗体生存）
+        /// <summary>本功能的对外名称（本次新增的通道分组；旧的预设集合已改名"信号清单"）</summary>
+        private const string SignalGroupFeatureName = "信号组";
+        private const string TextMenuCreateGroup = "创建" + SignalGroupFeatureName + "…";
+
+        /// <summary>拖放落点。Group=目标组（null=根层）；Anchor=锚点通道（null=该域末尾）；
+        /// PlaceAfterAnchor=true 插到 Anchor 之后，false 插到之前（Anchor==null 时无意义）。</summary>
+        private struct ChannelDropTarget
+        {
+            public ChannelGroup Group;
+            public ChannelData Anchor;
+            public bool PlaceAfterAnchor;
+        }
         private GroupBox _controlGroup;
         private Label _statusLabel;
         private Label _modeIndicatorLabel;
@@ -188,7 +217,7 @@ namespace PCAN_Client
         private const int RealtimeRawTrimBatch = 10000;
         /// <summary>曾触发过淘汰（导出时提示数据窗口不完整）</summary>
         private static bool _realtimeRawTrimmed = false;
-        private string _currentSignalGroupPath = "";        // 当前信号组文件路径（用于覆盖保存）
+        private string _currentSignalGroupPath = "";        // 当前信号清单文件路径（用于覆盖保存）
         private Form _loadingPopup = null;                  // 加载报文时的弹窗
 
         // 流式读取时记录的最新的5w帧报文（停止/播放完毕后显示到Main.cs）
@@ -650,7 +679,7 @@ namespace PCAN_Client
             this._btnDeletePreset.Name = "_btnDeletePreset";
             this._btnDeletePreset.Size = new System.Drawing.Size(190, 23);
             this._btnDeletePreset.TabIndex = 14;
-            this._btnDeletePreset.Text = "删除信号组";
+            this._btnDeletePreset.Text = "删除信号清单";
             this._btnDeletePreset.Click += new System.EventHandler(this._btnDeletePreset_Click);
             // 
             // _radioRealTime
@@ -738,8 +767,8 @@ namespace PCAN_Client
             this._toolSignalGroup.Image = ToolbarIcons.Get("bookmark");
             this._toolSignalGroup.Name = "_toolSignalGroup";
             this._toolSignalGroup.Size = new System.Drawing.Size(72, 22);
-            this._toolSignalGroup.Text = "信号组";
-            this._toolSignalGroup.ToolTipText = "加载/保存信号组";
+            this._toolSignalGroup.Text = "信号清单";
+            this._toolSignalGroup.ToolTipText = "加载/保存信号清单";
             //
             // _btnBusConfig
             //
@@ -1177,9 +1206,9 @@ namespace PCAN_Client
             }
             _toolDotSizeComboBox.SelectedIndex = _globalDotSize - 1;
 
-            // 信号组下拉:加载/保存成对
-            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("加载信号组", null, _btnLoadPreset_Click));
-            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("保存信号组", null, _btnSavePreset_Click));
+            // 信号清单下拉:加载/保存成对
+            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("加载信号清单", null, _btnLoadPreset_Click));
+            _toolSignalGroup.DropDownItems.Add(new ToolStripMenuItem("保存信号清单", null, _btnSavePreset_Click));
 
             // 模式下拉:实时/报文单选,当前项打勾
             var menuRealtime = new ToolStripMenuItem("实时数据", null, (s, e) => SwitchToRealTimeData());
@@ -1195,6 +1224,9 @@ namespace PCAN_Client
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("删除全部", null, _btnRemoveAll_Click));
             _toolMore.DropDownItems.Add(new ToolStripSeparator());
             _toolMore.DropDownItems.Add(new ToolStripMenuItem("版本信息", null, _menuVersionInfo_Click));
+
+            // 通道分组右键菜单（4 项 + Opening）：必须在工具栏绑定尾部装配完成
+            InitChannelGroupMenu();
 
             SyncToolbarStateFromLegacyControls();
         }
@@ -1344,8 +1376,9 @@ namespace PCAN_Client
             DataGridViewCheckBoxColumn visibleColumn = new DataGridViewCheckBoxColumn();
             visibleColumn.Name = "Visible";
             visibleColumn.HeaderText = "";
-            visibleColumn.Width = 28;
-            visibleColumn.MinimumWidth = 28;
+            // 宽度 = 勾选框 + 一个缩进列：组成员行整行右移 GroupMemberIndentPx，最左边留空白形成层级
+            visibleColumn.Width = 28 + GroupMemberIndentPx;
+            visibleColumn.MinimumWidth = 28 + GroupMemberIndentPx;
             visibleColumn.Resizable = DataGridViewTriState.False;
             visibleColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
 
@@ -1395,24 +1428,13 @@ namespace PCAN_Client
 
         private void PopulateChannelGrid()
         {
-            _channelGrid.Rows.Clear();
-            int displayIndex = 0;  // 仅统计显示在列表中的通道(占位符报告专用通道不进列表)
-            for (int i = 0; i < Channels.Count; i++)
-            {
-                var channel = Channels[i];
-                if (channel.IsReportOnly) continue;  // 占位符报告专用通道:参与采集/计算,但不显示在信号列表
-                // 超过30条以后的信号在列表中默认取消勾选，但保留在Channels中
-                bool isChecked = channel.Visible && displayIndex < 30;
-                if (displayIndex >= 30 && channel.Visible)
-                {
-                    channel.Visible = false;
-                }
-                int rowIndex = _channelGrid.Rows.Add(isChecked, string.Empty, GetChannelDisplayName(channel), string.Empty, string.Empty);
-                _channelGrid.Rows[rowIndex].Tag = channel;
-                _channelGrid.Rows[rowIndex].Cells["Color"].ToolTipText = "点击修改颜色";
-                _channelGrid.Rows[rowIndex].Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
-                displayIndex++;
-            }
+            // 分组数据与 Channels 对齐（剔除已消失成员，变空的组删除）
+            _groups.PruneTo(Channels);
+            // 超过30条以后的信号在列表中默认取消勾选，但保留在Channels中。
+            // 唯一执行 30 条 cap 的地方：任何"行重建"都不得重跑它（否则会清掉用户勾选的第31+条）
+            ApplyVisibilityCapToChannels();
+            // 按行计划重建行（组头行 + 成员行；折叠组只出组头）
+            RebuildChannelGridRows();
             // 同步图表可见性（前30条显示，其余隐藏）
             _chartControl.SetChannels(Channels);
             // 初始化当前值/差值显示
@@ -1436,8 +1458,49 @@ namespace PCAN_Client
             return _channelGrid.Rows[rowIndex].Tag as ChannelData;
         }
 
+        /// <summary>组头行判定：行 Tag 为 ChannelGroup（信号行的 Tag 是 ChannelData）</summary>
+        private static bool IsGroupHeaderRow(DataGridViewRow row)
+        {
+            return row != null && row.Tag is ChannelGroup;
+        }
+
+        /// <summary>组头行判定（按行号，越界返回 false）</summary>
+        private bool IsGroupHeaderRow(int rowIndex)
+        {
+            return rowIndex >= 0 && rowIndex < _channelGrid.Rows.Count && IsGroupHeaderRow(_channelGrid.Rows[rowIndex]);
+        }
+
+        /// <summary>行号 → 所属组（组头行返回该组，信号行/越界返回 null）</summary>
+        private ChannelGroup GetGroupFromRow(int rowIndex)
+        {
+            if (rowIndex < 0 || rowIndex >= _channelGrid.Rows.Count)
+                return null;
+            return _channelGrid.Rows[rowIndex].Tag as ChannelGroup;
+        }
+
+        /// <summary>组头显示文本："组名 (成员数)"</summary>
+        private static string GetGroupHeaderText(ChannelGroup g)
+        {
+            if (g == null) return string.Empty;
+            return string.Format("{0} ({1})", g.Name, g.MemberCount);
+        }
+
+        /// <summary>组头行粗体（懒创建，一个窗体只建一次）</summary>
+        private Font GetGroupHeaderFont()
+        {
+            if (_groupHeaderFont == null)
+            {
+                Font baseFont = _channelGrid != null ? _channelGrid.Font : Font;
+                _groupHeaderFont = new Font(baseFont, FontStyle.Bold);
+            }
+            return _groupHeaderFont;
+        }
+
         private void SetChannelRowChecked(int rowIndex, bool isChecked)
         {
+            // 组头行没有勾选语义（SelectAll/DeselectAll 会遍历所有行，守卫不可省）
+            if (rowIndex < 0 || rowIndex >= _channelGrid.Rows.Count) return;
+            if (IsGroupHeaderRow(rowIndex)) return;
             _channelGrid.Rows[rowIndex].Cells["Visible"].Value = isChecked;
             ChannelData channel = GetChannelFromRow(rowIndex);
             if (channel != null)
@@ -1450,6 +1513,8 @@ namespace PCAN_Client
 
         private bool GetChannelRowChecked(int rowIndex)
         {
+            if (rowIndex < 0 || rowIndex >= _channelGrid.Rows.Count) return false;
+            if (IsGroupHeaderRow(rowIndex)) return false;
             object value = _channelGrid.Rows[rowIndex].Cells["Visible"].Value;
             return value is bool b && b;
         }
@@ -1458,6 +1523,15 @@ namespace PCAN_Client
         {
             if (targetChannel == null || _channelGrid.Rows.Count == 0)
                 return;
+
+            // 目标在折叠组内时先展开（放在行扫描之前：覆盖拖放收尾与绘图区点选两条路径）
+            ChannelGroup owner = _groups.FindGroup(targetChannel);
+            if (owner != null && owner.IsCollapsed)
+            {
+                owner.IsCollapsed = false;
+                RefreshChannelGridRows();
+            }
+
             foreach (DataGridViewRow row in _channelGrid.Rows)
             {
                 if (!ReferenceEquals(row.Tag, targetChannel))
@@ -1466,8 +1540,7 @@ namespace PCAN_Client
                 row.Selected = true;
                 if (row.Cells["Signal"] != null)
                     _channelGrid.CurrentCell = row.Cells["Signal"];
-                if (row.Index >= 0 && row.Index < _channelGrid.RowCount)
-                    _channelGrid.FirstDisplayedScrollingRowIndex = row.Index;
+                TrySetFirstDisplayedRow(row.Index);
                 return;
             }
         }
@@ -3385,9 +3458,16 @@ namespace PCAN_Client
 
         private void _channelGrid_CellClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0)
-                return;
+            if (e.RowIndex < 0 || e.RowIndex >= _channelGrid.Rows.Count) return;
+            if (_rebuildingRows) return;
+            if (e.ColumnIndex < 0) return;
             string columnName = _channelGrid.Columns[e.ColumnIndex].Name;
+            if (IsGroupHeaderRow(e.RowIndex))
+            {
+                // 组头折叠/展开：单击 +/-（Visible 列）；双击组名的路径见 CellDoubleClick
+                if (columnName == "Visible") ToggleGroupCollapsed(e.RowIndex);
+                return;
+            }
             if (columnName == "Color")
             {
                 ChangeChannelColorAtRow(e.RowIndex);
@@ -3396,6 +3476,13 @@ namespace PCAN_Client
 
         /// <summary>信号列表选中变化(Ctrl/Shift多选):高亮绘图区对应曲线面板背景</summary>
         private void _channelGrid_SelectionChanged(object sender, EventArgs e)
+        {
+            if (_rebuildingRows) return;   // 重建行期间抑制（重建结束显式同步一次）
+            SyncHighlightFromSelection();
+        }
+
+        /// <summary>按当前选中行同步绘图区曲线高亮（组头行不参与）</summary>
+        private void SyncHighlightFromSelection()
         {
             if (IsDisposed || _chartControl == null || _chartControl.IsDisposed)
                 return; // 窗体/绘图控件销毁中丢弃回调,避免访问已释放对象
@@ -3414,8 +3501,10 @@ namespace PCAN_Client
 
         private void _channelGrid_CellContentClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0)
-                return;
+            if (e.RowIndex < 0 || e.RowIndex >= _channelGrid.Rows.Count) return;
+            if (_rebuildingRows) return;
+            if (e.ColumnIndex < 0) return;
+            if (IsGroupHeaderRow(e.RowIndex)) return;   // 组头无勾选语义
             if (_channelGrid.Columns[e.ColumnIndex].Name != "Visible")
                 return;
 
@@ -3425,8 +3514,14 @@ namespace PCAN_Client
 
         private void _channelGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
         {
-            if (e.RowIndex < 0)
+            if (e.RowIndex < 0 || e.RowIndex >= _channelGrid.Rows.Count || _rebuildingRows) return;
+            if (IsGroupHeaderRow(e.RowIndex))
+            {
+                // 双击组头（除 +/− 那一列）展开/折叠；双击 +/− 列已由 CellClick 处理，这里跳过避免翻转两次
+                if (e.ColumnIndex >= 0 && _channelGrid.Columns[e.ColumnIndex].Name != "Visible")
+                    ToggleGroupCollapsed(e.RowIndex);
                 return;
+            }
             bool isChecked = GetChannelRowChecked(e.RowIndex);
             SetChannelRowChecked(e.RowIndex, !isChecked);
         }
@@ -3436,7 +3531,32 @@ namespace PCAN_Client
             if (e.ColumnIndex < 0)
                 return;
 
+            // 组头行：5 格全部自绘（不调用 PaintBackground，否则选中态会盖掉灰底）
+            if (e.RowIndex >= 0 && IsGroupHeaderRow(e.RowIndex))
+            {
+                PaintGroupHeaderCell(e);
+                return;
+            }
+
             // 信号列与当前值列之间的灰色分隔线
+            // 组成员行：Visible 列左段是整行缩进留出的空白，在这里延续树形竖线
+            if (_channelGrid.Columns[e.ColumnIndex].Name == "Visible" && e.RowIndex >= 0)
+            {
+                int pad = _channelGrid.Rows[e.RowIndex].DefaultCellStyle.Padding.Left;
+                if (pad > 0)
+                {
+                    e.Handled = true;
+                    e.PaintBackground(e.CellBounds, e.State.HasFlag(DataGridViewElementStates.Selected));
+                    e.Paint(e.CellBounds, DataGridViewPaintParts.ContentForeground | DataGridViewPaintParts.Border);
+                    int railX = e.CellBounds.Left + pad / 2;
+                    using (Pen guidePen = new Pen(GroupHeaderBorderColor))
+                    {
+                        e.Graphics.DrawLine(guidePen, railX, e.CellBounds.Top, railX, e.CellBounds.Bottom - 1);
+                    }
+                    return;
+                }
+            }
+
             if (_channelGrid.Columns[e.ColumnIndex].Name == "Signal")
             {
                 e.Handled = true;
@@ -3454,6 +3574,16 @@ namespace PCAN_Client
                 {
                     int lineX = e.CellBounds.Right - 1;
                     e.Graphics.DrawLine(grayLinePen, lineX, e.CellBounds.Top, lineX, e.CellBounds.Bottom);
+                }
+                // 组成员行：在"信号"列左段的空白里延续树形竖线，使缩进段连成一条竖轨
+                int signalPad = e.RowIndex >= 0 ? _channelGrid.Rows[e.RowIndex].DefaultCellStyle.Padding.Left : 0;
+                if (signalPad > 0)
+                {
+                    int railX = e.CellBounds.Left + signalPad / 2;
+                    using (Pen guidePen = new Pen(GroupHeaderBorderColor))
+                    {
+                        e.Graphics.DrawLine(guidePen, railX, e.CellBounds.Top, railX, e.CellBounds.Bottom - 1);
+                    }
                 }
                 return;
             }
@@ -3493,11 +3623,26 @@ namespace PCAN_Client
             if (channel == null)
                 return;
 
+            // 整行缩进后，Color 列左侧那段空白里画树形引导线（竖线 + 指向色块的小横枝）
+            int memberPad = _channelGrid.Rows[e.RowIndex].DefaultCellStyle.Padding.Left;
+            if (memberPad > 0)
+            {
+                int railX = e.CellBounds.Left + memberPad / 2;
+                int midY = e.CellBounds.Top + e.CellBounds.Height / 2;
+                using (Pen guidePen = new Pen(GroupHeaderBorderColor))
+                {
+                    e.Graphics.DrawLine(guidePen, railX, e.CellBounds.Top, railX, e.CellBounds.Bottom - 1);
+                }
+            }
+
+            // 色块始终是正方形：在"扣除缩进后的可用区"里取 min(宽,高) 并居中，不随列宽被拉成长方形
+            int availLeft = e.CellBounds.Left + memberPad;
+            int availWidth = Math.Max(6, e.CellBounds.Width - memberPad);
+            int swatchSize = Math.Min(Math.Max(8, availWidth - 8), Math.Max(8, e.CellBounds.Height - 8));
             Rectangle swatchRect = new Rectangle(
-                e.CellBounds.Left + 7,
-                e.CellBounds.Top + 5,
-                Math.Max(10, e.CellBounds.Width - 14),
-                Math.Max(10, e.CellBounds.Height - 10));
+                availLeft + (availWidth - swatchSize) / 2,
+                e.CellBounds.Top + (e.CellBounds.Height - swatchSize) / 2,
+                swatchSize, swatchSize);
 
             using (SolidBrush brush = new SolidBrush(channel.Color))
             using (Pen borderPen = new Pen(Color.Black))
@@ -3507,6 +3652,83 @@ namespace PCAN_Client
             }
 
             e.Paint(e.CellBounds, DataGridViewPaintParts.Border);
+        }
+
+        /// <summary>自绘组头行单元格：5 格统一灰底 + 底/右边线；仅 Signal 列画 ▾/▸ 与 "组名 (n)"。
+        /// 不调用 PaintBackground（否则选中态高亮会盖掉灰底），末尾只补边框。</summary>
+        private void PaintGroupHeaderCell(DataGridViewCellPaintingEventArgs e)
+        {
+            e.Handled = true;
+
+            Rectangle bounds = e.CellBounds;
+            int right = bounds.Right - 1;
+            int bottom = bounds.Bottom - 1;
+            string columnName = _channelGrid.Columns[e.ColumnIndex].Name;
+
+            using (SolidBrush backBrush = new SolidBrush(GroupHeaderBackColor))
+            using (Pen borderPen = new Pen(GroupHeaderBorderColor))
+            {
+                e.Graphics.FillRectangle(backBrush, bounds);
+                // 上边框加粗：一眼看出"这一行开始一个组"；下/右边用细线
+                e.Graphics.DrawLine(borderPen, bounds.Left, bounds.Top, right, bounds.Top);
+                e.Graphics.DrawLine(borderPen, bounds.Left, bounds.Top + 1, right, bounds.Top + 1);
+                e.Graphics.DrawLine(borderPen, bounds.Left, bottom, right, bottom);
+                e.Graphics.DrawLine(borderPen, right, bounds.Top, right, bottom);
+
+                // Color 列画左侧竖色条（组的视觉标识，替代信号行的颜色方块）
+                if (columnName == "Color")
+                {
+                    using (SolidBrush accentBrush = new SolidBrush(GroupHeaderAccentColor))
+                    {
+                        e.Graphics.FillRectangle(accentBrush, bounds.Left + 2, bounds.Top + 1,
+                            4, Math.Max(0, bounds.Height - 2));
+                    }
+                }
+            }
+
+            ChannelGroup group = GetGroupFromRow(e.RowIndex);
+
+            // Visible 列画 +/- 展开折叠按钮（组头行该列不是复选框）
+            if (columnName == "Visible" && group != null)
+            {
+                const int boxSize = 13;
+                int boxLeft = bounds.Left + 5;   // 树形展开器固定在行首，成员行整行缩进一列后自然形成层级
+                int boxTop = bounds.Top + (bounds.Height - boxSize) / 2;
+                var boxRect = new Rectangle(boxLeft, boxTop, boxSize, boxSize);
+                using (SolidBrush boxBrush = new SolidBrush(Color.White))
+                using (Pen boxPen = new Pen(GroupHeaderAccentColor))
+                {
+                    e.Graphics.FillRectangle(boxBrush, boxRect);
+                    e.Graphics.DrawRectangle(boxPen, boxRect);
+                }
+                string glyph = group.IsCollapsed ? "+" : "-";
+                Font glyphFont = GetGroupHeaderFont();
+                TextRenderer.DrawText(e.Graphics, glyph, glyphFont, boxRect, GroupHeaderAccentColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+            }
+
+            // Signal 列画粗体组名 + 成员数，左侧缩进表示层级
+            if (columnName == "Signal" && group != null)
+            {
+                string text = GetGroupHeaderText(group);
+                Rectangle textRect = new Rectangle(bounds.Left + 6, bounds.Top,
+                    Math.Max(0, bounds.Width - 10), bounds.Height);
+                Font font = GetGroupHeaderFont();
+                TextRenderer.DrawText(e.Graphics, text, font, textRect, SystemColors.ControlText,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            }
+
+            // 被选中的组头补 1px 边线，保证"点组头能看出选中"
+            if (e.State.HasFlag(DataGridViewElementStates.Selected))
+            {
+                using (Pen selectionPen = new Pen(SystemColors.Highlight))
+                {
+                    e.Graphics.DrawRectangle(selectionPen, bounds.Left, bounds.Top,
+                        Math.Max(0, bounds.Width - 1), Math.Max(0, bounds.Height - 1));
+                }
+            }
+
+            e.Paint(bounds, DataGridViewPaintParts.Border);
         }
 
         private void ChartFrom_KeyDown(object sender, KeyEventArgs e)
@@ -3540,19 +3762,18 @@ namespace PCAN_Client
             if (_channelGrid.SelectedRows.Count == 0)
                 return;
 
-            // 收集所有选中行的通道和行引用(支持Shift多选/Ctrl+A全选后批量删除)
+            // 收集所有选中行的通道(支持Shift多选/Ctrl+A全选后批量删除；组头行不参与)
             var toDelete = new List<ChannelData>();
-            var rowsToRemove = new List<DataGridViewRow>();
             foreach (DataGridViewRow row in _channelGrid.SelectedRows)
             {
                 var channel = row.Tag as ChannelData;
                 if (channel == null) continue;
                 toDelete.Add(channel);
-                rowsToRemove.Add(row);
             }
             if (toDelete.Count == 0)
                 return;
 
+            // 锁内只做通道与查找表；行重建放锁外（重建过程不得 DoEvents）
             lock (_lockObj)
             {
                 foreach (var channel in toDelete)
@@ -3561,11 +3782,11 @@ namespace PCAN_Client
                     Channels.Remove(channel);
                 }
                 RebuildChannelLookup();
-                // 按行引用删除,避免索引位移
-                foreach (var row in rowsToRemove)
-                    _channelGrid.Rows.Remove(row);
             }
 
+            // 锁外：剔除已消失的组成员（变空的组删除）→ 重建行 → 同步可见性
+            _groups.PruneTo(Channels);
+            RefreshChannelGridRows();
             _chartControl.SetChannels(Channels);
             _statusLabel.Text = "状态: 已停止";
             _statusLabel.ForeColor = Color.Red;
@@ -3612,6 +3833,9 @@ namespace PCAN_Client
             _channelDragBoxFromMouseDown = Rectangle.Empty;
 
             if (e.RowIndex < 0) return;
+
+            // 组头行不可作为拖拽起点（拖动组头无意义，且会破坏 Tag 语义）
+            if (IsGroupHeaderRow(e.RowIndex)) return;
 
             if (e.Button == MouseButtons.Left && CanReorderChannels())
             {
@@ -3665,7 +3889,16 @@ namespace PCAN_Client
 
             Point clientPoint = _channelGrid.PointToClient(new Point(e.X, e.Y));
             DataGridView.HitTestInfo hit = _channelGrid.HitTest(clientPoint.X, clientPoint.Y);
-            UpdateChannelDropInsertIndicator(GetDropInsertIndex(hit, clientPoint));
+            int insertIndex = GetDropInsertIndex(hit, clientPoint);          // 仅绘制用
+            bool insertAfter = hit.RowIndex >= 0 && insertIndex == hit.RowIndex + 1;
+            var target = ResolveChannelDropTarget(hit.RowIndex, insertAfter);
+            if (!target.HasValue)
+            {
+                ClearChannelDropInsertIndicator();
+                e.Effect = DragDropEffects.None;
+                return;
+            }
+            UpdateChannelDropInsertIndicator(insertIndex, target.Value);
             e.Effect = DragDropEffects.Move;
         }
 
@@ -3683,17 +3916,13 @@ namespace PCAN_Client
             }
 
             int sourceIndex = (int)e.Data.GetData(typeof(int));
-            if (sourceIndex < 0 || sourceIndex >= _channelGrid.Rows.Count)
-            {
-                ClearChannelDropInsertIndicator();
-                return;
-            }
-
-            Point clientPoint = _channelGrid.PointToClient(new Point(e.X, e.Y));
-            DataGridView.HitTestInfo hit = _channelGrid.HitTest(clientPoint.X, clientPoint.Y);
-            int insertIndex = GetDropInsertIndex(hit, clientPoint);
+            var target = _channelDropTarget;
             ClearChannelDropInsertIndicator();
-            MoveChannelRow(sourceIndex, insertIndex);
+
+            if (sourceIndex < 0 || sourceIndex >= _channelGrid.Rows.Count) return;
+            if (!target.HasValue) return;
+
+            MoveChannelRow(sourceIndex, target.Value);
         }
 
         private void _channelGrid_Paint(object sender, PaintEventArgs e)
@@ -3715,6 +3944,9 @@ namespace PCAN_Client
             }
 
             int lineLeft = _channelGrid.RowHeadersVisible ? _channelGrid.RowHeadersWidth : 0;
+            // 落点在组内时插入线左缩进 12px（视觉上表示"插进这个组"）
+            if (_channelDropTarget.HasValue && _channelDropTarget.Value.Group != null)
+                lineLeft += 12;
             int lineRight = _channelGrid.ClientSize.Width - 1;
             using (Pen insertPen = new Pen(Color.Black, 2))
             {
@@ -3722,35 +3954,30 @@ namespace PCAN_Client
             }
         }
 
+        /// <summary>能否拖拽排序：只要求"有 2 个以上通道"。不能再用 Rows.Count（含组头行）</summary>
         private bool CanReorderChannels()
         {
             return !_isLoadingFile &&
                 !RunStatus &&
-                _channelGrid.Rows.Count > 1 &&
                 Channels != null &&
                 Channels.Count > 1;
         }
 
+        /// <summary>插入线行号（仅绘制用）：无行→0；空白/列头/末行下→末尾；否则按行的上/下半区</summary>
         private int GetDropInsertIndex(DataGridView.HitTestInfo hit, Point clientPoint)
         {
             if (_channelGrid.Rows.Count == 0) return 0;
 
-            if (hit.RowIndex < 0)
-            {
-                Rectangle firstRowRect = _channelGrid.GetRowDisplayRectangle(0, false);
-                if (firstRowRect != Rectangle.Empty && clientPoint.Y <= firstRowRect.Top)
-                    return 0;
-
-                Rectangle lastRowRect = _channelGrid.GetRowDisplayRectangle(_channelGrid.Rows.Count - 1, false);
-                return clientPoint.Y > lastRowRect.Bottom ? _channelGrid.Rows.Count : _channelGrid.Rows.Count - 1;
-            }
+            // hover 不在任何行上（列头/空白/末行下方）：落点恒为根层末尾，画在末行底部
+            if (hit.RowIndex < 0) return _channelGrid.Rows.Count;
 
             Rectangle rowRect = _channelGrid.GetRowDisplayRectangle(hit.RowIndex, false);
             return clientPoint.Y > rowRect.Top + rowRect.Height / 2 ? hit.RowIndex + 1 : hit.RowIndex;
         }
 
-        private void UpdateChannelDropInsertIndicator(int insertIndex)
+        private void UpdateChannelDropInsertIndicator(int insertIndex, ChannelDropTarget target)
         {
+            _channelDropTarget = target;   // 落点语义必须先写（同一行号可能对应两个不同目标）
             int safeInsertIndex = Math.Max(0, Math.Min(insertIndex, _channelGrid.Rows.Count));
             if (_channelDropInsertIndex == safeInsertIndex) return;
 
@@ -3760,56 +3987,574 @@ namespace PCAN_Client
 
         private void ClearChannelDropInsertIndicator()
         {
+            _channelDropTarget = null;     // 无条件清落点语义
             if (_channelDropInsertIndex < 0) return;
             _channelDropInsertIndex = -1;
             _channelGrid.Invalidate();
         }
 
-        private void MoveChannelRow(int sourceIndex, int insertIndex)
+        /// <summary>把 hover 行 + 上/下半区解析成落点语义；返回 null 表示不可放置。
+        /// 组头上半 = 组前（根层，锚点=组首个可渲染成员）；组头下半 = 组内末尾；成员行 = 跟随该成员所属域。</summary>
+        private ChannelDropTarget? ResolveChannelDropTarget(int hoverRowIndex, bool insertAfter)
         {
-            if (sourceIndex < 0 || sourceIndex >= _channelGrid.Rows.Count) return;
+            if (hoverRowIndex < 0 || hoverRowIndex >= _channelGrid.Rows.Count)
+            {
+                // 列头/空白/末行下：根层末尾（忽略 insertIndex）
+                return new ChannelDropTarget { Group = null, Anchor = null, PlaceAfterAnchor = false };
+            }
 
-            int maxInsertIndex = _channelGrid.Rows.Count;
-            int safeInsertIndex = Math.Max(0, Math.Min(insertIndex, maxInsertIndex));
-            if (safeInsertIndex == sourceIndex || safeInsertIndex == sourceIndex + 1) return;
+            DataGridViewRow hoveredRow = _channelGrid.Rows[hoverRowIndex];
 
-            ChannelData channel = GetChannelFromRow(sourceIndex);
-            if (channel == null) return;
+            ChannelGroup hoveredGroup = hoveredRow.Tag as ChannelGroup;
+            if (hoveredGroup != null)
+            {
+                if (!insertAfter)
+                {
+                    // 组头上半：插到该组之前（信号回根层）
+                    return new ChannelDropTarget
+                    {
+                        Group = null,
+                        Anchor = GetRenderableMember(hoveredGroup, true),
+                        PlaceAfterAnchor = false
+                    };
+                }
+                // 组头下半：插到该组内末尾
+                return new ChannelDropTarget
+                {
+                    Group = hoveredGroup,
+                    Anchor = GetRenderableMember(hoveredGroup, false),
+                    PlaceAfterAnchor = true
+                };
+            }
 
-            bool isChecked = GetChannelRowChecked(sourceIndex);
+            ChannelData hoveredChannel = hoveredRow.Tag as ChannelData;
+            if (hoveredChannel == null) return null;
 
+            return new ChannelDropTarget
+            {
+                Group = _groups.FindGroup(hoveredChannel),
+                Anchor = hoveredChannel,
+                PlaceAfterAnchor = insertAfter
+            };
+        }
+
+        /// <summary>组内首个/末个"可渲染成员"（仍在 Channels 且 !IsReportOnly，按 Channels 序）</summary>
+        private ChannelData GetRenderableMember(ChannelGroup group, bool first)
+        {
+            if (group == null || Channels == null) return null;
+            ChannelData found = null;
+            for (int i = 0; i < Channels.Count; i++)
+            {
+                var channel = Channels[i];
+                if (channel == null || channel.IsReportOnly) continue;
+                if (!group.Members.Contains(channel)) continue;
+                if (first) return channel;
+                found = channel;
+            }
+            return found;
+        }
+
+        /// <summary>组"域末尾"在 Channels 中的插入位：最后一个可渲染成员的下一位（无此类成员则末尾）</summary>
+        private int GetInsertIndexAfterLastRenderableMember(ChannelGroup group)
+        {
+            if (group == null || Channels == null) return 0;
+            for (int i = Channels.Count - 1; i >= 0; i--)
+            {
+                var channel = Channels[i];
+                if (channel == null || channel.IsReportOnly) continue;
+                if (group.Members.Contains(channel)) return i + 1;
+            }
+            return Channels.Count;
+        }
+
+        /// <summary>按落点语义移动一行（源行必须是信号行）。幂等：idx==srcPos 且归属不变 → 无副作用返回。</summary>
+        private void MoveChannelRow(int sourceRowIndex, ChannelDropTarget target)
+        {
+            if (sourceRowIndex < 0 || sourceRowIndex >= _channelGrid.Rows.Count) return;
+
+            // 1) 源行必须是信号行（组头永不作拖拽源）
+            ChannelData source = _channelGrid.Rows[sourceRowIndex].Tag as ChannelData;
+            if (source == null) return;
+
+            // 2) 源位置与旧归属
+            int srcPos = Channels.IndexOf(source);
+            if (srcPos < 0) return;
+            ChannelGroup oldGroup = _groups.FindGroup(source);
+
+            // 3) 在移除之前算插入位（此时 source 仍在 Channels 中）
+            int idxPre;
+            if (target.Anchor == null)
+            {
+                idxPre = (target.Group == null) ? Channels.Count : GetInsertIndexAfterLastRenderableMember(target.Group);
+            }
+            else
+            {
+                int i = Channels.IndexOf(target.Anchor);
+                // i<0 的唯一可达情形："锚点就是源自己"或"锚点已被删除" ⇒ 视作不变位
+                idxPre = (i < 0) ? srcPos + 1 : (target.PlaceAfterAnchor ? i + 1 : i);
+            }
+            int idx = (idxPre > srcPos) ? idxPre - 1 : idxPre;
+
+            // 4) 幂等短路（在任何写操作之前）：只有 idx==srcPos 才算原位
+            if (ReferenceEquals(target.Group, oldGroup) && idx == srcPos) return;
+
+            // 5) 锁内：移除 → 定归属 → 插入 → 重建查找表
             lock (_lockObj)
             {
-                Channels.Remove(channel);
-                _channelGrid.Rows.RemoveAt(sourceIndex);
-                if (safeInsertIndex > sourceIndex) safeInsertIndex--;
-                // 网格插入位映射到Channels索引:隐藏的IsReportOnly通道不在网格中,按锚点通道在Channels中的实际位置插入
-                int channelsIndex = Channels.Count;
-                if (safeInsertIndex < _channelGrid.Rows.Count)
+                Channels.RemoveAt(srcPos);
+                if (target.Group == null)
                 {
-                    var anchor = GetChannelFromRow(safeInsertIndex);
-                    if (anchor != null)
-                        channelsIndex = Channels.IndexOf(anchor);
+                    _groups.RemoveMember(source);
                 }
-                Channels.Insert(channelsIndex, channel);
-                InsertChannelGridRow(safeInsertIndex, channel, isChecked);
+                else
+                {
+                    _groups.AddMember(target.Group, source);
+                    if (target.Group.IsCollapsed) target.Group.IsCollapsed = false;   // 拖入折叠组自动展开
+                }
+                if (idx < 0) idx = 0;
+                if (idx > Channels.Count) idx = Channels.Count;
+                Channels.Insert(idx, source);
                 RebuildChannelLookup();
             }
 
-            SelectChannelGridRow(channel);
+            // 6) 锁外：重建行 → 回选 → 同步图表
+            RefreshChannelGridRows();
+            SelectChannelGridRow(source);
             _chartControl.SetChannels(Channels);
             _chartControl.SmartInvalidate();
         }
+        #endregion
 
-        private void InsertChannelGridRow(int rowIndex, ChannelData channel, bool isChecked)
+        #region 通道分组（会话内分组，不落盘）
+
+        /// <summary>30 条 cap：按 Channels 顺序，第 31 条起在列表中默认不勾选（但仍留在 Channels 中）。
+        /// 计数单位 = 行计划中会生成行的通道（!IsReportOnly 且首次出现）；与分组/折叠无关。
+        /// **只允许 PopulateChannelGrid 调用**：行重建绝不重跑，否则会清掉用户勾选的第 31+ 条。</summary>
+        private void ApplyVisibilityCapToChannels()
         {
-            int safeRowIndex = Math.Max(0, Math.Min(rowIndex, _channelGrid.Rows.Count));
-            _channelGrid.Rows.Insert(safeRowIndex, isChecked, string.Empty, GetChannelDisplayName(channel), string.Empty, string.Empty);
-            _channelGrid.Rows[safeRowIndex].Tag = channel;
-            _channelGrid.Rows[safeRowIndex].Cells["Color"].ToolTipText = "点击修改颜色";
-            _channelGrid.Rows[safeRowIndex].Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
+            if (Channels == null) return;
+            var seen = new HashSet<ChannelData>();
+            int displayIndex = 0;
+            for (int i = 0; i < Channels.Count; i++)
+            {
+                var channel = Channels[i];
+                if (channel == null) continue;
+                if (channel.IsReportOnly) continue;
+                if (!seen.Add(channel)) continue;   // 同一通道重复出现只算一次（与行计划去重一致）
+                if (displayIndex >= 30 && channel.Visible)
+                    channel.Visible = false;
+                displayIndex++;
+            }
+        }
+
+        /// <summary>按行计划重建信号列表行（组头行 + 成员行）。**仅 PopulateChannelGrid 直接调用**：
+        /// 其它用户可见的重建入口一律用 RefreshChannelGridRows()（否则当前值/差值列会空白）。
+        /// 不跑 30 条 cap、不调 SetChannels。</summary>
+        private void RebuildChannelGridRows()
+        {
+            if (_channelGrid == null || Channels == null) return;
+
+            List<ChannelGridRowSpec> plan = ChannelGroupModel.BuildRowPlan(
+                Channels, _groups, true, _groupsForceExpandDepth > 0);
+
+            // 记录重建前的选中信号（组头行不参与回选）与首行锚点
+            var selectedChannels = new List<ChannelData>();
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                if (row.Tag is ChannelData cd) selectedChannels.Add(cd);
+            }
+            int from = -1;
+            if (_channelGrid.Rows.Count > 0)
+            {
+                try { from = _channelGrid.FirstDisplayedScrollingRowIndex; }
+                catch (ArgumentOutOfRangeException) { from = -1; }
+                catch (InvalidOperationException) { from = -1; }
+            }
+            ChannelData scrollAnchor = (from >= 0 && from < _channelGrid.Rows.Count)
+                ? _channelGrid.Rows[from].Tag as ChannelData
+                : null;
+
+            _rebuildingRows = true;
+            try
+            {
+                _channelGrid.Rows.Clear();
+                foreach (var spec in plan)
+                {
+                    if (spec.Kind == ChannelGridRowKind.GroupHeader)
+                        AppendGroupHeaderRow(spec.Group);
+                    else
+                        AppendChannelRow(spec.Channel);
+                }
+
+                // 回选原选中的信号行（组头行不参与）
+                if (selectedChannels.Count > 0)
+                {
+                    _channelGrid.ClearSelection();
+                    foreach (DataGridViewRow row in _channelGrid.Rows)
+                    {
+                        if (!(row.Tag is ChannelData cd)) continue;
+                        for (int i = 0; i < selectedChannels.Count; i++)
+                        {
+                            if (!ReferenceEquals(selectedChannels[i], cd)) continue;
+                            row.Selected = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 恢复首行（重建期间行集合已变，按通道锚点反查；反查不到才退回旧行号）
+                RestoreFirstDisplayedRowByChannel(scrollAnchor, from);
+
+                // 重建期间 SelectionChanged 被抑制，这里显式同步一次高亮
+                SyncHighlightFromSelection();
+            }
+            finally
+            {
+                _rebuildingRows = false;
+            }
+        }
+
+        /// <summary>用户可见的行重建入口 = 重建行 + 填当前值/差值（不跑 cap、不调 SetChannels）</summary>
+        private void RefreshChannelGridRows()
+        {
+            RebuildChannelGridRows();
             UpdateChannelGridValues();
         }
+
+        /// <summary>追加一个组头行：Visible 列逐行 new 一个 TextBoxCell（自绘 ▾/▸，无勾选语义）</summary>
+        private void AppendGroupHeaderRow(ChannelGroup group)
+        {
+            if (group == null) return;
+            int rowIndex = _channelGrid.Rows.Add(false, string.Empty, GetGroupHeaderText(group), string.Empty, string.Empty);
+            DataGridViewRow row = _channelGrid.Rows[rowIndex];
+            row.Tag = group;
+            // 必须每行 new：共享单元格实例会让 DataGridView 抛 InvalidOperationException
+            row.Cells["Visible"] = new DataGridViewTextBoxCell { Value = string.Empty };
+            row.DefaultCellStyle.BackColor = GroupHeaderBackColor;
+            row.DefaultCellStyle.SelectionBackColor = GroupHeaderBackColor;
+            row.DefaultCellStyle.SelectionForeColor = SystemColors.ControlText;
+            row.DefaultCellStyle.Font = GetGroupHeaderFont();   // 粗体：与普通信号行区分
+        }
+
+        /// <summary>追加一个信号行（勾选态取 channel.Visible）</summary>
+        private void AppendChannelRow(ChannelData channel)
+        {
+            if (channel == null) return;
+            int rowIndex = _channelGrid.Rows.Add(channel.Visible, string.Empty, GetChannelDisplayName(channel), string.Empty, string.Empty);
+            DataGridViewRow row = _channelGrid.Rows[rowIndex];
+            row.Tag = channel;
+            row.Cells["Color"].ToolTipText = "点击修改颜色";
+            row.Cells["Signal"].Style.ForeColor = SystemColors.ControlText;
+            // 层次感：组内信号在"信号"列右缩进，与组外信号一眼区分（缩进值同时被 Color 列的树形引导线复用）
+            // 层次感：组成员**整行**右缩进（勾选框 / 色块 / 名称 / 当前值一起右移），
+            // 最左边留出一个缩进列的空白，视觉上比组头低一级
+            int indent = _groups.FindGroup(channel) != null ? GroupMemberIndentPx : 0;
+            if (indent > 0)
+            {
+                row.DefaultCellStyle.Padding = new Padding(indent, 0, 0, 0);
+                row.DefaultCellStyle.BackColor = GroupMemberBackColor;   // 组成员浅底，整块更像一个单元
+            }
+        }
+
+        /// <summary>安全设置首行（越界/句柄未建时静默跳过）</summary>
+        private void TrySetFirstDisplayedRow(int rowIndex)
+        {
+            if (_channelGrid == null) return;
+            if (rowIndex < 0 || rowIndex >= _channelGrid.Rows.Count) return;
+            try { _channelGrid.FirstDisplayedScrollingRowIndex = rowIndex; }
+            catch (ArgumentOutOfRangeException) { }
+            catch (InvalidOperationException) { }
+        }
+
+        /// <summary>按通道锚点恢复首行：锚点已不在列表时不赋（禁止用旧行号 clamp）；fallbackIndex&lt;0 时同样不赋。</summary>
+        private void RestoreFirstDisplayedRowByChannel(ChannelData anchorChannel, int fallbackIndex)
+        {
+            if (_channelGrid == null) return;
+            if (anchorChannel != null)
+            {
+                for (int i = 0; i < _channelGrid.Rows.Count; i++)
+                {
+                    if (!ReferenceEquals(_channelGrid.Rows[i].Tag, anchorChannel)) continue;
+                    TrySetFirstDisplayedRow(i);
+                    return;
+                }
+            }
+            if (fallbackIndex >= 0) TrySetFirstDisplayedRow(fallbackIndex);
+        }
+
+        /// <summary>组头折叠/展开（BeginInvoke 延迟一拍：不在 DataGridView 的点击处理栈内改行集合）</summary>
+        private void ToggleGroupCollapsed(int rowIndex)
+        {
+            ChannelGroup group = GetGroupFromRow(rowIndex);
+            if (group == null || IsDisposed) return;
+
+            if (!IsHandleCreated)
+            {
+                ApplyGroupCollapsedToggle(group);
+                return;
+            }
+            try
+            {
+                BeginInvoke(new Action(() => ApplyGroupCollapsedToggle(group)));
+            }
+            catch (InvalidOperationException) { }   // 窗体正在销毁
+        }
+
+        private void ApplyGroupCollapsedToggle(ChannelGroup group)
+        {
+            if (IsDisposed || group == null) return;
+            group.IsCollapsed = !group.IsCollapsed;
+            RefreshChannelGridRows();
+        }
+
+        /// <summary>右键菜单：4 个组操作项 + Opening 命中判定（从 InitializeToolbarBindings 尾部调用，只装一次）</summary>
+        private void InitChannelGroupMenu()
+        {
+            if (_channelContextMenu == null || menuItemCreateGroup != null) return;
+
+            menuItemCreateGroup = new ToolStripMenuItem(TextMenuCreateGroup);
+            menuItemCreateGroup.Name = "menuItemCreateGroup";
+            menuItemCreateGroup.Click += (s, e) => CreateGroupFromSelectedChannels();
+
+            menuItemRenameGroup = new ToolStripMenuItem("重命名组…");
+            menuItemRenameGroup.Name = "menuItemRenameGroup";
+            menuItemRenameGroup.Click += (s, e) => RenameGroupFromContextMenu();
+
+            menuItemDissolveGroup = new ToolStripMenuItem("解散组（信号回根层）");
+            menuItemDissolveGroup.Name = "menuItemDissolveGroup";
+            menuItemDissolveGroup.Click += (s, e) => DissolveGroupFromContextMenu();
+
+            menuItemDeleteGroup = new ToolStripMenuItem("删除组…");
+            menuItemDeleteGroup.Name = "menuItemDeleteGroup";
+            menuItemDeleteGroup.Click += (s, e) => DeleteGroupFromContextMenu();
+
+            // 追加在 menuItemClearAll 之后，前加分隔线
+            _channelContextMenu.Items.Add(new ToolStripSeparator());
+            _channelContextMenu.Items.Add(menuItemCreateGroup);
+            _channelContextMenu.Items.Add(menuItemRenameGroup);
+            _channelContextMenu.Items.Add(menuItemDissolveGroup);
+            _channelContextMenu.Items.Add(menuItemDeleteGroup);
+
+            _channelContextMenu.Opening += _channelContextMenu_Opening;
+        }
+
+        /// <summary>右键弹出前：按鼠标位置命中判定是否点在组头上，并据此设置 4 个新项的启用态</summary>
+        private void _channelContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            _groupForContextMenu = null;
+            try
+            {
+                Point clientPoint = _channelGrid.PointToClient(Cursor.Position);
+                DataGridView.HitTestInfo hit = _channelGrid.HitTest(clientPoint.X, clientPoint.Y);
+                _groupForContextMenu = GetGroupFromRow(hit.RowIndex);
+            }
+            catch (Exception) { }
+
+            int selectedChannelRows = 0;
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                if (row.Tag is ChannelData) selectedChannelRows++;
+            }
+
+            bool hasGroup = _groupForContextMenu != null;
+            if (menuItemCreateGroup != null) menuItemCreateGroup.Enabled = selectedChannelRows > 0;
+            if (menuItemRenameGroup != null) menuItemRenameGroup.Enabled = hasGroup;
+            if (menuItemDissolveGroup != null) menuItemDissolveGroup.Enabled = hasGroup;
+            if (menuItemDeleteGroup != null) menuItemDeleteGroup.Enabled = hasGroup;
+        }
+
+        /// <summary>取组名：InputBox + 循环校验（非空、≤MaxNameLength）。重名由 TryCreateGroup/TryRename 报错。
+        /// 返回 null = 用户取消（或输入为空）。</summary>
+        private string PromptGroupName(string title, string defaultValue)
+        {
+            string value = defaultValue ?? string.Empty;
+            while (true)
+            {
+                string input = Microsoft.VisualBasic.Interaction.InputBox(
+                    "请输入" + SignalGroupFeatureName + "名称:", title, value, -1, -1);
+                if (input == null) return null;
+                input = input.Trim();
+                if (input.Length == 0) return null;
+                if (input.Length <= ChannelGroupModel.MaxNameLength) return input;
+
+                MessageBox.Show("名称不能超过 " + ChannelGroupModel.MaxNameLength + " 个字符",
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                value = input;
+            }
+        }
+
+        /// <summary>按选中信号行建组（只取 Tag is ChannelData 的行；不重排 Channels）</summary>
+        private void CreateGroupFromSelectedChannels()
+        {
+            var members = new List<ChannelData>();
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                if (!(row.Tag is ChannelData channel)) continue;
+                bool exists = false;
+                for (int i = 0; i < members.Count; i++)
+                {
+                    if (!ReferenceEquals(members[i], channel)) continue;
+                    exists = true;
+                    break;
+                }
+                if (!exists) members.Add(channel);
+            }
+            if (members.Count == 0) return;
+
+            string name = PromptGroupName(TextMenuCreateGroup.TrimEnd('…'),
+                SignalGroupFeatureName + (_groups.Groups.Count + 1));
+            if (name == null) return;
+
+            ChannelGroup created;
+            string error;
+            if (!_groups.TryCreateGroup(name, members, out created, out error))
+            {
+                MessageBox.Show(string.IsNullOrEmpty(error) ? "创建失败" : error,
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            RefreshChannelGridRows();
+        }
+
+        /// <summary>重命名右键命中的组</summary>
+        private void RenameGroupFromContextMenu()
+        {
+            ChannelGroup group = _groupForContextMenu;
+            if (group == null) return;
+
+            string name = PromptGroupName("重命名组", group.Name);
+            if (name == null) return;
+            if (string.Equals(name, group.Name, StringComparison.Ordinal)) return;
+
+            string error;
+            if (!_groups.TryRename(group, name, out error))
+            {
+                MessageBox.Show(string.IsNullOrEmpty(error) ? "重命名失败" : error,
+                    "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            RefreshChannelGridRows();
+        }
+
+        /// <summary>解散右键命中的组（信号回根层，Channels 与次序完全不变）</summary>
+        private void DissolveGroupFromContextMenu()
+        {
+            ChannelGroup group = _groupForContextMenu;
+            if (group == null) return;
+            _groups.Dissolve(group);
+            RefreshChannelGridRows();
+        }
+
+        /// <summary>删除右键命中的组及其组内全部信号（确认框含成员数）</summary>
+        private void DeleteGroupFromContextMenu()
+        {
+            ChannelGroup group = _groupForContextMenu;
+            if (group == null) return;
+
+            List<ChannelData> members = CollectGroupMembersInChannelOrder(group);
+            string message = string.Format("确定要删除组 \"{0}\" 及其中的 {1} 个信号吗？", group.Name, members.Count);
+            if (MessageBox.Show(message, "删除组", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            lock (_lockObj)
+            {
+                foreach (var channel in members)
+                {
+                    channel.Clear();
+                    Channels.Remove(channel);
+                }
+                RebuildChannelLookup();
+            }
+
+            _groups.Dissolve(group);     // 组内信号已删；Dissolve 不动 Channels 次序
+            _groups.PruneTo(Channels);   // 兜底：剔残留成员，变空的组删除
+            RefreshChannelGridRows();
+            _chartControl.SetChannels(Channels);
+            _statusLabel.Text = "状态: 已停止";
+            _statusLabel.ForeColor = Color.Red;
+        }
+
+        /// <summary>组的成员按 Channels 顺序（只含仍在 Channels 中的成员）</summary>
+        private List<ChannelData> CollectGroupMembersInChannelOrder(ChannelGroup group)
+        {
+            var result = new List<ChannelData>();
+            if (group == null || Channels == null) return result;
+            for (int i = 0; i < Channels.Count; i++)
+            {
+                var channel = Channels[i];
+                if (channel == null) continue;
+                if (group.Members.Contains(channel)) result.Add(channel);
+            }
+            return result;
+        }
+
+        /// <summary>报表截图作用域（可嵌套）。行计划标志固定 skipReportOnly=true / forReportCapture=true：
+        /// 作用域内强制展开且不输出组头，行序列与改造前逐行一致；作用域外恢复折叠态与首行位置。
+        /// 全程不改任何 ChannelGroup.IsCollapsed。</summary>
+        internal IDisposable ExpandGroupsForScreenshot()
+        {
+            return new GroupsExpandScope(this);
+        }
+
+        /// <summary>截图作用域句柄：Enter/Dispose 按嵌套计数，Dispose 幂等</summary>
+        private sealed class GroupsExpandScope : IDisposable
+        {
+            private ChartFrom _owner;
+
+            public GroupsExpandScope(ChartFrom owner)
+            {
+                _owner = owner;
+                owner._groupsForceExpandDepth++;
+                if (owner._groupsForceExpandDepth == 1)
+                    owner.RebuildForScreenshotScope();
+            }
+
+            public void Dispose()
+            {
+                ChartFrom owner = _owner;
+                if (owner == null) return;   // 幂等
+                _owner = null;
+                if (owner.IsDisposed) return;
+
+                owner._groupsForceExpandDepth--;
+                if (owner._groupsForceExpandDepth > 0) return;
+                owner._groupsForceExpandDepth = 0;
+                owner.RebuildForScreenshotScope();
+            }
+        }
+
+        /// <summary>截图作用域的行重建：按通道锚点记录/恢复首行 + 同步布局与绘制（截图走 DrawToBitmap）</summary>
+        private void RebuildForScreenshotScope()
+        {
+            if (_channelGrid == null) return;
+
+            int from = -1;
+            if (_channelGrid.Rows.Count > 0)
+            {
+                try { from = _channelGrid.FirstDisplayedScrollingRowIndex; }
+                catch (ArgumentOutOfRangeException) { from = -1; }
+                catch (InvalidOperationException) { from = -1; }
+            }
+            ChannelData anchorChannel = (from >= 0 && from < _channelGrid.Rows.Count)
+                ? _channelGrid.Rows[from].Tag as ChannelData
+                : null;
+
+            // 必须用 Refresh：截图里"当前值/差值"两列不能空白
+            RefreshChannelGridRows();
+
+            // 按通道锚点恢复首行（Enter 与 Dispose 都做；反查不到就不赋）
+            RestoreFirstDisplayedRowByChannel(anchorChannel, -1);
+
+            try
+            {
+                PerformLayout();
+                Update();
+                _channelGrid.PerformLayout();
+                _channelGrid.Update();
+            }
+            catch (Exception) { }
+        }
+
         #endregion
 
         private void _channelContextMenu_SelectAll_Click(object sender, EventArgs e)
@@ -4606,17 +5351,41 @@ namespace PCAN_Client
             return 0; // 无法预估时返回0，进度条不显示百分比
         }
 
+        // 历史名称：信号组；XML 元素名 SignalGroups / Group / Signals / Signal 与文件名 ChartPresets.xml 不可改
         #region Signal Group Save/Load
 
-        /// <summary>可序列化的信号组集合包装</summary>
+        /// <summary>可序列化的信号清单集合包装</summary>
         [XmlRoot("SignalGroups")]
         public class SignalGroupCollection
         {
             [XmlElement("Group")]
             public List<SignalGroupItem> Items { get; set; } = new List<SignalGroupItem>();
+
+            /// <summary>各信号清单里保存的"信号组"（新增元素；不含它的旧文件照常读取，旧版本读到它也只是忽略）</summary>
+            [XmlArray("ChannelGroups")]
+            [XmlArrayItem("ChannelGroup")]
+            public List<SignalGroupXmlItem> ChannelGroups { get; set; } = new List<SignalGroupXmlItem>();
         }
 
-        /// <summary>单个信号组条目</summary>
+        /// <summary>信号清单里保存的一个信号组：组名 + 归属清单名 + 折叠态 + 成员引用</summary>
+        public class SignalGroupXmlItem
+        {
+            [XmlAttribute("name")]
+            public string Name { get; set; }
+
+            /// <summary>该组属于哪个信号清单（加载该清单时恢复对应的组）</summary>
+            [XmlAttribute("preset")]
+            public string PresetName { get; set; }
+
+            [XmlAttribute("collapsed")]
+            public bool Collapsed { get; set; }
+
+            [XmlArray("Members")]
+            [XmlArrayItem("Member")]
+            public List<SignalPresetData> Members { get; set; } = new List<SignalPresetData>();
+        }
+
+        /// <summary>单个信号清单条目</summary>
         public class SignalGroupItem
         {
             [XmlAttribute("name")]
@@ -4634,6 +5403,7 @@ namespace PCAN_Client
         private Dictionary<string, List<SignalPresetData>> LoadAllPresets()
         {
             string filePath = GetPresetsFilePath();
+            _presetGroupsCache = new Dictionary<string, List<SignalGroupXmlItem>>(StringComparer.Ordinal);
             if (!File.Exists(filePath))
                 return new Dictionary<string, List<SignalPresetData>>();
             try
@@ -4655,6 +5425,20 @@ namespace PCAN_Client
                         {
                             if (!string.IsNullOrEmpty(item.Name))
                                 dict[item.Name] = item.Signals ?? new List<SignalPresetData>();
+                        }
+                    }
+                    // 顺带把各清单里保存的信号组载入缓存（旧文件没有 ChannelGroups 节点时缓存为空，不影响读取）
+                    if (collection?.ChannelGroups != null)
+                    {
+                        foreach (SignalGroupXmlItem savedGroup in collection.ChannelGroups)
+                        {
+                            if (savedGroup == null || string.IsNullOrEmpty(savedGroup.Name)
+                                || string.IsNullOrEmpty(savedGroup.PresetName)) continue;
+                            List<SignalGroupXmlItem> bucket;
+                            if (!_presetGroupsCache.TryGetValue(savedGroup.PresetName, out bucket))
+                                _presetGroupsCache[savedGroup.PresetName] =
+                                    bucket = new List<SignalGroupXmlItem>();
+                            bucket.Add(savedGroup);
                         }
                     }
                     return dict;
@@ -4682,6 +5466,20 @@ namespace PCAN_Client
                     Signals = kvp.Value
                 });
             }
+            // 组随清单一起落盘：只写仍然存在的清单名，所以删除某清单时它的组自然消失
+            collection.ChannelGroups = new List<SignalGroupXmlItem>();
+            foreach (var kvp in presets)
+            {
+                List<SignalGroupXmlItem> savedGroups;
+                if (_presetGroupsCache == null || !_presetGroupsCache.TryGetValue(kvp.Key, out savedGroups)
+                    || savedGroups == null) continue;
+                foreach (SignalGroupXmlItem savedGroup in savedGroups)
+                {
+                    if (savedGroup == null) continue;
+                    savedGroup.PresetName = kvp.Key;
+                    collection.ChannelGroups.Add(savedGroup);
+                }
+            }
             using (FileStream fs = new FileStream(filePath, FileMode.Create, FileAccess.Write))
             {
                 XmlSerializer serializer = new XmlSerializer(typeof(SignalGroupCollection));
@@ -4692,7 +5490,7 @@ namespace PCAN_Client
         private void RefreshPresetComboBox()
         {
             _presetComboBox.Items.Clear();
-            _presetComboBox.Items.Add("请选择信号组...");
+            _presetComboBox.Items.Add("请选择信号清单...");
             var presets = LoadAllPresets();
             foreach (var key in presets.Keys.OrderBy(k => k))
             {
@@ -4702,11 +5500,14 @@ namespace PCAN_Client
         }
 
         private bool _isLoadingPreset = false;
+        /// <summary>最近一次读取 ChartPresets.xml 时各信号清单里保存的信号组（清单名 → 组列表）</summary>
+        private Dictionary<string, List<SignalGroupXmlItem>> _presetGroupsCache =
+            new Dictionary<string, List<SignalGroupXmlItem>>(StringComparer.Ordinal);
 
         private void _presetComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_isLoadingPreset) return;
-            // 选中有效项（非"请选择信号组..."）时自动加载
+            // 选中有效项（非"请选择信号清单..."）时自动加载
             if (_presetComboBox.SelectedIndex > 0)
             {
                 string name = _presetComboBox.SelectedItem.ToString();
@@ -4716,12 +5517,12 @@ namespace PCAN_Client
                     _isLoadingPreset = true;
                     try
                     {
-                        ApplySignalData(allPresets[name]);
+                        ApplySignalData(allPresets[name], name);
                         _currentSignalGroupPath = GetPresetsFilePath();
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show($"加载信号组失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show($"加载信号清单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                     finally
                     {
@@ -4746,6 +5547,7 @@ namespace PCAN_Client
                     channel.Clear();
                 }
                 Channels.Clear();
+                _groups.Clear();          // 通道全清 → 分组必然无成员，一并清空
                 _channelGrid.Rows.Clear();
             }
             RebuildChannelLookup();
@@ -4758,7 +5560,13 @@ namespace PCAN_Client
 
         private List<SignalPresetData> CollectCurrentChannels()
         {
-            return Channels.Select(c => new SignalPresetData
+            return Channels.Select(ToPresetData).ToList();
+        }
+
+        /// <summary>把一个通道转成清单里记录信号身份/样式的条目（清单与信号组共用）</summary>
+        private static SignalPresetData ToPresetData(ChannelData c)
+        {
+            return new SignalPresetData
             {
                 SignalName = c.DbcSignalName,
                 SignalComment = "",
@@ -4769,7 +5577,55 @@ namespace PCAN_Client
                 Unit = c.Unit ?? "",
                 ColorArgb = c.Color.ToArgb(),
                 BusChannelIndex = c.BusChannelIndex
-            }).ToList();
+            };
+        }
+
+        /// <summary>收集当前会话里的信号组，供"保存信号清单"一并落盘</summary>
+        private List<SignalGroupXmlItem> CollectCurrentGroups()
+        {
+            var result = new List<SignalGroupXmlItem>();
+            foreach (ChannelGroup group in _groups.Groups)
+            {
+                var item = new SignalGroupXmlItem
+                {
+                    Name = group.Name,
+                    Collapsed = group.IsCollapsed,
+                    Members = new List<SignalPresetData>()
+                };
+                foreach (ChannelData channel in Channels)
+                {
+                    if (!ReferenceEquals(_groups.FindGroup(channel), group)) continue;
+                    item.Members.Add(ToPresetData(channel));
+                }
+                if (item.Members.Count > 0) result.Add(item);
+            }
+            return result;
+        }
+
+        /// <summary>把清单里保存的信号组恢复到当前 Channels 上（按 MsgId+信号名(+总线通道) 匹配，匹配不上的成员忽略）</summary>
+        private void RestoreGroupsFromPreset(List<SignalGroupXmlItem> savedGroups)
+        {
+            if (savedGroups == null || savedGroups.Count == 0) return;
+            foreach (SignalGroupXmlItem saved in savedGroups)
+            {
+                if (saved == null || string.IsNullOrEmpty(saved.Name)) continue;
+                var members = new List<ChannelData>();
+                foreach (SignalPresetData m in saved.Members ?? new List<SignalPresetData>())
+                {
+                    if (m == null) continue;
+                    ChannelData found = Channels.FirstOrDefault(c =>
+                        c.DbcMessageId == (int)m.MsgId
+                        && string.Equals(c.DbcSignalName ?? "", m.SignalName ?? "", StringComparison.Ordinal)
+                        && (m.BusChannelIndex < 0 || c.BusChannelIndex == m.BusChannelIndex));
+                    if (found != null && !members.Contains(found)) members.Add(found);
+                }
+                if (members.Count == 0) continue;
+                ChannelGroup created;
+                string error;
+                if (_groups.TryCreateGroup(saved.Name, members, out created, out error) && created != null)
+                    created.IsCollapsed = saved.Collapsed;
+            }
+            RefreshChannelGridRows();
         }
 
         /// <summary>
@@ -4838,7 +5694,7 @@ namespace PCAN_Client
             }
         }
 
-        private void ApplySignalData(List<SignalPresetData> signals)
+        private void ApplySignalData(List<SignalPresetData> signals, string presetName = null)
         {
             // 清空当前曲线
             lock (_lockObj)
@@ -4848,6 +5704,7 @@ namespace PCAN_Client
                     channel.Clear();
                 }
                 Channels.Clear();
+                _groups.Clear();          // 加载新清单前清空分组，避免旧组残留
                 _channelGrid.Rows.Clear();
             }
             RebuildChannelLookup();
@@ -4921,6 +5778,14 @@ namespace PCAN_Client
             _btnAutoScroll.Text = "停止滑动";
             _statusLabel.Text = "状态: 已停止";
             _statusLabel.ForeColor = Color.Red;
+
+            // 该清单里若保存过信号组，一并在刚建好的通道上恢复（组名/折叠态/成员身份都来自文件）
+            if (!string.IsNullOrEmpty(presetName))
+            {
+                List<SignalGroupXmlItem> savedGroups;
+                if (_presetGroupsCache.TryGetValue(presetName, out savedGroups))
+                    RestoreGroupsFromPreset(savedGroups);
+            }
         }
 
         private void _btnSavePreset_Click(object sender, EventArgs e)
@@ -4935,10 +5800,10 @@ namespace PCAN_Client
             if (_presetComboBox.SelectedIndex > 0)
                 selectedName = _presetComboBox.SelectedItem.ToString();
 
-            // 弹出输入框让用户输入信号组名称
+            // 弹出输入框让用户输入信号清单名称
             string name = Microsoft.VisualBasic.Interaction.InputBox(
-                "请输入信号组名称:",
-                "保存信号组",
+                "请输入信号清单名称:",
+                "保存信号清单",
                 selectedName,
                 -1, -1);
 
@@ -4952,20 +5817,32 @@ namespace PCAN_Client
                 // 如果已存在，询问是否覆盖
                 if (presets.ContainsKey(name))
                 {
-                    var result = MessageBox.Show($"信号组 \"{name}\" 已存在，是否覆盖？", "确认覆盖", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                    var result = MessageBox.Show($"信号清单 \"{name}\" 已存在，是否覆盖？", "确认覆盖", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                     if (result != DialogResult.Yes) return;
                 }
 
                 presets[name] = signals;
+                _presetGroupsCache[name] = CollectCurrentGroups();   // 当前会话的信号组随清单一起落盘
                 SaveAllPresets(presets);
                 _currentSignalGroupPath = GetPresetsFilePath();
-                RefreshPresetComboBox();
-                _presetComboBox.SelectedItem = name;
-                MessageBox.Show($"信号组 \"{name}\" 保存成功", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // 刷新下拉并回选刚保存的清单时必须禁止自动加载：
+                // 否则 SelectedItem 变化会触发 _presetComboBox_SelectedIndexChanged → ApplySignalData
+                // → 清空 Channels 与 _groups，表现为"保存后组消失、还原成没分组的样子"
+                _isLoadingPreset = true;
+                try
+                {
+                    RefreshPresetComboBox();
+                    _presetComboBox.SelectedItem = name;
+                }
+                finally
+                {
+                    _isLoadingPreset = false;
+                }
+                MessageBox.Show($"信号清单 \"{name}\" 保存成功", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"保存信号组失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"保存信号清单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -4975,7 +5852,7 @@ namespace PCAN_Client
             _isLoadingPreset = true;
             try
             {
-                // 始终弹出选择对话框让用户选择信号组
+                // 始终弹出选择对话框让用户选择信号清单
                 string selectedName = ShowPresetSelectionDialog();
                 if (selectedName == null)
                     return;
@@ -4983,19 +5860,19 @@ namespace PCAN_Client
                 var allPresets = LoadAllPresets();
                 if (!allPresets.ContainsKey(selectedName))
                 {
-                    MessageBox.Show($"信号组 \"{selectedName}\" 不存在", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show($"信号清单 \"{selectedName}\" 不存在", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     RefreshPresetComboBox();
                     return;
                 }
 
-                ApplySignalData(allPresets[selectedName]);
+                ApplySignalData(allPresets[selectedName], selectedName);
                 _currentSignalGroupPath = GetPresetsFilePath();
                 RefreshPresetComboBox();
                 _presetComboBox.SelectedItem = selectedName;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"加载信号组失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"加载信号清单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -5003,13 +5880,13 @@ namespace PCAN_Client
             }
         }
 
-        /// <summary>弹出选择信号组对话框</summary>
+        /// <summary>弹出选择信号清单对话框</summary>
         private string ShowPresetSelectionDialog()
         {
             var presets = LoadAllPresets();
             if (presets.Count == 0)
             {
-                MessageBox.Show("没有可加载的信号组，请先保存一个信号组", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("没有可加载的信号清单，请先保存一个信号清单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return null;
             }
 
@@ -5017,7 +5894,7 @@ namespace PCAN_Client
 
             using (var form = new Form())
             {
-                form.Text = "加载信号组";
+                form.Text = "加载信号清单";
                 form.StartPosition = FormStartPosition.CenterParent;
                 form.ClientSize = new System.Drawing.Size(360, 420);
                 form.MinimumSize = new System.Drawing.Size(300, 350);
@@ -5033,12 +5910,12 @@ namespace PCAN_Client
 
                 // 顶部提示标签
                 var lblHint = new Label();
-                lblHint.Text = "请选择一个信号组：";
+                lblHint.Text = "请选择一个信号清单：";
                 lblHint.Location = new Point(margin, margin);
                 lblHint.Size = new Size(cw - margin * 2, 20);
                 lblHint.Font = new Font("Microsoft YaHei UI", 9F);
 
-                // 信号组列表
+                // 信号清单列表
                 int btnAreaHeight = 28 + margin + 8; // 按钮+间距+留白
                 var listBox = new ListBox();
                 listBox.Location = new Point(margin, lblHint.Bottom + 6);
@@ -5102,12 +5979,12 @@ namespace PCAN_Client
         {
             if (_presetComboBox.SelectedIndex <= 0)
             {
-                MessageBox.Show("请先在预设列表中选择一个要删除的信号组", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("请先在预设列表中选择一个要删除的信号清单", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
             string selectedName = _presetComboBox.SelectedItem.ToString();
-            var result = MessageBox.Show($"确定要删除信号组 \"{selectedName}\" 吗？", "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            var result = MessageBox.Show($"确定要删除信号清单 \"{selectedName}\" 吗？", "确认删除", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (result != DialogResult.Yes) return;
 
             try
@@ -5119,16 +5996,16 @@ namespace PCAN_Client
                     if (_currentSignalGroupPath == GetPresetsFilePath())
                         _currentSignalGroupPath = "";
                     RefreshPresetComboBox();
-                    MessageBox.Show($"信号组 \"{selectedName}\" 已删除", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show($"信号清单 \"{selectedName}\" 已删除", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 else
                 {
-                    MessageBox.Show($"信号组 \"{selectedName}\" 不存在", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show($"信号清单 \"{selectedName}\" 不存在", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"删除信号组失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"删除信号清单失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
