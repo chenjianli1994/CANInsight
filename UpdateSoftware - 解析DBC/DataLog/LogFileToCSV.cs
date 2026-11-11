@@ -46,8 +46,10 @@ namespace PCAN_Client.DataLog
         private void button3_Click(object sender, EventArgs e)
         {
             OpenFileDialog dialog = new OpenFileDialog();
-            dialog.Title = "请选择bin、ASC或BLF文件";
-            dialog.Filter = "bin文件|*.bin|asc文件|*.asc|blf文件|*.blf|blf文件|*.BLF";
+            dialog.Title = "请选择asc、blf或bin文件";
+            // 默认选中第一项：asc（ASC 是最常用的来源格式）。blf 的大小写两种写法合并成一条，
+            // 避免下拉里出现两个同名"blf文件"
+            dialog.Filter = "asc文件|*.asc|blf文件|*.blf;*.BLF|bin文件|*.bin";
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 string path = dialog.FileName;
