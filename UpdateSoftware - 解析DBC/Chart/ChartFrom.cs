@@ -1512,7 +1512,9 @@ namespace PCAN_Client
             }
         }
 
-        /// <summary>组级勾选：未全勾→整组勾上；已全勾→整组取消（同步每行勾选框与曲线可见性）</summary>
+        /// <summary>组级勾选：未全勾→整组勾上；已全勾→整组取消。
+        /// **折叠态下成员行不存在**（只渲染组头），所以必须"先改模型 channel.Visible，再同步屏幕上存在的行"，
+        /// 否则折叠时点击整组勾选框会毫无反应。</summary>
         private void ToggleGroupChecked(int rowIndex)
         {
             ChannelGroup group = GetGroupFromRow(rowIndex);
@@ -1521,12 +1523,22 @@ namespace PCAN_Client
             CountGroupChecked(group, out total, out checkedCount);
             if (total == 0) return;
             bool newVisible = checkedCount < total;
+
+            // ① 模型先行（折叠态没有成员行，也必须生效）
+            foreach (ChannelData channel in Channels)
+            {
+                if (!ReferenceEquals(_groups.FindGroup(channel), group)) continue;
+                channel.Visible = newVisible;
+            }
+            // ② 展开态：同步屏幕上已有的成员行勾选框（SetChannelRowChecked 幂等）
             for (int i = 0; i < _channelGrid.Rows.Count; i++)
             {
                 ChannelData channel = _channelGrid.Rows[i].Tag as ChannelData;
                 if (channel == null || !ReferenceEquals(_groups.FindGroup(channel), group)) continue;
-                SetChannelRowChecked(i, newVisible);   // 内部同步 channel.Visible 并刷新曲线
+                SetChannelRowChecked(i, newVisible);
             }
+            // ③ 折叠态走不到 ② 时曲线可见性仍需刷新；组头复选框也要重绘
+            _chartControl.InvalidateChannels();
             try { _channelGrid.InvalidateRow(rowIndex); } catch (Exception) { }
         }
 
