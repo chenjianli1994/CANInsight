@@ -5606,6 +5606,10 @@ namespace PCAN_Client
         private void RestoreGroupsFromPreset(List<SignalGroupXmlItem> savedGroups)
         {
             if (savedGroups == null || savedGroups.Count == 0) return;
+            // "已认领"集合必须**跨组共用**：一个通道实例只能属于一个组。若每个组各自认领，
+            // 后处理的组会把先前组的成员抢走（AddMember 单归属会把它从旧组移出），
+            // 而被抢的那个实例又无人认领 → 落到组外。这正是"拖进组→保存→加载回来又回到外层"的现象。
+            var claimed = new List<ChannelData>();
             foreach (SignalGroupXmlItem saved in savedGroups)
             {
                 if (saved == null || string.IsNullOrEmpty(saved.Name)) continue;
@@ -5613,12 +5617,12 @@ namespace PCAN_Client
                 foreach (SignalPresetData m in saved.Members ?? new List<SignalPresetData>())
                 {
                     if (m == null) continue;
-                    // 一条保存记录只认领**一个**通道实例：Channels 里可能存在同一信号的多个实例
-                    // （重复添加、或同一信号挂在多条总线上）。早期实现用 FirstOrDefault 会让两条记录
-                    // 都匹配到第一个实例，第二条被去重丢掉，表现为"组里的信号跑到组外面"。
-                    ChannelData found = ClaimChannelForGroup(m, members, true);
-                    if (found == null) found = ClaimChannelForGroup(m, members, false);   // 旧数据总线通道对不上时退一步
-                    if (found != null) members.Add(found);
+                    // 一条保存记录只认领一个尚未被任何组占用的通道实例；没有可用实例时宁可少一员也不抢
+                    ChannelData found = ClaimChannelForGroup(m, claimed, true);
+                    if (found == null) found = ClaimChannelForGroup(m, claimed, false);   // 旧数据总线通道对不上时退一步
+                    if (found == null) continue;
+                    claimed.Add(found);
+                    members.Add(found);
                 }
                 if (members.Count == 0) continue;
                 ChannelGroup created;
@@ -5629,7 +5633,7 @@ namespace PCAN_Client
             RefreshChannelGridRows();
         }
 
-        /// <summary>在 Channels 里找一条"身份匹配且尚未被本组认领"的通道；exactBus=true 时要求总线通道也一致</summary>
+        /// <summary>在 Channels 里找一条"身份匹配且尚未被任何组认领"的通道；exactBus=true 时要求总线通道也一致</summary>
         private ChannelData ClaimChannelForGroup(SignalPresetData saved, List<ChannelData> claimed, bool exactBus)
         {
             foreach (ChannelData channel in Channels)
