@@ -90,6 +90,7 @@ namespace PCAN_Client
         private int _groupsForceExpandDepth;             // >0 = 报表截图作用域（可嵌套，Dispose 归零才恢复）
         private ChannelGroup _groupForContextMenu;       // 右键 Opening 命中的组头（未命中为 null）
         private ToolStripMenuItem menuItemCreateGroup, menuItemRenameGroup, menuItemDissolveGroup, menuItemDeleteGroup;
+        private ToolStripMenuItem menuItemAddToGroup, menuItemRemoveFromGroup;
         /// <summary>组头行底色（与行 DefaultCellStyle / SelectionBackColor 同色，点组头能看出选中）</summary>
         // 组头行外观：浅蓝灰底 + 左侧竖色条 + 粗体组名，与普通信号行（白底）明显区分
         private static readonly Color GroupHeaderBackColor = Color.FromArgb(226, 233, 243);
@@ -4316,6 +4317,15 @@ namespace PCAN_Client
             menuItemCreateGroup.Name = "menuItemCreateGroup";
             menuItemCreateGroup.Click += (s, e) => CreateGroupFromSelectedChannels();
 
+            // 添加到信号组：子项在 Opening 时按当前已有的组动态重建
+            menuItemAddToGroup = new ToolStripMenuItem("添加到信号组");
+            menuItemAddToGroup.Name = "menuItemAddToGroup";
+
+            // 移出信号组：把选中的组内信号退回根层
+            menuItemRemoveFromGroup = new ToolStripMenuItem("移出信号组");
+            menuItemRemoveFromGroup.Name = "menuItemRemoveFromGroup";
+            menuItemRemoveFromGroup.Click += (s, e) => RemoveSelectedSignalsFromGroup();
+
             menuItemRenameGroup = new ToolStripMenuItem("重命名组…");
             menuItemRenameGroup.Name = "menuItemRenameGroup";
             menuItemRenameGroup.Click += (s, e) => RenameGroupFromContextMenu();
@@ -4331,6 +4341,8 @@ namespace PCAN_Client
             // 追加在 menuItemClearAll 之后，前加分隔线
             _channelContextMenu.Items.Add(new ToolStripSeparator());
             _channelContextMenu.Items.Add(menuItemCreateGroup);
+            _channelContextMenu.Items.Add(menuItemAddToGroup);
+            _channelContextMenu.Items.Add(menuItemRemoveFromGroup);
             _channelContextMenu.Items.Add(menuItemRenameGroup);
             _channelContextMenu.Items.Add(menuItemDissolveGroup);
             _channelContextMenu.Items.Add(menuItemDeleteGroup);
@@ -4351,9 +4363,13 @@ namespace PCAN_Client
             catch (Exception) { }
 
             int selectedChannelRows = 0;
+            int selectedSignalsInGroup = 0;
             foreach (DataGridViewRow row in _channelGrid.SelectedRows)
             {
-                if (row.Tag is ChannelData) selectedChannelRows++;
+                ChannelData selectedChannel = row.Tag as ChannelData;
+                if (selectedChannel == null) continue;
+                selectedChannelRows++;
+                if (_groups.FindGroup(selectedChannel) != null) selectedSignalsInGroup++;
             }
 
             bool hasGroup = _groupForContextMenu != null;
@@ -4361,6 +4377,68 @@ namespace PCAN_Client
             if (menuItemRenameGroup != null) menuItemRenameGroup.Enabled = hasGroup;
             if (menuItemDissolveGroup != null) menuItemDissolveGroup.Enabled = hasGroup;
             if (menuItemDeleteGroup != null) menuItemDeleteGroup.Enabled = hasGroup;
+            // 添加到信号组：选中的信号行 ≥1 且当前已有组；子项按已有组动态重建
+            if (menuItemAddToGroup != null)
+            {
+                menuItemAddToGroup.Enabled = selectedChannelRows > 0 && _groups.Groups.Count > 0;
+                RebuildAddToGroupSubmenu();
+            }
+            // 移出信号组：选中的信号里至少有一个在组内
+            if (menuItemRemoveFromGroup != null) menuItemRemoveFromGroup.Enabled = selectedSignalsInGroup > 0;
+        }
+
+        /// <summary>「添加到信号组」的子项：每个已有组一项（无组时给一条不可点的提示）</summary>
+        private void RebuildAddToGroupSubmenu()
+        {
+            if (menuItemAddToGroup == null) return;
+            menuItemAddToGroup.DropDownItems.Clear();
+            if (_groups.Groups.Count == 0)
+            {
+                menuItemAddToGroup.DropDownItems.Add(new ToolStripMenuItem("（还没有信号组）") { Enabled = false });
+                return;
+            }
+            foreach (ChannelGroup group in _groups.Groups)
+            {
+                ChannelGroup target = group;
+                var item = new ToolStripMenuItem(string.Format("{0} ({1})", group.Name, group.MemberCount));
+                item.Click += (s, e) => AddSelectedSignalsToGroup(target);
+                menuItemAddToGroup.DropDownItems.Add(item);
+            }
+        }
+
+        /// <summary>把当前选中的信号加入指定组（跨组时自动从旧组移出；组处于折叠态时自动展开）</summary>
+        private void AddSelectedSignalsToGroup(ChannelGroup target)
+        {
+            if (target == null) return;
+            var added = new List<ChannelData>();
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                ChannelData channel = row.Tag as ChannelData;
+                if (channel == null) continue;
+                _groups.AddMember(target, channel);
+                added.Add(channel);
+            }
+            if (added.Count == 0) return;
+            if (target.IsCollapsed) target.IsCollapsed = false;   // 加进折叠组后要能看见结果
+            RefreshChannelGridRows();
+            SelectChannelGridRow(added[0]);
+            _chartControl.SmartInvalidate();
+        }
+
+        /// <summary>把当前选中的组内信号移出组（回到根层；移空的组自动消失）</summary>
+        private void RemoveSelectedSignalsFromGroup()
+        {
+            var removed = new List<ChannelData>();
+            foreach (DataGridViewRow row in _channelGrid.SelectedRows)
+            {
+                ChannelData channel = row.Tag as ChannelData;
+                if (channel == null) continue;
+                if (_groups.RemoveMember(channel)) removed.Add(channel);
+            }
+            if (removed.Count == 0) return;
+            RefreshChannelGridRows();
+            SelectChannelGridRow(removed[0]);
+            _chartControl.SmartInvalidate();
         }
 
         /// <summary>取组名：InputBox + 循环校验（非空、≤MaxNameLength）。重名由 TryCreateGroup/TryRename 报错。
