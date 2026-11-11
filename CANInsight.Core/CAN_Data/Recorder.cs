@@ -313,36 +313,61 @@ namespace PCAN_Client.CAN_Data
         }
 
         /// <summary>
-        /// CAN FD 对象（最多 64 字节数据）。按 CANoe 11 实际写出的 FD64 布局：对象 136 字节、
-        /// mHeaderSize=32、mFlags=0x3000、mValidDataBytes=实际字节数、mDLC=FD DLC 码。
-        /// 原实现统一按经典对象只写前 8 字节，CAN FD 报文 &gt;8 字节的部分永久丢失。
+        /// CAN FD 对象（最多 64 字节数据）。实时录制与格式转换共用，写出**变长对象**（类型 100，
+        /// 52 + 载荷字节数，4 字节对齐）：8 字节帧 60 字节，相比固定 136 字节的 FD64 对象，
+        /// 记录文件体积约减半。原实现固定写 FD64（类型 101，136 字节）。
         /// </summary>
         internal static void WriteCanFdObject(IntPtr handle, CanMessageData msg)
         {
-            // 结构体为 144 字节（尾部 8 字节是 mExtDataOffset 指向的可选扩展帧数据，此处不使用），
-            // 但对象长度按 CANoe 的 136 字节写，多出的 8 字节不参与落盘
-            int structSize = Marshal.SizeOf<VBLCANFDMessage64>();
-            IntPtr msgPtr = Marshal.AllocHGlobal(structSize);
+            WriteCanFdObjectVariable(handle, msg);
+        }
+        /// <summary>
+        /// CAN FD 对象（**变长**，类型 100）：对象长度 = 52 + 数据字节数（4 字节对齐，60~116 字节），
+        /// 相比固定 136 字节的 FD64 对象能显著减小文件（8 字节帧 60 vs 136，32 字节帧 84 vs 136）。
+        /// 布局来自 binlog.h：mChannel@32(UInt16)、mFlags@34、mDLC@35、mID@36、mArbBitCount@44、
+        /// mCANFDFlags@45、mValidDataBytes@46、mData@52；读取方见 LogFileLoader.ReadCANFDMessage16。
+        /// 实时录制（Recorder.WriteCanFdObject）与格式转换（BlfStreamWriter）共用此实现。
+        /// </summary>
+        internal static void WriteCanFdObjectVariable(IntPtr handle, CanMessageData msg)
+        {
+            int len = Math.Min(msg.Data == null ? 0 : msg.Data.Length, 64);
+            int padded = ((len + 3) / 4) * 4;
+            if (padded < 8) padded = 8;                 // 至少 8 字节，避免异常小的对象
+            int objSize = 52 + padded;                  // 60 / 64 / 68 ... 116
+            int structSize = Marshal.SizeOf<VBLCANFDMessage>();   // 72（其 mData 仅 16 字节，超出部分手动写指针）
+            int bufSize = Math.Max(structSize, objSize + 8);
+            IntPtr msgPtr = Marshal.AllocHGlobal(bufSize);
             try
             {
-                var canFd = new VBLCANFDMessage64();
+                // 先清零，保证对象尾部（可能超出结构体的部分）为确定的 0
+                for (int i = 0; i < bufSize; i++) Marshal.WriteByte(msgPtr, i, 0);
+
+                var canFd = new VBLCANFDMessage();
                 canFd.mHeader.mBase.mSignature = BLFAPI.BL_OBJ_SIGNATURE;
                 canFd.mHeader.mBase.mHeaderSize = (UInt16)Marshal.SizeOf(typeof(VBLObjectHeader));
                 canFd.mHeader.mBase.mHeaderVersion = 1;
-                canFd.mHeader.mBase.mObjectSize = (UInt16)BLFAPI.CanFd64ObjectSize;
-                canFd.mHeader.mBase.mObjectType = (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE_64;
+                canFd.mHeader.mBase.mObjectSize = (UInt16)objSize;
+                canFd.mHeader.mBase.mObjectType = (uint)BLFObjectType.BL_OBJ_TYPE_CAN_FD_MESSAGE;
                 canFd.mHeader.mObjectFlags = (uint)ObjectFlag.BL_OBJ_FLAG_TIME_ONE_NANS;
                 canFd.mHeader.mObjectTimeStamp = (ulong)(msg.Timestamp * 1000);
                 canFd.mChannel = msg.Channel;
-                canFd.mFlags = 0x3000; // CANoe 写出的 FD 帧标志
-                canFd.mID = MakeBlfId(msg.CanId);
-                int len = Math.Min(msg.Data.Length, 64);
-                canFd.mValidDataBytes = (byte)len;
+                canFd.mFlags = 0;                       // 0 = Rx
                 canFd.mDLC = BLFAPI.GetFdDlcCode(len);
-                var data = new byte[64];
-                Array.Copy(msg.Data, data, len);
-                canFd.mData = data;
+                canFd.mArbBitCount = 0;
+                canFd.mCANFDFlags = 0;                  // 无 BRS/ESI 标记（与 FD64 写法给出的信息量一致）
+                canFd.mValidDataBytes = (byte)len;
+                canFd.mReserved1 = 0;
+                canFd.mReserved2 = 0;
+                canFd.mFrameLength = 0;
+                canFd.mID = MakeBlfId(msg.CanId);
+                var head16 = new byte[16];
+                if (len > 0) Array.Copy(msg.Data, head16, Math.Min(len, 16));
+                canFd.mData = head16;
+
                 Marshal.StructureToPtr(canFd, msgPtr, false);
+                // 结构体 mData 只有 16 字节，17~64 字节直接写到对象体（mData@52）
+                for (int i = 16; i < len; i++) Marshal.WriteByte(msgPtr, 52 + i, msg.Data[i]);
+
                 BLFAPI.BLWriteObject(handle, msgPtr);
             }
             finally

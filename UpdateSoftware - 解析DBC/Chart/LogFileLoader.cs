@@ -843,15 +843,25 @@ namespace PCAN_Client
         private static double ReadCANFDMessage16(IntPtr fileHandle, VBLObjectHeaderBase headerBase,
             ref uint canId, ref uint dataLen, ref byte[] datas, ref byte channel)
         {
+            // 类型 100 是"变长 CAN FD 对象"：对象长度 = 52 + 数据字节数（4 字节对齐），
+            // 数据最大可到 64 字节。原实现固定按结构体 72 字节读、载荷截到 16 字节，
+            // 遇到变长 FD 文件（包括本程序转换生成的文件）会丢数据，这里按对象自身长度读。
+            int objSize = (int)headerBase.mObjectSize;
+            if (objSize < SizeOfCANFDMsg) objSize = SizeOfCANFDMsg;   // 至少覆盖结构体，字段偏移才有效
+            if (objSize > MaxBlfStructSize) objSize = MaxBlfStructSize;
+
             IntPtr pBuf = GetBlfBuffer();
             Marshal.StructureToPtr(headerBase, pBuf, false);
-            BLFAPI.BLReadObjectSecure(fileHandle, pBuf, (UIntPtr)SizeOfCANFDMsg);
+            BLFAPI.BLReadObjectSecure(fileHandle, pBuf, (UIntPtr)objSize);
 
             double timestampUs = ReadTimestampFromBuffer(pBuf);
             canId = (uint)Marshal.ReadInt32(pBuf, OffsetOfCANFDMsg_mID);
             channel = (byte)Marshal.ReadInt16(pBuf, OffsetOfCANMsg_mChannel);
             uint validBytes = Marshal.ReadByte(pBuf, OffsetOfCANFDMsg_mValidDataBytes);
-            dataLen = Math.Min(16u, validBytes);
+            // 双重钳位：既不超过 64 字节，也不超过对象实际携带的字节数
+            int maxByObject = (int)headerBase.mObjectSize - OffsetOfCANFDMsg_mData;
+            if (maxByObject < 0) maxByObject = 0;
+            dataLen = Math.Min(Math.Min(64u, validBytes), (uint)maxByObject);
             datas = new byte[dataLen];
             if (dataLen > 0)
                 Marshal.Copy(pBuf + OffsetOfCANFDMsg_mData, datas, 0, (int)dataLen);

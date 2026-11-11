@@ -6,8 +6,9 @@ namespace PCAN_Client.CAN_Data.blf
 {
     /// <summary>
     /// 流式写 BLF：逐帧推给 binlog，不把整份文件读进内存（BLF/ASC 格式转换用）。
-    /// 对象布局直接复用 Recorder 的写法（经典 48 字节 / CAN FD 136 字节，与 CANoe 一致），
-    /// 句柄访问统一在 BLFAPI.SyncRoot 内完成——binlog 同一句柄非线程安全，录制线程可能同时在写另一个句柄。
+    /// 对象布局沿用 Recorder 的经验（经典帧 48 字节），CAN FD 帧改为**变长对象**（类型 100，
+    /// 52 + 载荷字节数，4 字节对齐）以减小文件体积；句柄访问统一在 BLFAPI.SyncRoot 内完成
+    /// ——binlog 同一句柄非线程安全，录制线程可能同时在写另一个句柄。
     /// </summary>
     public sealed class BlfStreamWriter : IDisposable
     {
@@ -86,6 +87,8 @@ namespace PCAN_Client.CAN_Data.blf
             {
                 lock (BLFAPI.SyncRoot)
                 {
+                    // Recorder.WriteCanFdObject 现在写"变长 FD 对象"（类型 100，52+载荷字节数），
+                    // 与实时录制共用同一实现：8 字节帧 60 字节，旧 FD64 写法是固定 136 字节。
                     if (msg.IsFd || msg.Data.Length > 8) Recorder.WriteCanFdObject(_handle, msg);
                     else Recorder.WriteClassicCanObject(_handle, msg);
                 }
