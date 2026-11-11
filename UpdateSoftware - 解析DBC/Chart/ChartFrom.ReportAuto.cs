@@ -531,6 +531,8 @@ namespace PCAN_Client
         {
             public string AnalysisTypeName;              // 关闭时选中的工况名（可空）
             public List<SignalPresetItem> Signals;       // 关闭时绘图区信号列表（报告专用通道除外）
+            public string PresetName;                    // 关闭时选中的信号清单名（可空）：启动后恢复下拉选中项
+            public List<SignalGroupXmlItem> Groups;      // 关闭时的信号分组（组名/折叠态/成员身份）
         }
 
         private static string LastSessionPath =>
@@ -567,7 +569,9 @@ namespace PCAN_Client
                 var snapshot = new LastSessionSnapshot
                 {
                     AnalysisTypeName = _currentAnalysisType?.Name,
-                    Signals = new List<SignalPresetItem>()
+                    Signals = new List<SignalPresetItem>(),
+                    PresetName = _lastLoadedPresetName,      // 记住关闭时下拉里选中的信号清单
+                    Groups = CollectCurrentGroups()          // 分组一并快照，重启后层级/折叠状态不变
                 };
                 if (Channels != null)
                 {
@@ -615,6 +619,18 @@ namespace PCAN_Client
 
             // 置位ChartShowFlag+重建周期调度注册（针对当前BusChannels的DBC对象），保证实时喂点不依赖再次保存通道配置
             RestoreChartShowFlags();
+
+            // 恢复信号分组与下拉里选中的清单名（快照优先，保证与关闭前一致）
+            try
+            {
+                if (session.Groups != null && session.Groups.Count > 0)
+                    RestoreGroupsFromPreset(session.Groups);
+                RestorePresetSelectionFromSession(session.PresetName);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LastSession] 恢复分组/清单选中失败: " + ex.Message);
+            }
 
             if (Channels.Count > 0)
             {

@@ -219,6 +219,7 @@ namespace PCAN_Client
         /// <summary>曾触发过淘汰（导出时提示数据窗口不完整）</summary>
         private static bool _realtimeRawTrimmed = false;
         private string _currentSignalGroupPath = "";        // 当前信号清单文件路径（用于覆盖保存）
+        private string _lastLoadedPresetName = "";          // 当前生效的信号清单名（关闭时写入 LastSession，启动后恢复下拉选中项）
         private Form _loadingPopup = null;                  // 加载报文时的弹窗
 
         // 流式读取时记录的最新的5w帧报文（停止/播放完毕后显示到Main.cs）
@@ -1495,6 +1496,38 @@ namespace PCAN_Client
                 _groupHeaderFont = new Font(baseFont, FontStyle.Bold);
             }
             return _groupHeaderFont;
+        }
+
+        /// <summary>统计某组成员在当前 Channels 里的总数与已勾选数（组级复选框三态显示用）</summary>
+        private void CountGroupChecked(ChannelGroup group, out int total, out int checkedCount)
+        {
+            total = 0;
+            checkedCount = 0;
+            if (group == null) return;
+            foreach (ChannelData channel in Channels)
+            {
+                if (!ReferenceEquals(_groups.FindGroup(channel), group)) continue;
+                total++;
+                if (channel.Visible) checkedCount++;
+            }
+        }
+
+        /// <summary>组级勾选：未全勾→整组勾上；已全勾→整组取消（同步每行勾选框与曲线可见性）</summary>
+        private void ToggleGroupChecked(int rowIndex)
+        {
+            ChannelGroup group = GetGroupFromRow(rowIndex);
+            if (group == null) return;
+            int total, checkedCount;
+            CountGroupChecked(group, out total, out checkedCount);
+            if (total == 0) return;
+            bool newVisible = checkedCount < total;
+            for (int i = 0; i < _channelGrid.Rows.Count; i++)
+            {
+                ChannelData channel = _channelGrid.Rows[i].Tag as ChannelData;
+                if (channel == null || !ReferenceEquals(_groups.FindGroup(channel), group)) continue;
+                SetChannelRowChecked(i, newVisible);   // 内部同步 channel.Visible 并刷新曲线
+            }
+            try { _channelGrid.InvalidateRow(rowIndex); } catch (Exception) { }
         }
 
         private void SetChannelRowChecked(int rowIndex, bool isChecked)
@@ -3465,8 +3498,10 @@ namespace PCAN_Client
             string columnName = _channelGrid.Columns[e.ColumnIndex].Name;
             if (IsGroupHeaderRow(e.RowIndex))
             {
-                // 组头折叠/展开：单击 +/-（Visible 列）；双击组名的路径见 CellDoubleClick
+                // 组头：Visible 列 = 折叠/展开（+/−）；Color 列 = 整组勾选/取消
+                // 双击组名的路径见 CellDoubleClick
                 if (columnName == "Visible") ToggleGroupCollapsed(e.RowIndex);
+                else if (columnName == "Color") ToggleGroupChecked(e.RowIndex);
                 return;
             }
             if (columnName == "Color")
@@ -3675,19 +3710,45 @@ namespace PCAN_Client
                 e.Graphics.DrawLine(borderPen, bounds.Left, bounds.Top + 1, right, bounds.Top + 1);
                 e.Graphics.DrawLine(borderPen, bounds.Left, bottom, right, bottom);
                 e.Graphics.DrawLine(borderPen, right, bounds.Top, right, bottom);
-
-                // Color 列画左侧竖色条（组的视觉标识，替代信号行的颜色方块）
-                if (columnName == "Color")
-                {
-                    using (SolidBrush accentBrush = new SolidBrush(GroupHeaderAccentColor))
-                    {
-                        e.Graphics.FillRectangle(accentBrush, bounds.Left + 2, bounds.Top + 1,
-                            4, Math.Max(0, bounds.Height - 2));
-                    }
-                }
             }
 
             ChannelGroup group = GetGroupFromRow(e.RowIndex);
+
+            // Color 列画"整组勾选"复选框：全选=对勾、部分=实心块、全不选=空框
+            if (columnName == "Color" && group != null)
+            {
+                const int checkSize = 13;
+                var checkRect = new Rectangle(bounds.Left + (bounds.Width - checkSize) / 2,
+                    bounds.Top + (bounds.Height - checkSize) / 2, checkSize, checkSize);
+                using (SolidBrush boxBrush = new SolidBrush(Color.White))
+                using (Pen boxPen = new Pen(GroupHeaderAccentColor))
+                {
+                    e.Graphics.FillRectangle(boxBrush, checkRect);
+                    e.Graphics.DrawRectangle(boxPen, checkRect);
+                }
+                int total, checkedCount;
+                CountGroupChecked(group, out total, out checkedCount);
+                if (checkedCount >= total && total > 0)
+                {
+                    using (Pen markPen = new Pen(GroupHeaderAccentColor, 2))
+                    {
+                        e.Graphics.DrawLines(markPen, new[]
+                        {
+                            new Point(checkRect.Left + 3, checkRect.Top + 6),
+                            new Point(checkRect.Left + 5, checkRect.Top + 9),
+                            new Point(checkRect.Left + 10, checkRect.Top + 3)
+                        });
+                    }
+                }
+                else if (checkedCount > 0)
+                {
+                    using (SolidBrush markBrush = new SolidBrush(GroupHeaderAccentColor))
+                    {
+                        e.Graphics.FillRectangle(markBrush, checkRect.Left + 3, checkRect.Top + 5,
+                            checkRect.Width - 6, 4);
+                    }
+                }
+            }
 
             // Visible 列画 +/- 展开折叠按钮（组头行该列不是复选框）
             if (columnName == "Visible" && group != null)
@@ -4231,6 +4292,7 @@ namespace PCAN_Client
             row.Tag = group;
             // 必须每行 new：共享单元格实例会让 DataGridView 抛 InvalidOperationException
             row.Cells["Visible"] = new DataGridViewTextBoxCell { Value = string.Empty };
+            row.Cells["Color"].ToolTipText = "勾选/取消全组信号";
             row.DefaultCellStyle.BackColor = GroupHeaderBackColor;
             row.DefaultCellStyle.SelectionBackColor = GroupHeaderBackColor;
             row.DefaultCellStyle.SelectionForeColor = SystemColors.ControlText;
@@ -5565,6 +5627,34 @@ namespace PCAN_Client
             }
         }
 
+        /// <summary>启动时把下拉框恢复到上次关闭时选中的信号清单。
+        /// 只改下拉显示、**不触发加载**（用 _isLoadingPreset 闸门），否则会把会话快照恢复的通道/分组冲掉。</summary>
+        private void RestorePresetSelectionFromSession(string presetName)
+        {
+            if (string.IsNullOrEmpty(presetName)) return;
+            try
+            {
+                var presets = LoadAllPresets();              // 顺带刷新 _presetGroupsCache
+                if (!presets.ContainsKey(presetName)) return; // 清单文件里已不存在则保持"请选择…"
+                _isLoadingPreset = true;
+                try
+                {
+                    RefreshPresetComboBox();
+                    _presetComboBox.SelectedItem = presetName;
+                }
+                finally
+                {
+                    _isLoadingPreset = false;
+                }
+                _lastLoadedPresetName = presetName;
+                _currentSignalGroupPath = GetPresetsFilePath();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[LastSession] 恢复清单下拉选中项失败: " + ex.Message);
+            }
+        }
+
         private void RefreshPresetComboBox()
         {
             _presetComboBox.Items.Clear();
@@ -5654,7 +5744,8 @@ namespace PCAN_Client
                 CycleTime = (uint)(c.CycleTime * 1000),
                 Unit = c.Unit ?? "",
                 ColorArgb = c.Color.ToArgb(),
-                BusChannelIndex = c.BusChannelIndex
+                BusChannelIndex = c.BusChannelIndex,
+                Visible = c.Visible        // 勾选状态随清单/信号组一起保存
             };
         }
 
@@ -5855,6 +5946,7 @@ namespace PCAN_Client
                     signal.BusChannelIndex);
                 presetCh.LineWidth = _globalLineWidth;   // 继承当前全局线宽
                 presetCh.DotSize = _globalDotSize;       // 继承当前全局数据点大小
+                presetCh.Visible = signal.Visible;       // 恢复保存时的勾选状态（旧数据默认 true）
                 Channels.Add(presetCh);
                 RebuildChannelLookup();
                 multiChartFromScheduler.AddMessage(msg, signal.CycleTime, (byte)(busIdx + 1));
@@ -5879,6 +5971,7 @@ namespace PCAN_Client
             // 该清单里若保存过信号组，一并在刚建好的通道上恢复（组名/折叠态/成员身份都来自文件）
             if (!string.IsNullOrEmpty(presetName))
             {
+                _lastLoadedPresetName = presetName;      // 记住当前生效的清单名，关闭时写入会话快照
                 List<SignalGroupXmlItem> savedGroups;
                 if (_presetGroupsCache.TryGetValue(presetName, out savedGroups))
                     RestoreGroupsFromPreset(savedGroups);
@@ -5922,6 +6015,7 @@ namespace PCAN_Client
                 _presetGroupsCache[name] = CollectCurrentGroups();   // 当前会话的信号组随清单一起落盘
                 SaveAllPresets(presets);
                 _currentSignalGroupPath = GetPresetsFilePath();
+                _lastLoadedPresetName = name;      // 保存后当前生效的清单就是它
                 // 刷新下拉并回选刚保存的清单时必须禁止自动加载：
                 // 否则 SelectedItem 变化会触发 _presetComboBox_SelectedIndexChanged → ApplySignalData
                 // → 清空 Channels 与 _groups，表现为"保存后组消失、还原成没分组的样子"
@@ -6155,6 +6249,8 @@ namespace PCAN_Client
         public string Unit { get; set; }
         public int ColorArgb { get; set; } // 保存曲线颜色（ARGB整数值）
         public int BusChannelIndex { get; set; } = -1; // CAN总线通道索引（-1=兼容模式，使用全局DBC）
+        /// <summary>该信号在清单里的勾选状态（是否显示曲线）。旧文件没有该元素时按 true 读取，行为与改造前一致</summary>
+        public bool Visible { get; set; } = true;
     }
 
 }
