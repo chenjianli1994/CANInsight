@@ -5613,11 +5613,12 @@ namespace PCAN_Client
                 foreach (SignalPresetData m in saved.Members ?? new List<SignalPresetData>())
                 {
                     if (m == null) continue;
-                    ChannelData found = Channels.FirstOrDefault(c =>
-                        c.DbcMessageId == (int)m.MsgId
-                        && string.Equals(c.DbcSignalName ?? "", m.SignalName ?? "", StringComparison.Ordinal)
-                        && (m.BusChannelIndex < 0 || c.BusChannelIndex == m.BusChannelIndex));
-                    if (found != null && !members.Contains(found)) members.Add(found);
+                    // 一条保存记录只认领**一个**通道实例：Channels 里可能存在同一信号的多个实例
+                    // （重复添加、或同一信号挂在多条总线上）。早期实现用 FirstOrDefault 会让两条记录
+                    // 都匹配到第一个实例，第二条被去重丢掉，表现为"组里的信号跑到组外面"。
+                    ChannelData found = ClaimChannelForGroup(m, members, true);
+                    if (found == null) found = ClaimChannelForGroup(m, members, false);   // 旧数据总线通道对不上时退一步
+                    if (found != null) members.Add(found);
                 }
                 if (members.Count == 0) continue;
                 ChannelGroup created;
@@ -5626,6 +5627,20 @@ namespace PCAN_Client
                     created.IsCollapsed = saved.Collapsed;
             }
             RefreshChannelGridRows();
+        }
+
+        /// <summary>在 Channels 里找一条"身份匹配且尚未被本组认领"的通道；exactBus=true 时要求总线通道也一致</summary>
+        private ChannelData ClaimChannelForGroup(SignalPresetData saved, List<ChannelData> claimed, bool exactBus)
+        {
+            foreach (ChannelData channel in Channels)
+            {
+                if (claimed.Contains(channel)) continue;
+                if (channel.DbcMessageId != (int)saved.MsgId) continue;
+                if (!string.Equals(channel.DbcSignalName ?? "", saved.SignalName ?? "", StringComparison.Ordinal)) continue;
+                if (exactBus && saved.BusChannelIndex >= 0 && channel.BusChannelIndex != saved.BusChannelIndex) continue;
+                return channel;
+            }
+            return null;
         }
 
         /// <summary>
